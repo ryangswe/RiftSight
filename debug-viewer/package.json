@@ -1,0 +1,14 @@
+{
+  "name": "@riftsight/debug-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "esbuild src/main.ts --bundle --outfile=dist/main.js --format=iife --target=es2020 --servedir=. --serve=8788",
+    "build": "esbuild src/main.ts --bundle --outfile=dist/main.js --format=iife --target=es2020",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@riftsight/protocol": "*"
+  }
+}

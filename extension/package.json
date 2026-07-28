@@ -1,0 +1,14 @@
+{
+  "name": "riftsight-card-inspector",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "bundle": "esbuild src/content/inventory.ts src/background/background.ts --bundle --outdir=dist --outbase=src --format=iife --target=es2020",
+    "build": "npm run typecheck && npm run bundle",
+    "watch": "esbuild src/content/inventory.ts src/background/background.ts --bundle --outdir=dist --outbase=src --format=iife --target=es2020 --watch"
+  },
+  "dependencies": {
+    "@riftsight/protocol": "*"
+  }
+}

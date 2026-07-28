@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "RiftSight Card Inspector (Investigation Build)",
+  "version": "0.1.0",
+  "description": "Debug-only tooling that inventories candidate card elements on RiftAtlas so we can design the real detector from evidence instead of guesses.",
+  "action": {
+    "default_title": "RiftSight Inspector"
+  },
+  "background": {
+    "service_worker": "dist/background/background.js"
+  },
+  "host_permissions": ["ws://localhost/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://play.riftatlas.com/*"],
+      "js": ["dist/content/inventory.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

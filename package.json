@@ -1,0 +1,21 @@
+{
+  "name": "riftsight",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["extension", "protocol", "relay", "debug-viewer"],
+  "scripts": {
+    "dev": "concurrently -n extension,relay,viewer -c blue,green,magenta \"npm run watch -w extension\" \"npm run dev -w relay\" \"npm run dev -w debug-viewer\"",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "test": "vitest run",
+    "build": "npm run build -ws --if-present"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "@types/node": "^20.14.0",
+    "concurrently": "^8.2.2",
+    "esbuild": "^0.23.1",
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4",
+    "vitest": "^0.34.6"
+  }
+}

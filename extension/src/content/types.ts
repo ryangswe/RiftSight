@@ -1,0 +1,59 @@
+// Shared types for the RiftAtlas card detector.
+//
+// These describe what we can currently read from the DOM. Deliberately not
+// the wire protocol format (OverlayCard, in @riftsight/protocol) — that's a
+// narrower, privacy-filtered projection of this produced by
+// content/publisher.ts via protocol's toOverlayCard().
+
+export type DropZone =
+  | "hand"
+  | "base"
+  | "battlefieldA"
+  | "battlefieldB"
+  | "runeArea"
+  | "legend"
+  | "champion"
+  | "trash"
+  | "chain"
+  | "unknown";
+
+export type Owner = "self" | "opponent" | "unknown";
+
+/**
+ * "public" means we positively confirmed (via hit-testing, not just DOM
+ * order) that a non-cardback face is the one actually rendered right now.
+ * Anything else is "hidden" or "unknown" — and in both of those cases
+ * cardId/imageUrl MUST be undefined. See card-detector.ts's module header:
+ * every card slot renders both faces in the DOM regardless of which is
+ * visible, so this classification is load-bearing, not cosmetic.
+ */
+export type Visibility = "public" | "hidden" | "unknown";
+
+export interface PixelBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CardDetection {
+  /** RiftAtlas's own per-instance id (from data-card-id) — stable across re-renders. */
+  instanceId: string;
+  /** Set/number code parsed from the card image URL, e.g. "OGN-089". Only ever set when visibility === "public". */
+  cardId: string | undefined;
+  /** The visible face image's alt text (RiftAtlas's display name). Only ever set when visibility === "public". */
+  name: string | undefined;
+  /** Only ever set when visibility === "public" — see Visibility's doc comment. */
+  imageUrl: string | undefined;
+  visibility: Visibility;
+  dropZone: DropZone;
+  owner: Owner;
+  /** RiftAtlas's own rotation value (data-preview-rotation), in degrees. */
+  rotationDeg: number;
+  landscape: boolean;
+  /** Computed z-index, when RiftAtlas sets one explicitly (not "auto"). Not identity-sensitive — present regardless of visibility. */
+  zIndexHint: number | undefined;
+  bounds: PixelBounds;
+  /** The anchor element this was built from. Not serializable — strip before logging/copying as JSON. */
+  element: HTMLElement;
+}
