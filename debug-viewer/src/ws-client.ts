@@ -15,6 +15,38 @@ export interface ViewerClient {
 const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 10_000;
 
+/**
+ * Pure message-parsing boundary — the viewer's own defense in depth, after
+ * the detector's visibility classification, protocol's toOverlayCard()
+ * serializer, and the relay's own schema check. Returns undefined for
+ * anything that fails to parse as JSON or fails ServerMessageSchema
+ * validation (malformed JSON, missing payload, unsupported protocol
+ * version, invalid bounds/viewport, unknown enum values, a hidden card
+ * carrying identity fields, ...) — logging a concise reason (zod's
+ * `.issues`, never the raw payload) so a rejected message is visible in
+ * the console without risking a sensitive or oversized dump. The caller
+ * simply doesn't invoke onState when this returns undefined, which is why
+ * the viewer keeps rendering its last valid state on rejection — there's
+ * no separate "clear state" path to accidentally trigger.
+ */
+export function parseServerMessage(raw: string): OverlayState | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.warn("[viewer] dropped a non-JSON message");
+    return undefined;
+  }
+
+  const result = ServerMessageSchema.safeParse(parsed);
+  if (!result.success) {
+    console.warn("[viewer] rejected an invalid message", result.error.issues);
+    return undefined;
+  }
+
+  return result.data.payload;
+}
+
 export function connectViewer(options: ViewerClientOptions): ViewerClient {
   let socket: WebSocket | null = null;
   let backoffMs = INITIAL_BACKOFF_MS;
@@ -44,18 +76,8 @@ export function connectViewer(options: ViewerClientOptions): ViewerClient {
     });
 
     ws.addEventListener("message", (event) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-      // Defense in depth (the third privacy/validation boundary, after the
-      // detector and the serializer): validate every incoming message
-      // before trusting it, even though the relay should only ever forward
-      // already-valid states.
-      const result = ServerMessageSchema.safeParse(parsed);
-      if (result.success) options.onState(result.data.payload);
+      const state = parseServerMessage(String(event.data));
+      if (state) options.onState(state);
     });
 
     ws.addEventListener("close", () => {

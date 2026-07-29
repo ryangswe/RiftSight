@@ -24,6 +24,7 @@
 // face is the one actually being rendered right now. See Visibility's doc
 // comment in types.ts.
 
+import { resolveElementRotationDeg } from "./rotation.js";
 import type { CardDetection, DropZone, Owner, PixelBounds, Visibility } from "./types.js";
 
 const CARD_IMAGE_URL_PATTERN = /\/cards\/(?:original|small-v2)\/([A-Z0-9]+-\d+)\.webp/;
@@ -113,11 +114,35 @@ function nearestOwner(el: Element): Owner {
   return "unknown";
 }
 
-function parseRotation(el: Element): number {
-  const raw = el.getAttribute("data-preview-rotation");
-  if (raw === null) return 0;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isNaN(parsed) ? 0 : parsed;
+// How many ancestors outward from the anchor to check for a rotation
+// transform before giving up (0 = anchor only). See rotation.ts's module
+// header for the DOM assumption this exists to accommodate — different
+// zones have been observed carrying rotation at different hop counts (0
+// for a hand-fan tilt, 3 for a tapped battlefield unit), so this is
+// deliberately generous rather than hardcoded to one exact depth.
+const MAX_ROTATION_SEARCH_DEPTH = 6;
+
+/**
+ * Searches outward from `anchor` — the anchor itself, then each ancestor in
+ * turn — for the first element that actually carries a rotation-relevant
+ * transform. Stops at the first one found; never composes/accumulates
+ * transforms across multiple ancestors.
+ */
+function resolveRotation(anchor: Element): number {
+  let current: Element | null = anchor;
+  let depth = 0;
+  while (current && depth <= MAX_ROTATION_SEARCH_DEPTH) {
+    const style = getComputedStyle(current);
+    const rotation = resolveElementRotationDeg({
+      computedRotate: style.rotate || "none",
+      inlineTransform: (current as HTMLElement).style?.transform || "",
+      computedTransform: style.transform,
+    });
+    if (rotation !== undefined) return rotation;
+    current = current.parentElement;
+    depth++;
+  }
+  return 0;
 }
 
 // Not identity-sensitive (it's a rendering hint, not card data), so this is
@@ -157,7 +182,7 @@ function buildDetection(anchor: HTMLElement): CardDetection {
     visibility,
     dropZone: toDropZone(anchor.getAttribute("data-drop-zone")),
     owner: nearestOwner(anchor),
-    rotationDeg: parseRotation(anchor),
+    rotationDeg: resolveRotation(anchor),
     landscape: anchor.getAttribute("data-preview-landscape") === "true",
     zIndexHint: parseZIndexHint(anchor),
     bounds: toPixelBounds(anchor),

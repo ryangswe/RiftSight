@@ -59,14 +59,38 @@
         position: relative;
         width: 100%;
         max-width: 1400px;
-        background: #000;
         overflow: hidden;
+        /* Default aspect ratio so the stage is never a collapsed strip —
+           overridden once a background image (fixture or upload) actually
+           loads. A CSS-only "board" pattern shows through whenever #bg is
+           hidden (no image configured, or it failed to load), so there's
+           always something sensible to render hitboxes over. */
+        aspect-ratio: 16 / 9;
+        background:
+          radial-gradient(circle at 50% 45%, #1c2b20 0%, #0c130e 72%),
+          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0px, rgba(255, 255, 255, 0.025) 1px, transparent 1px, transparent 40px),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0px, rgba(255, 255, 255, 0.025) 1px, transparent 1px, transparent 40px);
       }
       #bg {
-        display: block;
+        display: none;
         width: 100%;
         height: 100%;
         object-fit: contain;
+      }
+      #bg.loaded {
+        display: block;
+      }
+      #bg-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #bg-warning {
+        color: #fc6;
+        display: none;
+      }
+      #bg-warning.visible {
+        display: inline;
       }
       #hitboxes {
         position: absolute;
@@ -126,10 +150,18 @@
       <div>Captured: <span id="captured-text">-</span></div>
       <label><input id="toggle-outlines" type="checkbox" checked /> Outlines</label>
       <label><input id="toggle-labels" type="checkbox" checked /> Labels</label>
+      <div id="bg-controls">
+        <label
+          >Screenshot:
+          <input id="bg-file-input" type="file" accept="image/*" />
+        </label>
+        <button id="bg-clear-button" type="button">Clear</button>
+      </div>
+      <span id="bg-warning"></span>
     </header>
     <div id="stage-wrap">
       <div id="stage">
-        <img id="bg" src="public/fixtures/riftatlas-game.png" alt="" />
+        <img id="bg" alt="" />
         <div id="hitboxes"></div>
       </div>
     </div>

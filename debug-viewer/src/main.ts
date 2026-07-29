@@ -20,6 +20,9 @@ const capturedText = requireElement<HTMLElement>("captured-text");
 const sessionInput = requireElement<HTMLInputElement>("session-input");
 const stage = requireElement<HTMLElement>("stage");
 const bgImage = requireElement<HTMLImageElement>("bg");
+const bgFileInput = requireElement<HTMLInputElement>("bg-file-input");
+const bgClearButton = requireElement<HTMLButtonElement>("bg-clear-button");
+const bgWarning = requireElement<HTMLElement>("bg-warning");
 const hitboxLayer = requireElement<HTMLElement>("hitboxes");
 const tooltip = requireElement<HTMLElement>("tooltip");
 const toggleOutlines = requireElement<HTMLInputElement>("toggle-outlines");
@@ -40,12 +43,80 @@ sessionInput.addEventListener("keydown", (event) => {
   location.href = url.toString();
 });
 
-// Fixed aspect ratio derived from the fixture screenshot's real dimensions,
-// so the stage preserves it at any container width and on resize.
+// --- Background image: optional, either the default fixture or a locally
+// uploaded screenshot. Neither is required — #stage's CSS default
+// (aspect-ratio: 16/9 + a CSS-only board pattern, see index.html) is what
+// renders whenever no image is loaded, so the stage is never blank/
+// collapsed and never shows a broken-image icon.
+//
+// Default fixture path, if you want to use one: drop a full, uncropped
+// screenshot of the RiftAtlas viewport at this path relative to
+// debug-viewer/index.html. Entirely optional — the fallback board renders
+// fine without it, and "Clear" always returns to that fallback rather than
+// retrying this path.
+const DEFAULT_FIXTURE_PATH = "public/fixtures/riftatlas-game.png";
+
+let uploadedObjectUrl: string | null = null;
+
+function showBgWarning(message: string): void {
+  bgWarning.textContent = message;
+  bgWarning.classList.add("visible");
+}
+
+function hideBgWarning(): void {
+  bgWarning.classList.remove("visible");
+}
+
+function revokeUploadedObjectUrl(): void {
+  if (uploadedObjectUrl) {
+    URL.revokeObjectURL(uploadedObjectUrl);
+    uploadedObjectUrl = null;
+  }
+}
+
+// Set src via JS (not a static HTML attribute) so these listeners are
+// guaranteed attached before the request can resolve — avoids any race
+// where a fast/cached load fires before we're listening.
 bgImage.addEventListener("load", () => {
+  bgImage.classList.add("loaded");
+  hideBgWarning();
   if (bgImage.naturalWidth > 0 && bgImage.naturalHeight > 0) {
     stage.style.aspectRatio = `${bgImage.naturalWidth} / ${bgImage.naturalHeight}`;
   }
+});
+
+bgImage.addEventListener("error", () => {
+  bgImage.classList.remove("loaded");
+  stage.style.aspectRatio = "16 / 9";
+  // Only worth mentioning when it was a real attempt (the default fixture,
+  // or a since-revoked upload) — not on the initial empty src.
+  if (bgImage.getAttribute("src")) {
+    showBgWarning(
+      bgImage.src.startsWith("blob:")
+        ? "Uploaded screenshot failed to load — showing fallback board."
+        : `No fixture screenshot found at ${DEFAULT_FIXTURE_PATH} — showing fallback board. Upload one above, or see the README.`
+    );
+  }
+});
+
+bgImage.src = DEFAULT_FIXTURE_PATH;
+
+bgFileInput.addEventListener("change", () => {
+  const file = bgFileInput.files?.[0];
+  if (!file) return;
+  revokeUploadedObjectUrl();
+  uploadedObjectUrl = URL.createObjectURL(file);
+  hideBgWarning();
+  bgImage.src = uploadedObjectUrl;
+});
+
+bgClearButton.addEventListener("click", () => {
+  bgFileInput.value = "";
+  revokeUploadedObjectUrl();
+  bgImage.removeAttribute("src");
+  bgImage.classList.remove("loaded");
+  stage.style.aspectRatio = "16 / 9";
+  hideBgWarning();
 });
 
 function setStatus(status: ConnectionStatus): void {

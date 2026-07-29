@@ -42,6 +42,66 @@ describe("OverlayStateSchema", () => {
     const malformed = { ...validState, sourceViewport: { ...validState.sourceViewport, width: 0 } };
     expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
   });
+
+  it("rejects a non-finite viewport dimension", () => {
+    const malformed = { ...validState, sourceViewport: { ...validState.sourceViewport, width: Infinity } };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects a non-finite normalized bound", () => {
+    const malformed = { ...validState, cards: [{ ...validState.cards[0], bounds: { x: 0, y: 0, width: Infinity, height: 0.1 } }] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects a negative width/height in normalized bounds", () => {
+    const malformed = { ...validState, cards: [{ ...validState.cards[0], bounds: { x: 0, y: 0, width: -0.1, height: 0.1 } }] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects an unknown owner value", () => {
+    const malformed = { ...validState, cards: [{ ...validState.cards[0], owner: "referee" }] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects an unknown visibility value", () => {
+    const malformed = { ...validState, cards: [{ ...validState.cards[0], visibility: "peeking" }] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects a non-finite or negative sequence/capturedAt", () => {
+    expect(OverlayStateSchema.safeParse({ ...validState, sequence: -1 }).success).toBe(false);
+    expect(OverlayStateSchema.safeParse({ ...validState, sequence: 1.5 }).success).toBe(false);
+    expect(OverlayStateSchema.safeParse({ ...validState, capturedAt: Infinity }).success).toBe(false);
+    expect(OverlayStateSchema.safeParse({ ...validState, capturedAt: -1 }).success).toBe(false);
+  });
+
+  it("rejects a whitespace-only sessionId", () => {
+    expect(OverlayStateSchema.safeParse({ ...validState, sessionId: "   " }).success).toBe(false);
+  });
+
+  it("rejects a hidden card that still carries identity-bearing fields — the schema-level privacy boundary", () => {
+    const malformed = {
+      ...validState,
+      cards: [{ ...validState.cards[0], visibility: "hidden", cardId: "OGN-213", name: "Should Not Appear" }],
+    };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects an unknown-visibility card carrying an imageUrl", () => {
+    const malformed = {
+      ...validState,
+      cards: [{ ...validState.cards[0], visibility: "unknown", imageUrl: "https://example.com/leak.webp" }],
+    };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("still accepts a public card with identity fields", () => {
+    const withIdentity = {
+      ...validState,
+      cards: [{ ...validState.cards[0], visibility: "public", cardId: "OGN-089", name: "Adaptatron" }],
+    };
+    expect(OverlayStateSchema.safeParse(withIdentity).success).toBe(true);
+  });
 });
 
 describe("ProducerMessageSchema", () => {
@@ -52,11 +112,23 @@ describe("ProducerMessageSchema", () => {
   it("rejects a message with the wrong type discriminant", () => {
     expect(ProducerMessageSchema.safeParse({ type: "subscribe", payload: validState }).success).toBe(false);
   });
+
+  it("rejects a message with a missing payload", () => {
+    expect(ProducerMessageSchema.safeParse({ type: "overlay-state" }).success).toBe(false);
+  });
+
+  it("rejects an unrecognized message type entirely", () => {
+    expect(ProducerMessageSchema.safeParse({ type: "ping" }).success).toBe(false);
+  });
 });
 
 describe("SubscribeMessageSchema", () => {
   it("requires a non-empty sessionId", () => {
     expect(SubscribeMessageSchema.safeParse({ type: "subscribe", sessionId: "" }).success).toBe(false);
     expect(SubscribeMessageSchema.safeParse({ type: "subscribe", sessionId: "local-debug" }).success).toBe(true);
+  });
+
+  it("rejects a whitespace-only sessionId", () => {
+    expect(SubscribeMessageSchema.safeParse({ type: "subscribe", sessionId: "   " }).success).toBe(false);
   });
 });

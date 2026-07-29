@@ -133,4 +133,71 @@ describe("relay server", () => {
     viewerA.close();
     producerB.close();
   });
+
+  it("survives malformed JSON from a producer and still processes a later valid message", async () => {
+    server = await createRelayServer(0);
+    const url = `ws://localhost:${server.port}`;
+
+    const viewer = new WebSocket(url);
+    await waitForOpen(viewer);
+    viewer.send(JSON.stringify({ type: "subscribe", sessionId: "resilience-session" }));
+    await wait(50);
+
+    const producer = new WebSocket(url);
+    await waitForOpen(producer);
+
+    // Raw, deliberately non-JSON payload — the server must not crash or
+    // otherwise let this corrupt handling of the next, valid message.
+    producer.send("{not valid json at all");
+    await wait(50);
+
+    const received = waitForMessage(viewer);
+    producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("resilience-session", 1) }));
+
+    const message = (await received) as { payload: { sequence: number } };
+    expect(message.payload.sequence).toBe(1);
+    expect(server.port).toBeGreaterThan(0); // server is still alive/listening, not crashed
+
+    viewer.close();
+    producer.close();
+  });
+
+  it("rejects a hidden card carrying identity fields and does not broadcast it", async () => {
+    server = await createRelayServer(0);
+    const url = `ws://localhost:${server.port}`;
+
+    const viewer = new WebSocket(url);
+    await waitForOpen(viewer);
+    viewer.send(JSON.stringify({ type: "subscribe", sessionId: "leak-session" }));
+    await wait(50);
+
+    let receivedAnything = false;
+    viewer.on("message", () => {
+      receivedAnything = true;
+    });
+
+    const producer = new WebSocket(url);
+    await waitForOpen(producer);
+    const leaky = {
+      ...sampleState("leak-session", 1),
+      cards: [
+        {
+          instanceId: "card_1",
+          zone: "hand",
+          owner: "self",
+          visibility: "hidden",
+          cardId: "OGN-213",
+          bounds: { x: 0, y: 0, width: 0.1, height: 0.1 },
+          rotation: 0,
+        },
+      ],
+    };
+    producer.send(JSON.stringify({ type: "overlay-state", payload: leaky }));
+    await wait(100);
+
+    expect(receivedAnything).toBe(false);
+
+    viewer.close();
+    producer.close();
+  });
 });

@@ -301,6 +301,34 @@ function runDetect(): void {
   }
 }
 
+// Gives you time to move the mouse onto a specific card (and hold still)
+// after triggering this, instead of needing to hover and click/press a key
+// at the exact same instant — mainly useful for the rotation-diagnostic
+// block in card-detector.ts, which only logs for whichever card is
+// currently under the cursor at the moment detectCards() runs.
+const DELAYED_DETECT_SECONDS = 3;
+
+function runDetectDelayed(): void {
+  const panel = ensurePanel();
+  const status = panel.querySelector<HTMLDivElement>(`#${PANEL_ID}-detect-status`);
+  let remaining = DELAYED_DETECT_SECONDS;
+
+  const tick = (): void => {
+    if (status) status.textContent = `Hover the target card now — detecting in ${remaining}s...`;
+  };
+  tick();
+
+  const interval = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(interval);
+      runDetect();
+      return;
+    }
+    tick();
+  }, 1000);
+}
+
 // --- Minimal floating debug panel -----------------------------------------
 // Injected once per page load. Deliberately plain-looking so it can never be
 // mistaken for part of RiftAtlas itself. Sized and positioned so it never
@@ -374,9 +402,15 @@ function ensurePanel(): HTMLElement {
 
   const detectButton = document.createElement("button");
   detectButton.textContent = "Detect cards";
-  detectButton.style.cssText = "cursor:pointer;";
+  detectButton.style.cssText = "margin-right:6px;cursor:pointer;";
   detectButton.addEventListener("click", runDetect);
   panel.appendChild(detectButton);
+
+  const detectDelayedButton = document.createElement("button");
+  detectDelayedButton.textContent = `Detect in ${DELAYED_DETECT_SECONDS}s (hover target first)`;
+  detectDelayedButton.style.cssText = "cursor:pointer;";
+  detectDelayedButton.addEventListener("click", runDetectDelayed);
+  panel.appendChild(detectDelayedButton);
 
   const publishDivider = document.createElement("hr");
   publishDivider.style.cssText = "margin:8px 0;border-color:#333;";
@@ -472,13 +506,15 @@ function updatePanel(result: ScanResult, counts: Record<Signal, number>): void {
 // since this script is never imported as a module.
 (window as unknown as { __riftsightScan: () => void }).__riftsightScan = runScan;
 
-// Alt+Shift+R triggers a heuristic scan, Alt+Shift+D the real detector —
-// neither requires hunting for the panel first.
+// Alt+Shift+R triggers a heuristic scan, Alt+Shift+D the real detector,
+// Alt+Shift+H a delayed detector run — none require hunting for the panel
+// first.
 window.addEventListener("keydown", (event) => {
   if (!event.altKey || !event.shiftKey) return;
   const key = event.key.toLowerCase();
   if (key === "r") runScan();
   if (key === "d") runDetect();
+  if (key === "h") runDetectDelayed();
 });
 
 ensurePanel();
