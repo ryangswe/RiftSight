@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseServerMessage } from "./ws-client.js";
+import { parseServerMessage } from "./message-parsing.js";
 
 const validState = {
   protocolVersion: 1,

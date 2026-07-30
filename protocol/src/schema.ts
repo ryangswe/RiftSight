@@ -105,10 +105,25 @@ export const ProducerMessageSchema = z.object({
   payload: OverlayStateSchema,
 });
 
-// Viewer -> relay.
+// Viewer -> relay. Unauthenticated — the relay trusts whatever sessionId
+// is supplied. Kept for the debug viewer and other local-debug use; a
+// production deployment gates this off entirely via the relay's
+// ALLOW_LOCAL_DEBUG config (see relay/src/server.ts), separate from the
+// authenticated path below.
 export const SubscribeMessageSchema = z.object({
   type: z.literal("subscribe"),
   sessionId: SessionIdSchema,
+});
+
+// Viewer -> relay, Twitch-authenticated path. `channelId` is the
+// requested subscription target; the relay must verify `token` (a Twitch
+// Extension JWT) and reject unless its own `channel_id` claim matches
+// `channelId` — never trust the browser-supplied channelId on its own
+// (see relay/src/twitch-auth.ts).
+export const TwitchSubscribeMessageSchema = z.object({
+  type: z.literal("twitch-subscribe"),
+  channelId: z.string().min(1),
+  token: z.string().min(1),
 });
 
 // Relay -> viewer.

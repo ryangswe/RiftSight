@@ -7,7 +7,9 @@ RiftSight is a browser extension and Twitch overlay for [RiftAtlas](https://rift
 - `extension/` — MV3 Chromium extension. Content script detects cards on the RiftAtlas board (`src/content/card-detector.ts`) and, optionally, publishes sanitized state (`src/content/publisher.ts`); a background service worker (`src/background/background.ts`) owns the relay connection.
 - `protocol/` — shared, DOM-free types/validation/privacy-serializer/publisher used by both the extension and the debug viewer. Also home to `history.ts` (the binary-search state lookup + rolling time-window buffer shared by delayed-live and recording playback) and `recording.ts` (the recording data model, import validation, and `OverlayRecorder`).
 - `relay/` — minimal local WebSocket relay. In-memory only, no auth, one process, no history — it only ever holds the single latest state per session. Delayed-live and recordings are entirely a debug-viewer-side concern (see "Viewer modes" below).
+- `overlay-core/` — shared, DOM-free (no DOM lib in its `tsconfig.json`) card-hitbox/tooltip rendering geometry (`render.ts`, `tooltip.ts`), the delayed-live/recording-playback state-selection calculators (`mode.ts`), and the platform-adapter seam (`platform.ts`'s `ViewerPlatformContext`/`OverlayStateSource`) shared between `debug-viewer` and `twitch-extension` without either depending on the other.
 - `debug-viewer/` — static HTML/TS page that renders hoverable hitboxes over an optional screenshot or video background, in one of three modes (live / delayed-live / recording-playback — see below).
+- `twitch-extension/` — the real Twitch video-overlay extension frontend, built for Twitch's Local Test workflow (see "Twitch overlay" below). Two entry points: `src/viewer/main.ts` (the video overlay itself) and `src/config/main.ts` (a minimal broadcaster configuration page). Both reuse `overlay-core`'s rendering/tooltip/delay logic — no card-rendering code is duplicated from `debug-viewer`.
 
 ## Setup
 
@@ -27,7 +29,10 @@ npm install
    ```bash
    npm run start -w relay
    ```
-   Listens on `ws://localhost:8787` by default (override with `RELAY_PORT`).
+   Listens on `ws://localhost:8787` by default (override with `RELAY_PORT`). Three more env vars matter once a Twitch overlay is in the picture (see "Twitch overlay" below for the full Local Test walkthrough):
+   - `TWITCH_EXTENSION_CLIENT_ID` — your extension's client ID (currently used for logging only).
+   - `TWITCH_EXTENSION_SECRET` — the extension's base64-encoded secret from the Twitch Developer Console. Required before the relay will accept any `twitch-subscribe`; without it, that path is refused outright rather than trusting an unverifiable token. Never put this in source control.
+   - `ALLOW_LOCAL_DEBUG` — set to `false` to disable the plain, unauthenticated `subscribe` path (used by the debug viewer and local-only testing) entirely. Defaults to enabled.
 
 3. **Start the debug viewer.**
    ```bash
@@ -74,13 +79,73 @@ The **Recording** bar: **Start**/**Stop** capture every live state that arrives 
 12. Change the video's playback rate — synchronization should keep working (the target-offset calculation only depends on `currentTime`, never on rate).
 13. Confirm the overlay stays synchronized through all of the above without needing to touch the sync offset again.
 
+## Twitch overlay (Local Test)
+
+`twitch-extension/` is a Twitch video-overlay extension built for Twitch's **Local Test** workflow only — no public submission, no released hosting, no full streamer OAuth account linking. It's the first real Twitch-hosted frontend on top of the same relay/protocol everything else in this repo already uses.
+
+```
+RiftSight browser extension (streamer only)
+  → relay (unchanged protocol, now with an authenticated subscribe path too)
+    → twitch-extension/src/viewer (Twitch-hosted iframe)
+      → hoverable card regions over the Twitch channel's video
+```
+
+A viewer never installs anything — only the streamer runs the RiftSight browser extension. Twitch loads the video-overlay extension automatically for anyone watching a channel where it's been activated.
+
+### Architecture at a glance
+
+- **Reused directly, unchanged:** `protocol/` (types, schema, `TimeWindowBuffer`/`findStateAtOrBefore`) and `overlay-core/` (`computeHitboxStyle`, `tooltipContentFor`, `delayedLiveTarget`/`isWaitingForHistory`). The debug-viewer's own screenshot/video-background machinery and its 3-way live/delayed-live/recording-playback mode selector are **not** reused — Twitch supplies the video itself, and there's no recording-playback mode here.
+- **Twitch-specific, lives only in `twitch-extension/`:** the Extension Helper integration (`onAuthorized`, token refresh, `src/twitch-ext.d.ts`), the `TwitchOverlayStateSource`/`MockOverlayStateSource` implementations of `overlay-core`'s `OverlayStateSource`, the broadcaster config page, and all iframe/CSP-facing HTML.
+- **`ViewerPlatformContext` / `OverlayStateSource`** (`overlay-core/src/platform.ts`) is the seam: the shared rendering code only ever asks for a stream of `OverlayState`, never for `window.Twitch` directly — so `debug-viewer` keeps working exactly as before, untouched by any of this.
+
+### Backend authentication
+
+The relay now accepts two kinds of viewer subscription:
+
+- `{ type: "subscribe", sessionId }` — the original, unauthenticated path (`local-debug`, the debug viewer). Gate it off entirely with `ALLOW_LOCAL_DEBUG=false` if you want a posture closer to production.
+- `{ type: "twitch-subscribe", channelId, token }` — verifies `token` as a real Twitch Extension JWT (HS256, against the base64-decoded `TWITCH_EXTENSION_SECRET`) and only admits the viewer if the JWT's own `channel_id` claim matches the requested `channelId` — the browser-supplied `channelId` is never trusted on its own. See `relay/src/twitch-auth.ts` and `relay/src/server.ts`.
+
+The RiftSight browser extension's publishing side needs no changes: `sessionId` was already an arbitrary string end-to-end, so a Twitch channel ID is just another value for that same field (see the extension panel's "Session ID (or Twitch test channel ID)" label). **Never commit a personal channel ID to source control** — type it in locally each session.
+
+### Mock mode (develop without Twitch)
+
+Because iterating entirely inside Twitch's Local Test loop is slow, `twitch-extension/index.html` is a local mock harness that runs the *exact same* `src/viewer/main.ts` bundle Twitch would load, minus `window.Twitch` — it sets `window.__RIFTSIGHT_MOCK__ = true` before the script runs, which switches to `MockOverlayStateSource` (plain, unauthenticated relay subscribe, channel id typed into a text field) instead of `TwitchOverlayStateSource`. It also has its own delay controls, debug-outline toggle, and optional screenshot/video background for alignment testing (never present in the real Twitch-hosted page). `config-mock.html` is the same idea for the broadcaster config page — it saves to `localStorage` instead of Twitch's configuration service.
+
+```bash
+npm run dev -w twitch-extension
+```
+Serves `twitch-extension/` at `http://localhost:8789` — open `index.html` for the overlay mock harness, `config-mock.html` for the config page mock harness, and `viewer.html`/`config.html` for the real Twitch-hosted pages (only meaningful once actually loaded inside Twitch — see below).
+
+### Local Test setup
+
+This needs an actual Twitch Developer account and a real extension registered in the [Extensions Developer Console](https://dev.twitch.tv/console/extensions) — the exact console UI (button labels, tab names) changes over time, so treat the steps below as a map, not a script, and follow whatever the console currently shows.
+
+1. Create an extension in the Developer Console and set its type to **Video Overlay**.
+2. Twitch requires Local Test assets to be served over **HTTPS**, even on localhost — generate a self-signed cert (e.g. `openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes`) and serve `twitch-extension/` with it, for example via `npx http-server -S -C server.crt -K server.key -p 8443` (run `npm run build -w twitch-extension` first so `dist/` exists). Visit the HTTPS URL directly once in your browser first to accept the self-signed certificate warning — Twitch's own iframe load will otherwise fail silently.
+3. In the extension's **Asset Hosting** tab, set the Testing Base URI to your local HTTPS origin (must end with a trailing slash, e.g. `https://localhost:8443/`), the Video Overlay viewer path to `viewer.html`, and the config path to `config.html`.
+4. On the extension's **Capabilities** tab, enable the **Extension Configuration Service** (required for `config.html`'s `configuration.set`/`configuration.broadcaster` calls to work at all).
+5. Set the required relay environment variables and start it: `TWITCH_EXTENSION_CLIENT_ID`, `TWITCH_EXTENSION_SECRET` (base64, from the console), then `npm run start -w relay`.
+6. Start the RiftSight browser extension pointed at a RiftAtlas tab (see "Local workflow" above).
+7. In the extension's floating panel, set **Session ID (or Twitch test channel ID)** to your actual Twitch channel ID and click **Start publishing**.
+8. In the Developer Console, put the extension into **Local Test**.
+9. Activate it on your test channel (as a Video Overlay).
+10. Open your channel on Twitch as a viewer (a different browser profile or incognito window is the honest way to confirm no RiftSight extension is needed there).
+11. Confirm: the extension authorizes (no "waiting for Twitch authorization" diagnostic stuck on screen), the relay logs a `twitch-subscribe` admitted for your channel, and card hitboxes appear over the video, tracking whatever's happening in RiftAtlas after your configured delay.
+12. Open **config.html** as the broadcaster (via the extension's own config UI entry point in the console/dashboard) to adjust delay/debug-outlines/source-aspect-ratio — changes apply to open viewers immediately, no reload.
+
+### Known Twitch-specific limitations
+
+- **CSP/hosting:** all assets must be servable under Twitch's iframe sandbox and HTTPS/WSS in production; `RELAY_URL` (`protocol/src/config.ts`) is currently a hardcoded `ws://localhost:8787` constant, not environment-configurable — fine for Local Test, but a real deployment needs that to become a configurable `wss://` origin. No extension secret is ever bundled into any frontend (`relay/src/twitch-auth.ts` is relay-only).
+- **Debug outlines are channel-wide, not per-viewer:** the broadcaster config's `debugOutlines` flag applies to every viewer of that channel while it's on (there's no per-viewer-role gating beyond "off by default until the broadcaster explicitly turns it on") — turn it off after you're done testing alignment.
+- **No automatic OBS calibration or latency detection:** this milestone assumes RiftAtlas occupies the entire uncropped stream canvas; `checkAspectRatioMismatch` only warns (in debug mode) when the source and rendered aspect ratios drift apart, it doesn't correct anything.
+
 ## Commands
 
 ```bash
 npm run typecheck   # all packages
 npm test             # all packages (vitest)
-npm run build        # extension + debug-viewer (protocol/relay have no build step — they run from source)
-npm run dev           # extension watch + relay + debug-viewer, together
+npm run build        # extension + debug-viewer + twitch-extension (protocol/relay/overlay-core have no build step — they run from source)
+npm run dev           # extension watch + relay + debug-viewer, together (twitch-extension's dev server is separate — see "Twitch overlay" above)
 ```
 
 ## Known limitations

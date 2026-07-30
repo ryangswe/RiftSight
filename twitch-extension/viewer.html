@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RiftSight Overlay</title>
+    <style>
+      /*
+        The real Twitch-hosted video-overlay page. Transparent everywhere
+        except tooltips/debug UI (Twitch supplies the actual video) and
+        never intercepts pointer events outside an active hitbox or the
+        tooltip — see #overlay-stage below. No background image/video here
+        (that's the mock harness's index.html only, for local alignment
+        testing).
+      */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        font: 12px/1.4 sans-serif;
+        color: #e6e6e6;
+        overflow: hidden;
+      }
+      #overlay-stage {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .hitbox {
+        position: absolute;
+        box-sizing: border-box;
+        border: 1px solid transparent;
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      .hitbox.debug-outline {
+        border-color: rgba(102, 255, 102, 0.6);
+        background: rgba(102, 255, 102, 0.05);
+      }
+      .hitbox.debug-outline.hidden-card {
+        border-color: rgba(255, 102, 102, 0.6);
+        background: rgba(255, 102, 102, 0.05);
+      }
+      #tooltip {
+        position: fixed;
+        pointer-events: none;
+        background: rgba(17, 17, 17, 0.95);
+        border: 1px solid #444;
+        padding: 6px 8px;
+        font-size: 12px;
+        border-radius: 4px;
+        display: none;
+        z-index: 1000;
+        max-width: 240px;
+        white-space: pre-line;
+      }
+      #tooltip .tooltip-art {
+        display: block;
+        max-width: 220px;
+        max-height: 260px;
+        margin-bottom: 4px;
+        border-radius: 3px;
+      }
+      #auth-status {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        z-index: 1000;
+        display: none;
+        background: rgba(17, 17, 17, 0.85);
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 4px 8px;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="auth-status"></div>
+    <div id="overlay-stage"></div>
+    <div id="tooltip"></div>
+    <!-- Twitch Extensions JS Helper — must load before dist/viewer/main.js so window.Twitch.ext exists when it runs. https://dev.twitch.tv/docs/extensions/reference/ -->
+    <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+    <script src="dist/viewer/main.js"></script>
+  </body>
+</html>

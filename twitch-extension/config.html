@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RiftSight Overlay — Broadcaster Configuration</title>
+    <style>
+      html, body { margin: 0; font: 13px/1.5 sans-serif; background: #0b0f16; color: #e6e6e6; padding: 16px; }
+      label { display: block; margin-bottom: 10px; }
+      input[type="number"], input[type="text"] { background: #000; color: #eee; border: 1px solid #444; padding: 3px 6px; }
+      button { cursor: pointer; }
+      #status-text { display: block; margin-top: 10px; color: #9be89b; }
+    </style>
+  </head>
+  <body>
+    <h3>RiftSight Overlay Settings</h3>
+    <label><input id="overlay-enabled-input" type="checkbox" /> Overlay enabled</label>
+    <label>
+      Delay:
+      <input id="delay-input" type="number" min="0" step="100" value="0" /> ms
+      <button type="button" data-delay-preset="0">0s</button>
+      <button type="button" data-delay-preset="2000">2s</button>
+      <button type="button" data-delay-preset="5000">5s</button>
+      <button type="button" data-delay-preset="10000">10s</button>
+    </label>
+    <label><input id="debug-outlines-input" type="checkbox" /> Debug outlines enabled (visible to all viewers — use for your own testing only)</label>
+    <label>
+      Source aspect ratio (optional, e.g. 1.778 for 16:9 — leave blank to use each state's own reported viewport):
+      <input id="aspect-ratio-input" type="text" size="8" />
+    </label>
+    <button id="save-button" type="button" disabled>Save</button>
+    <span id="status-text"></span>
+    <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+    <script src="dist/config/main.js"></script>
+  </body>
+</html>

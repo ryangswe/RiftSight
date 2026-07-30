@@ -4,7 +4,13 @@
 // this is a local development prototype, not a production service.
 
 import { WebSocketServer, WebSocket, type RawData } from "ws";
-import { ProducerMessageSchema, SubscribeMessageSchema, type OverlayState } from "@riftsight/protocol";
+import {
+  ProducerMessageSchema,
+  SubscribeMessageSchema,
+  TwitchSubscribeMessageSchema,
+  type OverlayState,
+} from "@riftsight/protocol";
+import { verifyTwitchJwt } from "./twitch-auth.js";
 
 interface Session {
   producer: WebSocket | null;
@@ -17,7 +23,18 @@ export interface RelayServer {
   close(): Promise<void>;
 }
 
-export function createRelayServer(port: number): Promise<RelayServer> {
+export interface RelayConfig {
+  /** Twitch Extension client ID — currently only used for logging/diagnostics, not validation itself. */
+  twitchExtensionClientId?: string;
+  /** Base64-encoded Twitch Extension secret from the Developer Console. Required for `twitch-subscribe` to be accepted at all — without it, that path is refused outright rather than silently trusting an unverifiable token. */
+  twitchExtensionSecret?: string;
+  /** Whether the plain, unauthenticated `subscribe` path (local-debug / debug-viewer) is accepted. Defaults to true — set false for a posture closer to production, where only Twitch-authenticated subscriptions should be trusted. */
+  allowLocalDebug?: boolean;
+}
+
+export function createRelayServer(port: number, config: RelayConfig = {}): Promise<RelayServer> {
+  const allowLocalDebug = config.allowLocalDebug ?? true;
+
   return new Promise((resolve, reject) => {
     const sessions = new Map<string, Session>();
     const wss = new WebSocketServer({ port });
@@ -28,6 +45,19 @@ export function createRelayServer(port: number): Promise<RelayServer> {
       const created: Session = { producer: null, viewers: new Set(), latestState: null };
       sessions.set(sessionId, created);
       return created;
+    }
+
+    // Shared by both the plain (local-debug) and Twitch-authenticated
+    // subscribe paths once each has independently decided the request is
+    // trusted — this function itself does no authorization, it only
+    // admits.
+    function admitViewer(ws: WebSocket, sessionId: string): void {
+      const session = getSession(sessionId);
+      session.viewers.add(ws);
+      console.log(`[relay] viewer subscribed to session "${sessionId}" (${session.viewers.size} viewer(s) now)`);
+      if (session.latestState) {
+        ws.send(JSON.stringify({ type: "overlay-state", payload: session.latestState }));
+      }
     }
 
     function handleMessage(ws: WebSocket, raw: RawData): void {
@@ -64,21 +94,51 @@ export function createRelayServer(port: number): Promise<RelayServer> {
 
       const subscribeMessage = SubscribeMessageSchema.safeParse(parsed);
       if (subscribeMessage.success) {
-        const { sessionId } = subscribeMessage.data;
-        const session = getSession(sessionId);
-        session.viewers.add(ws);
-        console.log(`[relay] viewer subscribed to session "${sessionId}" (${session.viewers.size} viewer(s) now)`);
-        if (session.latestState) {
-          ws.send(JSON.stringify({ type: "overlay-state", payload: session.latestState }));
+        if (!allowLocalDebug) {
+          console.warn(
+            `[relay] rejected an unauthenticated subscribe to session "${subscribeMessage.data.sessionId}" — local-debug mode is disabled (ALLOW_LOCAL_DEBUG=false)`
+          );
+          return;
         }
+        admitViewer(ws, subscribeMessage.data.sessionId);
+        return;
+      }
+
+      const twitchSubscribeMessage = TwitchSubscribeMessageSchema.safeParse(parsed);
+      if (twitchSubscribeMessage.success) {
+        const { channelId, token } = twitchSubscribeMessage.data;
+
+        if (!config.twitchExtensionSecret) {
+          console.warn(
+            `[relay] rejected a twitch-subscribe for channel "${channelId}" — TWITCH_EXTENSION_SECRET is not configured`
+          );
+          return;
+        }
+
+        const verification = verifyTwitchJwt(token, config.twitchExtensionSecret);
+        if ("error" in verification) {
+          console.warn(`[relay] rejected a twitch-subscribe for channel "${channelId}": ${verification.error}`);
+          return;
+        }
+
+        // Never trust the browser-supplied channelId on its own — only
+        // the channel_id claim inside the *verified* JWT is authoritative
+        // for which channel this viewer may actually subscribe to.
+        if (verification.claims.channel_id !== channelId) {
+          console.warn(
+            `[relay] rejected a twitch-subscribe: JWT channel_id "${verification.claims.channel_id}" does not match requested channel "${channelId}"`
+          );
+          return;
+        }
+
+        admitViewer(ws, channelId);
         return;
       }
 
       console.warn(
         "[relay] rejected a message that failed validation (malformed or unsupported protocol version)",
-        producerMessage.error.issues.length <= subscribeMessage.error.issues.length
-          ? producerMessage.error.issues
-          : subscribeMessage.error.issues
+        [producerMessage.error, subscribeMessage.error, twitchSubscribeMessage.error]
+          .sort((a, b) => a.issues.length - b.issues.length)[0]?.issues
       );
     }
 

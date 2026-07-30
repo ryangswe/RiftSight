@@ -421,10 +421,22 @@ function ensurePanel(): HTMLElement {
   publishTitle.style.cssText = "font-weight:bold;margin-bottom:4px;";
   panel.appendChild(publishTitle);
 
+  const sessionLabel = document.createElement("div");
+  sessionLabel.textContent = "Session ID (or Twitch test channel ID — Local Test only, see README)";
+  sessionLabel.style.cssText = "font-size:11px;color:#999;margin-bottom:2px;";
+  panel.appendChild(sessionLabel);
+
+  // This one field is the entire "which channel/session does this
+  // publisher route to" mechanism — the relay and every viewer (debug
+  // viewer, Twitch overlay) just key off whatever string ends up here.
+  // For a real Twitch Local Test run, that means typing your numeric
+  // Twitch channel ID in directly; there's no separate Twitch-specific
+  // setting because none is needed. See README's Local Test section.
   const sessionInput = document.createElement("input");
   sessionInput.id = `${PANEL_ID}-session-input`;
   sessionInput.type = "text";
   sessionInput.value = DEFAULT_SESSION_ID;
+  sessionInput.placeholder = "local-debug, or a Twitch channel id for Local Test";
   sessionInput.spellcheck = false;
   sessionInput.style.cssText =
     "width:100%;margin-bottom:4px;box-sizing:border-box;background:#000;color:#eee;border:1px solid #444;padding:2px 4px;";

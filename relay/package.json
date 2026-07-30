@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "@riftsight/protocol": "*",
+    "jsonwebtoken": "^9.0.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
     "@types/ws": "^8.5.12"
   }
 }

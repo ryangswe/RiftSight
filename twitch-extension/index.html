@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RiftSight Twitch Overlay (mock harness)</title>
+    <script>
+      // This page is the LOCAL DEV MOCK HARNESS ONLY — it never loads
+      // Twitch's Extension Helper script and is never what Twitch actually
+      // serves to a viewer. It exists so src/viewer/main.ts (the same code
+      // that runs inside the real Twitch iframe) can be exercised without
+      // Twitch at all. See viewer.html (added in a later step) for the
+      // real Twitch-hosted entry point.
+      //
+      // window.__RIFTSIGHT_MOCK__ is what main.ts checks to decide whether
+      // to build a MockOverlayStateSource (this page) or a
+      // TwitchOverlayStateSource (viewer.html) — set before main.js loads
+      // so it's guaranteed to be in place before any platform detection
+      // runs.
+      window.__RIFTSIGHT_MOCK__ = true;
+    </script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1a1a2e; /* only the mock harness has a visible page background — the real Twitch overlay stage is transparent */
+        font: 12px/1.4 monospace;
+        color: #e6e6e6;
+      }
+      #mock-bg-image,
+      #mock-bg-video {
+        display: none;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      #mock-bg-image.loaded,
+      #mock-bg-video.loaded {
+        display: block;
+      }
+      /*
+        #overlay-stage is the real production surface: fills its container,
+        transparent, and never intercepts pointer events except through
+        individual hitboxes/tooltip (mirrored exactly in viewer.html later).
+      */
+      #overlay-stage {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .hitbox {
+        position: absolute;
+        box-sizing: border-box;
+        border: 1px solid transparent;
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      .hitbox.debug-outline {
+        border-color: rgba(102, 255, 102, 0.6);
+        background: rgba(102, 255, 102, 0.05);
+      }
+      .hitbox.debug-outline.hidden-card {
+        border-color: rgba(255, 102, 102, 0.6);
+        background: rgba(255, 102, 102, 0.05);
+      }
+      #tooltip {
+        position: fixed;
+        pointer-events: none;
+        background: #111;
+        border: 1px solid #444;
+        padding: 6px 8px;
+        font-size: 12px;
+        border-radius: 4px;
+        display: none;
+        z-index: 1000;
+        max-width: 240px;
+        white-space: pre-line;
+      }
+      #tooltip .tooltip-art {
+        display: block;
+        max-width: 220px;
+        max-height: 260px;
+        margin-bottom: 4px;
+        border-radius: 3px;
+      }
+      #dev-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 2000;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 6px 10px;
+        background: #12161f;
+        border-bottom: 1px solid #2a2f3a;
+      }
+      #dev-panel input[type="text"],
+      #dev-panel input[type="number"] {
+        background: #000;
+        color: #eee;
+        border: 1px solid #444;
+        padding: 2px 4px;
+      }
+      #dev-panel input[type="number"] {
+        width: 70px;
+      }
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #666;
+        display: inline-block;
+        margin-right: 4px;
+      }
+      .status-dot.connected {
+        background: #6f6;
+      }
+      .status-dot.connecting {
+        background: #fc6;
+      }
+      .status-dot.disconnected {
+        background: #f66;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="dev-panel">
+      <strong>Mock harness</strong>
+      <label>Channel id: <input id="channel-input" type="text" size="16" value="local-debug" /> (Enter to reconnect)</label>
+      <div><span id="status-dot" class="status-dot"></span><span id="status-text">disconnected</span></div>
+      <label
+        >Delay:
+        <input id="delay-input" type="number" min="0" step="100" value="0" /> ms
+      </label>
+      <button type="button" data-delay-preset="0">0s</button>
+      <button type="button" data-delay-preset="2000">2s</button>
+      <button type="button" data-delay-preset="5000">5s</button>
+      <button type="button" data-delay-preset="10000">10s</button>
+      <label><input id="toggle-outlines" type="checkbox" /> Debug outlines</label>
+      <label
+        >Screenshot: <input id="bg-file-input" type="file" accept="image/*" />
+        <button id="bg-clear-button" type="button">Clear</button>
+      </label>
+      <label
+        >Video: <input id="bg-video-file-input" type="file" accept="video/*" />
+        <button id="bg-video-clear-button" type="button">Clear</button>
+      </label>
+      <span>Status: <span id="mode-status">-</span></span>
+    </div>
+    <img id="mock-bg-image" alt="" />
+    <video id="mock-bg-video" muted playsinline loop></video>
+    <div id="overlay-stage"></div>
+    <div id="tooltip"></div>
+    <script src="dist/viewer/main.js"></script>
+  </body>
+</html>

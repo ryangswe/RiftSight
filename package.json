@@ -2,7 +2,7 @@
   "name": "riftsight",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["extension", "protocol", "relay", "debug-viewer"],
+  "workspaces": ["extension", "protocol", "relay", "overlay-core", "debug-viewer", "twitch-extension"],
   "scripts": {
     "dev": "concurrently -n extension,relay,viewer -c blue,green,magenta \"npm run watch -w extension\" \"npm run dev -w relay\" \"npm run dev -w debug-viewer\"",
     "typecheck": "npm run typecheck -ws --if-present",

@@ -8,3 +8,4 @@ export * from "./fingerprint.js";
 export * from "./publisher.js";
 export * from "./history.js";
 export * from "./recording.js";
+export * from "./message-parsing.js";

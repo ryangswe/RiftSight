@@ -12,15 +12,18 @@ import {
   type TimestampedState,
 } from "@riftsight/protocol";
 import {
+  computeHitboxStyle,
+  computeTooltipPosition,
   delayedLiveTarget,
+  hitboxClassName,
+  hitboxLabel,
   isWaitingForHistory,
   playbackTarget,
   recordingPlaybackStatus,
+  tooltipContentFor,
   type ViewerMode,
-} from "./mode.js";
-import { computeHitboxStyle, computeTooltipPosition, hitboxClassName, hitboxLabel } from "./render.js";
+} from "@riftsight/overlay-core";
 import { setupRecordingControls } from "./recording-controls.js";
-import { tooltipContentFor } from "./tooltip.js";
 import { connectViewer, type ConnectionStatus } from "./ws-client.js";
 
 // Every live state is buffered regardless of the active viewer mode, so

@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@riftsight/overlay-core": "*",
     "@riftsight/protocol": "*"
   }
 }
