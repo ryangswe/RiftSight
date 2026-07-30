@@ -79,6 +79,21 @@ export const OverlayStateSchema = z.object({
   protocolVersion: z.literal(PROTOCOL_VERSION),
   sessionId: SessionIdSchema,
   sequence: z.number().int().nonnegative(),
+  // Wall-clock Unix time (Date.now()) on the machine running the
+  // extension, at the moment the source state was captured. This is only
+  // meaningful because this prototype runs every component (extension,
+  // relay, debug viewer) on one machine sharing one clock — comparing
+  // capturedAt values across independent machines would be subject to
+  // clock skew/drift with no correction applied anywhere in this codebase.
+  // A production, multi-machine design would need a synchronized or
+  // server-authoritative clock (e.g. NTP-disciplined timestamps, or
+  // server-assigned sequence-based timing) instead of trusting raw
+  // Date.now() deltas the way delayed-live's buffer and diagnostics do
+  // here. No monotonic (performance.now()-style) field is added alongside
+  // this for the same reason it isn't needed yet: every duration
+  // calculation in this prototype (buffer retention, delayed-live target
+  // time, recording offsetMs) is a delta of two capturedAt/Date.now()
+  // reads on that same single machine, which is sufficient here.
   capturedAt: z.number().finite().nonnegative(),
   sourceViewport: ViewportSchema,
   cards: z.array(OverlayCardSchema),

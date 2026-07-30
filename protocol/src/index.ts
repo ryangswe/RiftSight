@@ -6,3 +6,5 @@ export * from "./zone.js";
 export * from "./serializer.js";
 export * from "./fingerprint.js";
 export * from "./publisher.js";
+export * from "./history.js";
+export * from "./recording.js";

@@ -80,7 +80,17 @@
       #bg.loaded {
         display: block;
       }
-      #bg-controls {
+      #bg-video {
+        display: none;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      #bg-video.loaded {
+        display: block;
+      }
+      #bg-controls,
+      .bg-controls {
         display: flex;
         align-items: center;
         gap: 6px;
@@ -91,6 +101,64 @@
       }
       #bg-warning.visible {
         display: inline;
+      }
+      #mode-bar {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        padding: 6px 12px;
+        background: #0e1119;
+        border-bottom: 1px solid #2a2f3a;
+        flex-wrap: wrap;
+        font-size: 12px;
+        color: #aab;
+      }
+      #mode-bar select,
+      #mode-bar input[type="number"] {
+        background: #000;
+        color: #eee;
+        border: 1px solid #444;
+        padding: 2px 4px;
+      }
+      #mode-bar input[type="number"] {
+        width: 70px;
+      }
+      #mode-bar button {
+        cursor: pointer;
+      }
+      #delay-controls,
+      #sync-controls {
+        display: none;
+        align-items: center;
+        gap: 4px;
+      }
+      #sync-controls input[type="number"] {
+        width: 60px;
+      }
+      #mode-status.waiting {
+        color: #fc6;
+      }
+      #mode-status.synchronized,
+      #mode-status.live {
+        color: #6f6;
+      }
+      #recording-bar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 6px 12px;
+        background: #0e1119;
+        border-bottom: 1px solid #2a2f3a;
+        flex-wrap: wrap;
+        font-size: 12px;
+        color: #aab;
+      }
+      #recording-bar button {
+        cursor: pointer;
+      }
+      #recording-bar button:disabled {
+        cursor: default;
+        opacity: 0.5;
       }
       #hitboxes {
         position: absolute;
@@ -157,11 +225,64 @@
         </label>
         <button id="bg-clear-button" type="button">Clear</button>
       </div>
+      <div id="bg-video-controls" class="bg-controls">
+        <label
+          >Video:
+          <input id="bg-video-file-input" type="file" accept="video/*" />
+        </label>
+        <button id="bg-video-clear-button" type="button">Clear</button>
+      </div>
       <span id="bg-warning"></span>
     </header>
+    <div id="mode-bar">
+      <label
+        >Mode:
+        <select id="mode-select">
+          <option value="live">Live</option>
+          <option value="delayed-live">Delayed-live</option>
+          <option value="recording-playback">Recording playback</option>
+        </select>
+      </label>
+      <div id="delay-controls">
+        Delay: <input id="delay-input" type="number" min="0" step="100" value="0" /> ms
+        <button type="button" data-delay-preset="0">0s</button>
+        <button type="button" data-delay-preset="2000">2s</button>
+        <button type="button" data-delay-preset="5000">5s</button>
+        <button type="button" data-delay-preset="10000">10s</button>
+      </div>
+      <div id="sync-controls">
+        Sync offset: <input id="sync-offset-input" type="number" step="10" value="0" /> ms
+        <span title="Positive = overlay timeline runs ahead of the video. Negative = overlay is delayed relative to the video.">(+ahead / -behind)</span>
+        <button type="button" data-sync-step="-500">-500</button>
+        <button type="button" data-sync-step="-100">-100</button>
+        <button type="button" data-sync-step="-10">-10</button>
+        <button type="button" data-sync-step="10">+10</button>
+        <button type="button" data-sync-step="100">+100</button>
+        <button type="button" data-sync-step="500">+500</button>
+        <span>Video: <span id="video-time-text">-</span></span>
+        <span>State offset: <span id="state-offset-text">-</span></span>
+        <span>Diff: <span id="offset-diff-text">-</span></span>
+      </div>
+      <span>Status: <span id="mode-status">-</span></span>
+      <span>State age: <span id="state-age-text">-</span></span>
+      <span>Buffer: <span id="buffer-status-text">empty</span></span>
+    </div>
+    <div id="recording-bar">
+      <strong>Recording:</strong>
+      <button id="recording-start-button" type="button">● Start</button>
+      <button id="recording-stop-button" type="button" disabled>■ Stop</button>
+      <button id="recording-clear-button" type="button">Clear</button>
+      <button id="recording-export-button" type="button" disabled>Export JSON</button>
+      <label
+        >Import:
+        <input id="recording-import-input" type="file" accept="application/json" />
+      </label>
+      <span id="recording-status-text">not recording</span>
+    </div>
     <div id="stage-wrap">
       <div id="stage">
         <img id="bg" alt="" />
+        <video id="bg-video" controls playsinline></video>
         <div id="hitboxes"></div>
       </div>
     </div>
