@@ -156,6 +156,8 @@ This needs an actual Twitch Developer account, a real extension registered in th
 
 **Two tunnels, not one** — the asset server and the relay stay two separate local processes with two separate public URLs. A unified single-origin gateway wasn't built this round: the relay's `WebSocketServer` construction would need real changes to also serve static files, for a workflow-only problem — `RIFTSIGHT_RELAY_URL` does support a path segment (e.g. `wss://host/relay`) if a future unified gateway ever needs one.
 
+**This means 5 things need to be running at once, each in its own terminal** (a quick-tunnel process blocks its terminal for as long as you want the URL to stay alive, so each one needs a dedicated window): the asset server (step 1), the asset tunnel (step 2), the relay (step 3), the relay tunnel (step 4), and — only transiently, to pick up a new `RIFTSIGHT_RELAY_URL` — a rebuild (step 5), which can reuse the same terminal you ran step 1's build in, since it exits when done rather than staying attached.
+
 1. Build the Twitch frontend and start the local static asset server (plain HTTP now — no cert needed, since the tunnel terminates HTTPS for you):
    ```bash
    npm run dev:twitch:build
@@ -166,15 +168,15 @@ This needs an actual Twitch Developer account, a real extension registered in th
    cloudflared tunnel --url http://localhost:8443
    ```
    Note the `https://<random>.trycloudflare.com` URL it prints.
-3. Set the required relay environment variables (copy `relay/.env.example` to `relay/.env`, or `export` them) — at minimum `TWITCH_EXTENSION_SECRET`; recommend also setting `ALLOW_LOCAL_DEBUG=false` now that this relay is about to be tunneled publicly. Start it:
+3. In a third terminal, set the required relay environment variables (copy `relay/.env.example` to `relay/.env`, or `export` them) — at minimum `TWITCH_EXTENSION_SECRET`; recommend also setting `ALLOW_LOCAL_DEBUG=false` now that this relay is about to be tunneled publicly. Start it:
    ```bash
    npm run dev:twitch:relay
    ```
-4. In a third terminal, tunnel the relay too:
+4. In a fourth terminal, tunnel the relay too:
    ```bash
    cloudflared tunnel --url http://localhost:8787
    ```
-   Note this second `https://<random>.trycloudflare.com` URL — used as `wss://<that-host>` in the next step.
+   Note this second `https://<random>.trycloudflare.com` URL — used as `wss://<that-host>` in the next step. **Don't `curl` this one expecting `200` the way you did the asset tunnel in step 8** — the relay only understands the WebSocket upgrade handshake, so a plain `curl -I` against it correctly returns `426 Upgrade Required`. That's actually confirmation the tunnel *is* reaching your relay (a connection failure, timeout, or 502 would mean it isn't) — a `200` here would be the surprising result, not the `426`.
 5. Set `RIFTSIGHT_RELAY_URL=wss://<relay-tunnel-host>` (copy `twitch-extension/.env.example` to `.env`, or `export` it) and **rebuild** — `RIFTSIGHT_RELAY_URL` is baked in at build time, so re-run `npm run dev:twitch:build` whenever this value changes. The already-running `dev:twitch:assets` server will pick up the new `dist/` output on the next request without needing a restart.
 6. In the extension's **Asset Hosting** tab, set the Testing Base URI to the *asset* tunnel's HTTPS URL from step 2 (must end with a trailing slash, e.g. `https://<asset-tunnel-host>/`), the Video Overlay viewer path to `viewer.html`, and the config path to `config.html`.
 7. On the extension's **Capabilities** tab, enable the **Extension Configuration Service** (required for `config.html`'s `configuration.set`/`configuration.broadcaster` calls to work at all).
@@ -200,6 +202,8 @@ This needs an actual Twitch Developer account, a real extension registered in th
 | Relay logs a JWT rejection | `TWITCH_EXTENSION_SECRET` is wrong, unset, or not base64-decoded correctly — double check it's the Extension *shared* secret from the console, not your API Client Secret. |
 | Relay logs a channel-ID mismatch | The publisher's Session ID (in the RiftSight extension panel) doesn't match the numeric channel ID Twitch actually authorized the viewer for — retype it exactly. |
 | Everything worked yesterday, nothing connects today | Quick-tunnel URLs rotate on every restart — update the Testing Base URI and/or `RIFTSIGHT_RELAY_URL` (+ rebuild) to match the tunnels' current URLs. |
+| `curl -I` on the *relay* tunnel returns `426 Upgrade Required` | Expected, not a bug — the relay only understands the WebSocket upgrade handshake, so a plain GET is correctly rejected this way. This actually confirms the tunnel is reaching your relay; a connection failure/timeout/502 would mean it isn't. Don't apply the asset tunnel's "should return 200" check to this one. |
+| The RiftSight extension's own floating panel (in the RiftAtlas tab) shows "Relay: disconnected" | This is a **different connection** from everything else in this section — the extension always talks to `ws://localhost:8787` directly, on the same machine, and never touches either tunnel or `RIFTSIGHT_RELAY_URL`. This means no relay process is actually reachable on your machine's port 8787 at all: check that the terminal running `npm run dev:twitch:relay` is still open and shows `[relay] listening on ws://localhost:8787`, and that nothing else is already bound to that port (`lsof -i :8787`). |
 
 ### Manual acceptance test
 
