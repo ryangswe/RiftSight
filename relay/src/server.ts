@@ -143,11 +143,17 @@ export function createRelayServer(port: number, config: RelayConfig = {}): Promi
     }
 
     wss.on("connection", (ws) => {
+      console.log("[relay] socket connected");
       ws.on("message", (raw) => handleMessage(ws, raw));
       ws.on("close", () => {
-        for (const session of sessions.values()) {
-          if (session.producer === ws) session.producer = null;
-          session.viewers.delete(ws);
+        for (const [sessionId, session] of sessions) {
+          if (session.producer === ws) {
+            session.producer = null;
+            console.log(`[relay] producer disconnected from session "${sessionId}"`);
+          }
+          if (session.viewers.delete(ws)) {
+            console.log(`[relay] viewer disconnected from session "${sessionId}" (${session.viewers.size} viewer(s) remaining)`);
+          }
         }
       });
     });

@@ -12,6 +12,14 @@ export type TwitchConnectionStatus = RelaySocketStatus;
  * Sends a `twitch-subscribe` { channelId, token } message that the relay
  * verifies against the extension secret and the JWT's own channel_id
  * claim (see relay/src/twitch-auth.ts) before admitting the viewer.
+ *
+ * `relayUrl` is resolved by the caller (main.ts, via
+ * getConfiguredRelayUrl, which can throw for a misconfigured/insecure
+ * build) rather than read internally here — keeps this class free of any
+ * browser-global dependency, so it stays constructible in plain Node
+ * tests with an arbitrary string, and lets the caller decide how to
+ * surface a resolution failure as a diagnostic instead of an uncaught
+ * exception during construction.
  */
 export class TwitchOverlayStateSource implements OverlayStateSource {
   private channelId = "";
@@ -19,10 +27,11 @@ export class TwitchOverlayStateSource implements OverlayStateSource {
   private readonly socket: RelaySocket;
 
   constructor(
+    relayUrl: string,
     onStatusChange: (status: TwitchConnectionStatus) => void = () => {},
     createSocket?: (url: string) => WebSocketLike
   ) {
-    this.socket = new RelaySocket(() => this.buildSubscribeMessage(), onStatusChange, createSocket);
+    this.socket = new RelaySocket(relayUrl, () => this.buildSubscribeMessage(), onStatusChange, createSocket);
   }
 
   private buildSubscribeMessage(): TwitchSubscribeMessage {

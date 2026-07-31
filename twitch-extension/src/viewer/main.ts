@@ -21,6 +21,7 @@ import {
 import { TimeWindowBuffer, type OverlayCard, type OverlayState } from "@riftsight/protocol";
 import { parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
 import { MockOverlayStateSource, type MockConnectionStatus } from "../platform/mock-state-source.js";
+import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";
 import { TwitchOverlayStateSource } from "../platform/twitch-state-source.js";
 
@@ -51,6 +52,27 @@ let sourceRegion: SourceRegion = FULL_FRAME_SOURCE_REGION; // where RiftAtlas si
 let latestCards: OverlayCard[] = [];
 let displayedState: OverlayState | undefined;
 let tickTimer: ReturnType<typeof setInterval> | undefined;
+
+// Development-only connection diagnostics (real Twitch mode only — the
+// mock harness's own dev panel already shows connection status directly,
+// see index.html). `diagnosticsPanel` stays undefined in mock mode, so
+// setDiagnosticStage is a safe no-op to call from anywhere regardless of
+// mode. Gated behind debugOutlines rather than a separate flag — reuses
+// the one dev-mode signal this app already has, per "unobtrusive and
+// development-only".
+let diagnosticsPanel: HTMLElement | undefined;
+let lastDiagnosticStage = "";
+
+function setDiagnosticStage(stage: string): void {
+  lastDiagnosticStage = stage;
+  if (!diagnosticsPanel) return;
+  if (!debugOutlines) {
+    diagnosticsPanel.style.display = "none";
+    return;
+  }
+  diagnosticsPanel.style.display = "block";
+  diagnosticsPanel.textContent = stage;
+}
 
 function positionTooltipNear(target: HTMLElement): void {
   const targetRect = target.getBoundingClientRect();
@@ -167,6 +189,11 @@ function applyState(state: OverlayState | undefined): void {
   if (state) lastSourceViewport = state.sourceViewport;
   renderHitboxes();
   checkAspectRatioMismatch();
+  setDiagnosticStage(
+    state
+      ? `Receiving sequence ${state.sequence} (subscription admitted — inferred from state arrival; the relay sends no explicit ack)`
+      : "Waiting for publisher state..."
+  );
 }
 
 function delayedLiveTick(): void {
@@ -196,6 +223,7 @@ function applyConfig(config: OverlayConfig): void {
   delayedLiveTick(); // re-selects state under the new delay; applyState only re-renders if the *selected state* changed
   renderHitboxes(); // config fields like overlayEnabled/debugOutlines change what's rendered even when the state itself didn't — must re-render unconditionally, not just rely on delayedLiveTick's state-dedup path
   checkAspectRatioMismatch();
+  setDiagnosticStage(lastDiagnosticStage); // re-evaluates visibility now that debugOutlines may have just changed
 }
 
 // Hitboxes are positioned with CSS percentages against #overlay-stage
@@ -290,7 +318,7 @@ if (isMock) {
     statusText.textContent = status;
   }
 
-  const source = new MockOverlayStateSource(setStatus);
+  const source = new MockOverlayStateSource(getConfiguredRelayUrl(true), setStatus);
   source.subscribe((state) => stateBuffer.push(state.capturedAt, state));
 
   function connectToChannel(channelId: string): void {
@@ -311,6 +339,7 @@ if (isMock) {
   // The real Twitch path (viewer.html). No dev panel, no channel text
   // input — the channel comes from auth.channelId, never from the URL.
   const authStatus = requireElement<HTMLElement>("auth-status");
+  diagnosticsPanel = requireElement<HTMLElement>("diagnostics");
 
   function showAuthPending(message: string): void {
     authStatus.textContent = message;
@@ -330,50 +359,71 @@ if (isMock) {
     showAuthPending("Twitch Extension Helper not found — this page must be loaded inside a Twitch extension iframe.");
   } else {
     const twitch = window.Twitch.ext;
-    const source = new TwitchOverlayStateSource(() => {});
-    source.subscribe((state) => stateBuffer.push(state.capturedAt, state));
 
-    let authorized = false;
+    let source: TwitchOverlayStateSource | undefined;
+    try {
+      const relayUrl = getConfiguredRelayUrl(false);
+      source = new TwitchOverlayStateSource(relayUrl, (status) => {
+        if (status === "connecting") setDiagnosticStage(`Connecting to relay: ${relayUrl}`);
+        else if (status === "connected") setDiagnosticStage(`Relay connected — twitch-subscribe sent to ${relayUrl}`);
+        else if (status === "disconnected") setDiagnosticStage(`Relay disconnected — reconnecting to ${relayUrl}...`);
+      });
+    } catch (err) {
+      // RIFTSIGHT_RELAY_URL missing/insecure for this build — fail fast
+      // with a visible diagnostic rather than silently doing nothing (or
+      // crashing the whole script on an uncaught throw).
+      showAuthPending(err instanceof Error ? err.message : "Failed to configure the relay connection.");
+    }
 
-    twitch.onAuthorized((auth) => {
-      if (!authorized) {
-        // First-ever authorization for this session: connect and start
-        // rendering. A later call (JWT refresh) only needs the token
-        // retained for the next reconnect attempt, not a fresh connect —
-        // tearing down a healthy connection on every routine refresh
-        // would be pure churn.
-        authorized = true;
-        hideAuthPending();
+    if (source) {
+      const twitchSource = source;
+      twitchSource.subscribe((state) => stateBuffer.push(state.capturedAt, state));
+
+      let authorized = false;
+
+      twitch.onAuthorized((auth) => {
+        if (!authorized) {
+          // First-ever authorization for this session: connect and start
+          // rendering. A later call (JWT refresh) only needs the token
+          // retained for the next reconnect attempt, not a fresh connect —
+          // tearing down a healthy connection on every routine refresh
+          // would be pure churn.
+          authorized = true;
+          hideAuthPending();
+          setDiagnosticStage(`Authorized for channel ${auth.channelId}`);
+          applyConfig(parseOverlayConfig(twitch.configuration.broadcaster?.content));
+          twitchSource.connect(buildPlatformContext(auth));
+          startDelayedLiveTicking();
+        } else {
+          twitchSource.updateToken(auth.token);
+        }
+      });
+
+      // "changing delay must not require reloading the Twitch iframe" —
+      // the broadcaster can change any of these mid-stream via
+      // config.html and every open viewer picks it up here without a
+      // page reload.
+      twitch.configuration.onChanged(() => {
         applyConfig(parseOverlayConfig(twitch.configuration.broadcaster?.content));
-        source.connect(buildPlatformContext(auth));
-        startDelayedLiveTicking();
-      } else {
-        source.updateToken(auth.token);
-      }
-    });
+      });
 
-    // "changing delay must not require reloading the Twitch iframe" — the
-    // broadcaster can change any of these mid-stream via config.html and
-    // every open viewer picks it up here without a page reload.
-    twitch.configuration.onChanged(() => {
-      applyConfig(parseOverlayConfig(twitch.configuration.broadcaster?.content));
-    });
+      // Layout-mode changes (fullscreen/theater/normal, controls
+      // visibility) are exactly when the source/rendered aspect ratio is
+      // most likely to have actually drifted — hitboxes themselves need
+      // no repositioning logic here (see the resize listener above), but
+      // re-running the mismatch check on every reported context change
+      // catches drift a plain window "resize" event might miss (e.g.
+      // controls overlay toggling without the iframe's own box size
+      // changing).
+      twitch.onContext((_context, changedProperties) => {
+        console.log("[twitch-extension] Twitch context changed", changedProperties);
+        checkAspectRatioMismatch();
+      });
 
-    // Layout-mode changes (fullscreen/theater/normal, controls visibility)
-    // are exactly when the source/rendered aspect ratio is most likely to
-    // have actually drifted — hitboxes themselves need no repositioning
-    // logic here (see the resize listener above), but re-running the
-    // mismatch check on every reported context change catches drift a
-    // plain window "resize" event might miss (e.g. controls overlay
-    // toggling without the iframe's own box size changing).
-    twitch.onContext((_context, changedProperties) => {
-      console.log("[twitch-extension] Twitch context changed", changedProperties);
-      checkAspectRatioMismatch();
-    });
-
-    twitch.onError((error) => {
-      console.warn("[twitch-extension] Twitch Helper reported an error", error);
-      if (!authorized) showAuthPending("Twitch authorization failed — see console for details.");
-    });
+      twitch.onError((error) => {
+        console.warn("[twitch-extension] Twitch Helper reported an error", error);
+        if (!authorized) showAuthPending("Twitch authorization failed — see console for details.");
+      });
+    }
   }
 }

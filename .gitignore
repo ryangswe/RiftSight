@@ -4,3 +4,8 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+.env
+.env.*
+!.env.example
+server.crt
+server.key

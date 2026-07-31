@@ -8,7 +8,7 @@ afterEach(() => {
 
 function createHarness(): { source: TwitchOverlayStateSource; sockets: FakeSocket[] } {
   const sockets: FakeSocket[] = [];
-  const source = new TwitchOverlayStateSource(undefined, () => {
+  const source = new TwitchOverlayStateSource("wss://test-relay.example.com", undefined, () => {
     const socket = new FakeSocket();
     sockets.push(socket);
     return socket;

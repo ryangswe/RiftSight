@@ -7,7 +7,10 @@
     "dev": "concurrently -n extension,relay,viewer -c blue,green,magenta \"npm run watch -w extension\" \"npm run dev -w relay\" \"npm run dev -w debug-viewer\"",
     "typecheck": "npm run typecheck -ws --if-present",
     "test": "vitest run",
-    "build": "npm run build -ws --if-present"
+    "build": "npm run build -ws --if-present",
+    "dev:twitch:build": "npm run build --prefix twitch-extension",
+    "dev:twitch:assets": "npx http-server twitch-extension -p 8443 -c-1",
+    "dev:twitch:relay": "npm run start --prefix relay"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
