@@ -1,3 +1,4 @@
+import { FULL_FRAME_SOURCE_REGION, SOURCE_REGION_PRESETS } from "@riftsight/overlay-core";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_OVERLAY_CONFIG, parseOverlayConfig, serializeOverlayConfig } from "./overlay-config.js";
 
@@ -21,7 +22,13 @@ describe("parseOverlayConfig", () => {
   });
 
   it("parses a fully-specified valid config", () => {
-    const config = { overlayEnabled: false, delayMs: 5000, debugOutlines: true, sourceAspectRatio: 1.778 };
+    const config = {
+      overlayEnabled: false,
+      delayMs: 5000,
+      debugOutlines: true,
+      sourceAspectRatio: 1.778,
+      sourceRegion: SOURCE_REGION_PRESETS.rightHalf,
+    };
     expect(parseOverlayConfig(JSON.stringify(config))).toEqual(config);
   });
 
@@ -56,11 +63,47 @@ describe("parseOverlayConfig", () => {
     expect(parseOverlayConfig(undefined).debugOutlines).toBe(false);
     expect(parseOverlayConfig(JSON.stringify({})).debugOutlines).toBe(false);
   });
+
+  // Migration: a config saved before sourceRegion existed (or one with a
+  // corrupted/invalid region) must keep behaving exactly like the
+  // full-frame-only milestone did — never crash, never silently render
+  // hitboxes somewhere unexpected.
+  it("defaults sourceRegion to full frame when the field is entirely missing (pre-migration config)", () => {
+    const preMigrationConfig = { overlayEnabled: true, delayMs: 1000, debugOutlines: false };
+    expect(parseOverlayConfig(JSON.stringify(preMigrationConfig)).sourceRegion).toEqual(FULL_FRAME_SOURCE_REGION);
+  });
+
+  it("falls back to full frame for a structurally-invalid sourceRegion", () => {
+    expect(parseOverlayConfig(JSON.stringify({ sourceRegion: { x: 0.9, y: 0, width: 0.5, height: 0.5 } })).sourceRegion).toEqual(
+      FULL_FRAME_SOURCE_REGION
+    );
+    expect(parseOverlayConfig(JSON.stringify({ sourceRegion: "not an object" })).sourceRegion).toEqual(FULL_FRAME_SOURCE_REGION);
+  });
+
+  it("parses a valid custom sourceRegion", () => {
+    expect(parseOverlayConfig(JSON.stringify({ sourceRegion: SOURCE_REGION_PRESETS.centered })).sourceRegion).toEqual(
+      SOURCE_REGION_PRESETS.centered
+    );
+  });
 });
 
 describe("serializeOverlayConfig", () => {
   it("round-trips through parseOverlayConfig", () => {
-    const config = { overlayEnabled: true, delayMs: 2000, debugOutlines: true, sourceAspectRatio: 1.6 };
+    const config = {
+      overlayEnabled: true,
+      delayMs: 2000,
+      debugOutlines: true,
+      sourceAspectRatio: 1.6,
+      sourceRegion: SOURCE_REGION_PRESETS.leftHalf,
+    };
     expect(parseOverlayConfig(serializeOverlayConfig(config))).toEqual(config);
+  });
+
+  it("round-trips sourceRegion changes not affecting other fields (independent field, not coupled state)", () => {
+    const config = { ...DEFAULT_OVERLAY_CONFIG, sourceRegion: SOURCE_REGION_PRESETS.rightHalf };
+    const roundTripped = parseOverlayConfig(serializeOverlayConfig(config));
+    expect(roundTripped.sourceRegion).toEqual(SOURCE_REGION_PRESETS.rightHalf);
+    expect(roundTripped.delayMs).toBe(DEFAULT_OVERLAY_CONFIG.delayMs);
+    expect(roundTripped.debugOutlines).toBe(DEFAULT_OVERLAY_CONFIG.debugOutlines);
   });
 });

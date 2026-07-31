@@ -8,12 +8,15 @@
 // window.Twitch directly — only the onAuthorized wiring at the bottom of
 // this file does.
 import {
+  FULL_FRAME_SOURCE_REGION,
   computeHitboxStyle,
   computeTooltipPosition,
   delayedLiveTarget,
   hitboxClassName,
   isWaitingForHistory,
+  mapBoundsToSourceRegion,
   tooltipContentFor,
+  type SourceRegion,
 } from "@riftsight/overlay-core";
 import { TimeWindowBuffer, type OverlayCard, type OverlayState } from "@riftsight/protocol";
 import { parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
@@ -44,6 +47,7 @@ let delayMs = 0;
 let debugOutlines = false; // hidden by default in production; the mock harness has its own checkbox
 let overlayEnabled = true; // broadcaster kill-switch, applied via broadcaster config in real Twitch mode
 let sourceAspectRatioOverride: number | undefined; // broadcaster-set override for checkAspectRatioMismatch, when set
+let sourceRegion: SourceRegion = FULL_FRAME_SOURCE_REGION; // where RiftAtlas sits within the stream canvas, broadcaster-calibrated
 let latestCards: OverlayCard[] = [];
 let displayedState: OverlayState | undefined;
 let tickTimer: ReturnType<typeof setInterval> | undefined;
@@ -95,7 +99,14 @@ function renderHitboxes(): void {
     box.setAttribute("role", "button");
     box.setAttribute("aria-label", tooltipContentFor(card).lines.join(", "));
 
-    const style = computeHitboxStyle(card);
+    // Map RiftAtlas-relative bounds into the broadcaster-calibrated
+    // source region before computing CSS position — a fresh view-model
+    // object (never mutating `card`, which came straight out of the
+    // buffered OverlayState). hitboxClassName/tooltipContentFor never
+    // read bounds, so the original `card` is still correct for those and
+    // for the hover/focus handlers below.
+    const mappedBounds = mapBoundsToSourceRegion(card.bounds, sourceRegion);
+    const style = computeHitboxStyle({ ...card, bounds: mappedBounds });
     box.style.left = style.left;
     box.style.top = style.top;
     box.style.width = style.width;
@@ -112,11 +123,14 @@ function renderHitboxes(): void {
   }
 }
 
-// This milestone assumes RiftAtlas occupies the entire uncropped stream
-// canvas (no OBS scene-region calibration yet), so a mismatch between the
-// source aspect ratio and the stage's actual rendered aspect ratio
-// usually means the capture was cropped/letterboxed somewhere upstream —
-// worth a loud warning since it silently misaligns every hitbox. Only
+// This milestone still uses direct rectangular mapping only (no
+// automatic contain/cover/crop-edge/letterbox/perspective correction) —
+// the broadcaster is expected to calibrate sourceRegion to the exact
+// rectangle RiftAtlas is displayed in. Given that, a mismatch between the
+// RiftAtlas source aspect ratio and *the calibrated region's own actual
+// rendered aspect ratio on screen* (not the full stage's aspect ratio —
+// the region may only cover part of it) usually means the calibration
+// itself is off, or the capture was cropped/letterboxed upstream. Only
 // logged in debug mode — normal viewers get no console noise.
 // sourceAspectRatioOverride (broadcaster config's optional field) takes
 // priority over each state's own sourceViewport when the broadcaster has
@@ -128,7 +142,10 @@ let lastSourceViewport: { width: number; height: number } | undefined;
 function checkAspectRatioMismatch(): void {
   const sourceRatio = sourceAspectRatioOverride ?? (lastSourceViewport ? lastSourceViewport.width / lastSourceViewport.height : undefined);
   if (!debugOutlines || sourceRatio === undefined || stage.clientHeight === 0) return;
-  const renderedRatio = stage.clientWidth / stage.clientHeight;
+  const renderedRegionWidthPx = stage.clientWidth * sourceRegion.width;
+  const renderedRegionHeightPx = stage.clientHeight * sourceRegion.height;
+  if (renderedRegionHeightPx === 0) return;
+  const renderedRatio = renderedRegionWidthPx / renderedRegionHeightPx;
   const relativeDiff = Math.abs(sourceRatio - renderedRatio) / sourceRatio;
   if (relativeDiff > ASPECT_RATIO_TOLERANCE) {
     const sourceLabel =
@@ -136,8 +153,9 @@ function checkAspectRatioMismatch(): void {
         ? `broadcaster-configured ${sourceAspectRatioOverride.toFixed(3)}`
         : `${sourceRatio.toFixed(3)} (${lastSourceViewport?.width}x${lastSourceViewport?.height})`;
     console.warn(
-      `[twitch-extension] source/rendered aspect ratio mismatch: source ${sourceLabel} vs rendered ${renderedRatio.toFixed(3)} ` +
-        `(${stage.clientWidth}x${stage.clientHeight}) — hitboxes may be misaligned.`
+      `[twitch-extension] source/rendered aspect ratio mismatch: source ${sourceLabel} vs the calibrated region's own ` +
+        `rendered ratio ${renderedRatio.toFixed(3)} (${renderedRegionWidthPx.toFixed(0)}x${renderedRegionHeightPx.toFixed(0)} of a ` +
+        `${stage.clientWidth}x${stage.clientHeight} stage) — hitboxes may be misaligned or the calibration may need adjusting.`
     );
   }
 }
@@ -173,6 +191,7 @@ function applyConfig(config: OverlayConfig): void {
   delayMs = config.delayMs;
   debugOutlines = config.debugOutlines;
   sourceAspectRatioOverride = config.sourceAspectRatio;
+  sourceRegion = config.sourceRegion;
   if (!overlayEnabled) hideTooltip();
   delayedLiveTick(); // re-selects state under the new delay; applyState only re-renders if the *selected state* changed
   renderHitboxes(); // config fields like overlayEnabled/debugOutlines change what's rendered even when the state itself didn't — must re-render unconditionally, not just rely on delayedLiveTick's state-dedup path

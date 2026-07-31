@@ -7,7 +7,7 @@ RiftSight is a browser extension and Twitch overlay for [RiftAtlas](https://rift
 - `extension/` — MV3 Chromium extension. Content script detects cards on the RiftAtlas board (`src/content/card-detector.ts`) and, optionally, publishes sanitized state (`src/content/publisher.ts`); a background service worker (`src/background/background.ts`) owns the relay connection.
 - `protocol/` — shared, DOM-free types/validation/privacy-serializer/publisher used by both the extension and the debug viewer. Also home to `history.ts` (the binary-search state lookup + rolling time-window buffer shared by delayed-live and recording playback) and `recording.ts` (the recording data model, import validation, and `OverlayRecorder`).
 - `relay/` — minimal local WebSocket relay. In-memory only, no auth, one process, no history — it only ever holds the single latest state per session. Delayed-live and recordings are entirely a debug-viewer-side concern (see "Viewer modes" below).
-- `overlay-core/` — shared, DOM-free (no DOM lib in its `tsconfig.json`) card-hitbox/tooltip rendering geometry (`render.ts`, `tooltip.ts`), the delayed-live/recording-playback state-selection calculators (`mode.ts`), and the platform-adapter seam (`platform.ts`'s `ViewerPlatformContext`/`OverlayStateSource`) shared between `debug-viewer` and `twitch-extension` without either depending on the other.
+- `overlay-core/` — shared, DOM-free (no DOM lib in its `tsconfig.json`) card-hitbox/tooltip rendering geometry (`render.ts`, `tooltip.ts`), the delayed-live/recording-playback state-selection calculators (`mode.ts`), the broadcaster-calibrated source-region mapping (`source-region.ts` — see "Source-region calibration" below), and the platform-adapter seam (`platform.ts`'s `ViewerPlatformContext`/`OverlayStateSource`) shared between `debug-viewer` and `twitch-extension` without either depending on the other.
 - `debug-viewer/` — static HTML/TS page that renders hoverable hitboxes over an optional screenshot or video background, in one of three modes (live / delayed-live / recording-playback — see below).
 - `twitch-extension/` — the real Twitch video-overlay extension frontend, built for Twitch's Local Test workflow (see "Twitch overlay" below). Two entry points: `src/viewer/main.ts` (the video overlay itself) and `src/config/main.ts` (a minimal broadcaster configuration page). Both reuse `overlay-core`'s rendering/tooltip/delay logic — no card-rendering code is duplicated from `debug-viewer`.
 
@@ -94,7 +94,7 @@ A viewer never installs anything — only the streamer runs the RiftSight browse
 
 ### Architecture at a glance
 
-- **Reused directly, unchanged:** `protocol/` (types, schema, `TimeWindowBuffer`/`findStateAtOrBefore`) and `overlay-core/` (`computeHitboxStyle`, `tooltipContentFor`, `delayedLiveTarget`/`isWaitingForHistory`). The debug-viewer's own screenshot/video-background machinery and its 3-way live/delayed-live/recording-playback mode selector are **not** reused — Twitch supplies the video itself, and there's no recording-playback mode here.
+- **Reused directly, unchanged:** `protocol/` (types, schema, `TimeWindowBuffer`/`findStateAtOrBefore`) and `overlay-core/` (`computeHitboxStyle`, `tooltipContentFor`, `delayedLiveTarget`/`isWaitingForHistory`, `mapBoundsToSourceRegion`). The debug-viewer's own screenshot/video-background machinery and its 3-way live/delayed-live/recording-playback mode selector are **not** reused — Twitch supplies the video itself, and there's no recording-playback mode here.
 - **Twitch-specific, lives only in `twitch-extension/`:** the Extension Helper integration (`onAuthorized`, token refresh, `src/twitch-ext.d.ts`), the `TwitchOverlayStateSource`/`MockOverlayStateSource` implementations of `overlay-core`'s `OverlayStateSource`, the broadcaster config page, and all iframe/CSP-facing HTML.
 - **`ViewerPlatformContext` / `OverlayStateSource`** (`overlay-core/src/platform.ts`) is the seam: the shared rendering code only ever asks for a stream of `OverlayState`, never for `window.Twitch` directly — so `debug-viewer` keeps working exactly as before, untouched by any of this.
 
@@ -106,6 +106,21 @@ The relay now accepts two kinds of viewer subscription:
 - `{ type: "twitch-subscribe", channelId, token }` — verifies `token` as a real Twitch Extension JWT (HS256, against the base64-decoded `TWITCH_EXTENSION_SECRET`) and only admits the viewer if the JWT's own `channel_id` claim matches the requested `channelId` — the browser-supplied `channelId` is never trusted on its own. See `relay/src/twitch-auth.ts` and `relay/src/server.ts`.
 
 The RiftSight browser extension's publishing side needs no changes: `sessionId` was already an arbitrary string end-to-end, so a Twitch channel ID is just another value for that same field (see the extension panel's "Session ID (or Twitch test channel ID)" label). **Never commit a personal channel ID to source control** — type it in locally each session.
+
+### Source-region calibration
+
+RiftSight publishes card bounds normalized relative to the **RiftAtlas viewport**, not the final stream canvas — that never changes, at the producer, protocol, or recording layers. If RiftAtlas doesn't fill the entire stream (a side panel, letterboxing, a centered capture with borders), the Twitch overlay needs a second transform: a broadcaster-calibrated `SourceRegion` (`overlay-core/src/source-region.ts`) describing exactly where RiftAtlas sits within the stream canvas, normalized 0–1. `mapBoundsToSourceRegion(cardBounds, sourceRegion)` — pure, DOM-free, unit-tested — applies `mappedX = region.x + cardBounds.x * region.width` (and the equivalent for y/width/height) in `viewer/main.ts`'s `renderHitboxes()`, right before computing CSS position; nothing else in the pipeline (state selection, delay, recording) is aware this transform exists.
+
+**This is direct rectangular mapping only.** The broadcaster must select the exact final rectangle RiftAtlas is displayed in — there's no automatic contain/cover/crop-edge/letterbox/perspective correction, and no OBS integration or computer-vision detection. If the calibrated rectangle doesn't match reality, hitboxes will be uniformly offset/scaled wrong rather than corrected.
+
+**Calibrating it:** open the broadcaster configuration page (`config.html`, or `config-mock.html` for local testing) — a "Source-region calibration" section provides:
+- Numeric **x / y / width / height** inputs (always available and authoritative — the source of truth even if you never touch the visual preview). An invalid value (e.g. one that would push the region outside the frame) reverts to the last valid one rather than saving something broken.
+- A 16:9 **visual preview** with a draggable region rectangle (drag the body to move, the corner handle to resize) and a live card-hitbox preview inside it — sourced from the channel's actual latest live state when available, falling back to example fixture cards otherwise. A hidden card in the preview only ever shows as "Hidden card", the same privacy guarantee as the real overlay.
+- **Presets** (Full frame / Left half / Right half / Centered) and a **Reset to full frame** button.
+
+Saving applies to the config's `sourceRegion` field alongside `overlayEnabled`/`delayMs`/`debugOutlines`/`sourceAspectRatio` — same persistence path (`configuration.set`/`configuration.broadcaster`), same live-update path (`configuration.onChanged`, no viewer reload needed), and the same backward-compatible default: a config saved before `sourceRegion` existed (or a corrupted one) parses to full frame, so every existing channel keeps behaving exactly as before this milestone.
+
+The aspect-ratio diagnostic (`checkAspectRatioMismatch`, debug-mode only) now compares RiftAtlas's own source aspect ratio against **the calibrated region's own rendered aspect ratio** — `(stage width × region.width) / (stage height × region.height)` — rather than the full stage's aspect ratio, since the region may only cover part of the canvas.
 
 ### Mock mode (develop without Twitch)
 
@@ -131,13 +146,24 @@ This needs an actual Twitch Developer account and a real extension registered in
 9. Activate it on your test channel (as a Video Overlay).
 10. Open your channel on Twitch as a viewer (a different browser profile or incognito window is the honest way to confirm no RiftSight extension is needed there).
 11. Confirm: the extension authorizes (no "waiting for Twitch authorization" diagnostic stuck on screen), the relay logs a `twitch-subscribe` admitted for your channel, and card hitboxes appear over the video, tracking whatever's happening in RiftAtlas after your configured delay.
-12. Open **config.html** as the broadcaster (via the extension's own config UI entry point in the console/dashboard) to adjust delay/debug-outlines/source-aspect-ratio — changes apply to open viewers immediately, no reload.
+12. Open **config.html** as the broadcaster (via the extension's own config UI entry point in the console/dashboard) to adjust delay/debug-outlines/source-region/source-aspect-ratio — changes apply to open viewers immediately, no reload.
+
+### Manual test: source-region calibration layouts
+
+Run against `viewer.html`/`config.html` (or the mock harnesses, for iterating without Twitch). For each layout: check normal player size, a resized window, zero and nonzero delay, a rotated card, two overlapping cards, and a public + a hidden card together.
+
+- **Full frame** (`{x:0,y:0,width:1,height:1}`, the default) — behavior is unchanged from before this milestone: hitboxes map 1:1 to RiftAtlas-relative bounds.
+- **Right-side layout** (e.g. `{x:0.25,y:0,width:0.75,height:1}`, RiftAtlas occupying the right 75%) — hitboxes shift and scale into that region; nothing renders with `left` below the region's own `x`.
+- **Centered layout** (e.g. `{x:0.1,y:0.1,width:0.8,height:0.8}`, the "Centered" preset, borders on all sides) — hitboxes align inside the centered rectangle, none bleeding into the border margins.
+
+All three were exercised live against the real bundle (a stubbed `window.Twitch.ext` + a real relay + real signed JWTs, the same technique used throughout this milestone) with rotated and overlapping public/hidden cards, confirming: mapped positions match `mapBoundsToSourceRegion`'s formula exactly, rotation composes correctly on top of the mapping, hidden cards never leak identity, hitboxes stay percentage-correct across a window resize with no special resize code, and delay/region are independent (an unsatisfiable delay shows nothing regardless of a valid region; resetting delay to 0 brings cards back at the same correctly-mapped positions). Theater mode and fullscreen specifically need a real Twitch iframe to exercise, but rely on the exact same CSS-percentage mechanism already confirmed to be resize-agnostic — see "Iframe/player resizing" in the architecture notes above.
 
 ### Known Twitch-specific limitations
 
 - **CSP/hosting:** all assets must be servable under Twitch's iframe sandbox and HTTPS/WSS in production; `RELAY_URL` (`protocol/src/config.ts`) is currently a hardcoded `ws://localhost:8787` constant, not environment-configurable — fine for Local Test, but a real deployment needs that to become a configurable `wss://` origin. No extension secret is ever bundled into any frontend (`relay/src/twitch-auth.ts` is relay-only).
 - **Debug outlines are channel-wide, not per-viewer:** the broadcaster config's `debugOutlines` flag applies to every viewer of that channel while it's on (there's no per-viewer-role gating beyond "off by default until the broadcaster explicitly turns it on") — turn it off after you're done testing alignment.
-- **No automatic OBS calibration or latency detection:** this milestone assumes RiftAtlas occupies the entire uncropped stream canvas; `checkAspectRatioMismatch` only warns (in debug mode) when the source and rendered aspect ratios drift apart, it doesn't correct anything.
+- **Source-region calibration is direct rectangular mapping only, manually set:** no automatic OBS scene-region calibration, no computer-vision board detection, no automatic latency detection, and no contain/cover/crop-edge/letterbox/perspective correction — the broadcaster must select the exact rectangle RiftAtlas occupies. `checkAspectRatioMismatch` only warns (in debug mode) when the RiftAtlas source aspect ratio and the calibrated region's own rendered aspect ratio drift apart beyond a small tolerance; it never corrects anything.
+- **The calibration preview's own reference frame is a fixed 16:9 box**, not independently configurable — a broadcaster whose actual canvas isn't 16:9 calibrates by eye against that reference the same way they would in Twitch's own extension config panel.
 
 ## Commands
 

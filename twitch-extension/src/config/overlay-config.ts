@@ -1,3 +1,5 @@
+import { FULL_FRAME_SOURCE_REGION, parseSourceRegion, type SourceRegion } from "@riftsight/overlay-core";
+
 // The broadcaster-configurable overlay settings, and their defaults.
 // Deliberately minimal (see the milestone's "minimal broadcaster
 // configuration page" scope) — content is a JSON string stored via
@@ -15,6 +17,8 @@ export interface OverlayConfig {
   debugOutlines: boolean;
   /** width/height, e.g. 1.778 for 16:9. Undefined = derive from each state's own sourceViewport instead of a fixed broadcaster override. */
   sourceAspectRatio: number | undefined;
+  /** Where RiftAtlas sits within the final stream canvas — see overlay-core/src/source-region.ts. Always present (never optional) so every consumer can rely on it without an extra undefined-check; a config saved before this field existed parses to FULL_FRAME_SOURCE_REGION, preserving the old full-frame-only behavior exactly. */
+  sourceRegion: SourceRegion;
 }
 
 export const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
@@ -22,6 +26,7 @@ export const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
   delayMs: 0,
   debugOutlines: false,
   sourceAspectRatio: undefined,
+  sourceRegion: FULL_FRAME_SOURCE_REGION,
 };
 
 /**
@@ -53,6 +58,10 @@ export function parseOverlayConfig(content: string | undefined): OverlayConfig {
       typeof obj["sourceAspectRatio"] === "number" && Number.isFinite(obj["sourceAspectRatio"]) && obj["sourceAspectRatio"] > 0
         ? obj["sourceAspectRatio"]
         : undefined,
+    // parseSourceRegion already has its own complete "always return
+    // something safe" fallback (undefined input -> full frame), so a
+    // config saved before sourceRegion existed migrates transparently.
+    sourceRegion: parseSourceRegion(obj["sourceRegion"]),
   };
 }
 
