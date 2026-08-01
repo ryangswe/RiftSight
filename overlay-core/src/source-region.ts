@@ -64,9 +64,11 @@ export function parseSourceRegion(raw: unknown): SourceRegion {
  * source region's own coordinate space within the stream canvas. Assumes
  * `sourceRegion` has already been validated (e.g. via parseSourceRegion at
  * config-parse time) — does no re-validation or clamping of its own, and
- * never reads `cardBounds` beyond x/y/width/height (rotation, if present
- * on the caller's card object, is untouched and composes independently
- * via a separate CSS transform downstream).
+ * never reads `cardBounds` beyond x/y/width/height. `bounds` is already the
+ * card's post-transform axis-aligned bounding box (see protocol's
+ * coordinates.ts), so this scale/translate is all that's needed — rotation
+ * (if present on the caller's card object) is retained as metadata only and
+ * must not be reapplied as a further transform downstream.
  */
 export function mapBoundsToSourceRegion(cardBounds: NormalizedBounds, sourceRegion: SourceRegion): NormalizedBounds {
   return {

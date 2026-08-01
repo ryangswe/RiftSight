@@ -9,6 +9,7 @@
 // this file does.
 import {
   FULL_FRAME_SOURCE_REGION,
+  cardPopupContentFor,
   computeHitboxStyle,
   computeTooltipPosition,
   delayedLiveTarget,
@@ -85,25 +86,97 @@ function positionTooltipNear(target: HTMLElement): void {
   tooltip.style.top = `${position.top}px`;
 }
 
+function createFallbackLabel(label: string): HTMLElement {
+  const text = document.createElement("div");
+  text.className = "tooltip-fallback";
+  text.textContent = label;
+  return text;
+}
+
+// Normal viewers see the card's art and nothing else — see cardPopupContentFor.
+// The fuller zone/owner/instanceId text (tooltipContentFor) only ever
+// appears here when debugOutlines is on, for calibration/QA purposes.
 function showTooltipFor(card: OverlayCard, target: HTMLElement): void {
-  const content = tooltipContentFor(card);
+  cancelPendingHideTooltip();
+  const content = cardPopupContentFor(card);
   tooltip.replaceChildren();
+
   if (content.imageUrl) {
     const img = document.createElement("img");
     img.src = content.imageUrl;
-    img.alt = "";
+    img.alt = content.altText;
+    // No `loading="lazy"` here: the <img> is only ever created on-demand
+    // at hover time in the first place (never preloaded for every card),
+    // which already gives "don't fetch until needed" for free. Adding
+    // native lazy-loading on top gates the fetch behind an
+    // IntersectionObserver-style heuristic that doesn't reliably fire for
+    // a `position: fixed` popup that appears and disappears quickly —
+    // confirmed to stall indefinitely (network request never even sent)
+    // in manual testing. No cache-busting query param is added anywhere,
+    // so normal browser HTTP caching still applies across hovers.
+    img.decoding = "async";
     img.className = "tooltip-art";
+    img.onerror = () => {
+      // The popup may have already moved on to a different card by the
+      // time a slow/broken image errors out — only replace content if
+      // this image is still the one actually being shown. Swap just the
+      // img node itself (not the whole tooltip) so a debug line appended
+      // alongside it isn't lost.
+      if (!img.isConnected) return;
+      img.replaceWith(createFallbackLabel(content.fallbackLabel));
+    };
+    img.onload = () => {
+      // The position computed below (before the image has loaded) assumes
+      // a 0×0 box, since an <img> with no explicit width/height has no
+      // intrinsic size until it loads. Once it loads and grows to its real
+      // (much larger) size, re-run positioning so it's actually centered
+      // near the card and re-clamped within the viewport instead of
+      // silently growing past an edge.
+      if (!img.isConnected) return;
+      positionTooltipNear(target);
+    };
     tooltip.appendChild(img);
+  } else {
+    tooltip.appendChild(createFallbackLabel(content.fallbackLabel));
   }
-  const text = document.createElement("div");
-  text.textContent = content.lines.join("\n");
-  tooltip.appendChild(text);
+
+  if (debugOutlines) {
+    const debugLine = document.createElement("div");
+    debugLine.className = "tooltip-debug";
+    debugLine.textContent = tooltipContentFor(card).lines.join(" · ");
+    tooltip.appendChild(debugLine);
+  }
+
   tooltip.style.display = "block";
   positionTooltipNear(target);
 }
 
 function hideTooltip(): void {
+  cancelPendingHideTooltip();
   tooltip.style.display = "none";
+}
+
+// A short cancellable delay before actually hiding — without it, moving
+// the cursor between adjacent/overlapping hitboxes (common for fanned hand
+// cards) can flicker the popup closed and immediately back open. A
+// mouseenter/focus on the next hitbox cancels the pending hide before it
+// fires, so there's no visible gap.
+const HOVER_HIDE_DELAY_MS = 80;
+let pendingHideTooltip: ReturnType<typeof setTimeout> | undefined;
+
+function cancelPendingHideTooltip(): void {
+  if (pendingHideTooltip !== undefined) {
+    clearTimeout(pendingHideTooltip);
+    pendingHideTooltip = undefined;
+  }
+}
+
+function scheduleHideTooltip(): void {
+  cancelPendingHideTooltip();
+  pendingHideTooltip = setTimeout(() => {
+    pendingHideTooltip = undefined;
+    tooltip.style.display = "none";
+  }, HOVER_HIDE_DELAY_MS);
 }
 
 // #overlay-stage has pointer-events: none (see index.html); only these
@@ -133,13 +206,12 @@ function renderHitboxes(): void {
     box.style.top = style.top;
     box.style.width = style.width;
     box.style.height = style.height;
-    box.style.transform = style.transform;
     box.style.zIndex = style.zIndex;
 
     box.addEventListener("mouseenter", () => showTooltipFor(card, box));
-    box.addEventListener("mouseleave", hideTooltip);
+    box.addEventListener("mouseleave", scheduleHideTooltip);
     box.addEventListener("focus", () => showTooltipFor(card, box));
-    box.addEventListener("blur", hideTooltip);
+    box.addEventListener("blur", scheduleHideTooltip);
 
     stage.appendChild(box);
   }

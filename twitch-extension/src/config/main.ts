@@ -113,7 +113,6 @@ function renderPreviewHitboxes(): void {
     box.style.top = style.top;
     box.style.width = style.width;
     box.style.height = style.height;
-    box.style.transform = style.transform;
     box.style.zIndex = style.zIndex;
     previewHitboxLayer.appendChild(box);
   }

@@ -65,25 +65,37 @@
         border-color: rgba(255, 102, 102, 0.6);
         background: rgba(255, 102, 102, 0.05);
       }
+      /* Mirrors viewer.html's #tooltip exactly — no background/border on
+         the container itself, the popup is just the card's own image. */
       #tooltip {
         position: fixed;
         pointer-events: none;
-        background: #111;
-        border: 1px solid #444;
-        padding: 6px 8px;
-        font-size: 12px;
-        border-radius: 4px;
         display: none;
         z-index: 1000;
-        max-width: 240px;
-        white-space: pre-line;
       }
       #tooltip .tooltip-art {
         display: block;
-        max-width: 220px;
-        max-height: 260px;
-        margin-bottom: 4px;
-        border-radius: 3px;
+        max-width: 320px;
+        max-height: 448px;
+        border-radius: 6px;
+        filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.6));
+      }
+      #tooltip .tooltip-fallback {
+        max-width: 240px;
+        background: rgba(17, 17, 17, 0.95);
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      #tooltip .tooltip-debug {
+        margin-top: 4px;
+        max-width: 320px;
+        background: rgba(17, 17, 17, 0.85);
+        border-radius: 4px;
+        padding: 4px 8px;
+        color: #9fdf9f;
+        font-size: 11px;
       }
       #dev-panel {
         position: fixed;

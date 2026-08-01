@@ -26,3 +26,29 @@ export function tooltipContentFor(card: OverlayCard): TooltipContent {
 
   return { lines, imageUrl: card.imageUrl };
 }
+
+export interface CardPopupContent {
+  /** Only ever set for a public card. */
+  imageUrl: string | undefined;
+  /** Concise accessible label for the <img> itself — never the full zone/owner text. */
+  altText: string;
+  /** Shown in place of the image when there's none, or if it fails to load. */
+  fallbackLabel: string;
+}
+
+/**
+ * Content for the normal (non-debug) viewer popup, which shows just the
+ * card's art — see tooltipContentFor for the fuller text used by
+ * debug-viewer's own dev-facing tooltip. Same visibility branch/identity
+ * guarantee as tooltipContentFor (checked independently here, not derived
+ * from it), so a hidden card never leaks its name/art through this path
+ * either.
+ */
+export function cardPopupContentFor(card: OverlayCard): CardPopupContent {
+  if (card.visibility !== "public") {
+    return { imageUrl: undefined, altText: "Hidden card", fallbackLabel: "Hidden card" };
+  }
+
+  const label = card.name ?? card.cardId ?? card.instanceId;
+  return { imageUrl: card.imageUrl, altText: label, fallbackLabel: label };
+}

@@ -5,16 +5,18 @@ export interface HitboxStyle {
   top: string;
   width: string;
   height: string;
-  transform: string;
   zIndex: string;
 }
 
 /**
  * Pure geometry mapping — no DOM mutation here so it's directly testable.
- * `bounds` is the card's axis-aligned bounding box (see protocol's
- * coordinates.ts doc comment); rotation is layered on top as a CSS
- * transform, which is an approximation for a rotated card's true
- * silhouette, not exact geometry.
+ * `bounds` is already the card's post-transform axis-aligned bounding box
+ * (see protocol's coordinates.ts doc comment — it comes straight from
+ * getBoundingClientRect() on the rotated card), so it's rendered directly
+ * with no further CSS rotation: applying `rotate()` on top of an
+ * already-rotated AABB would rotate it a second time. `card.rotation` is
+ * intentionally not read here — it's retained on OverlayCard as metadata
+ * (e.g. for debug tooling) but must not affect hitbox geometry.
  */
 export function computeHitboxStyle(card: OverlayCard): HitboxStyle {
   const percent = boundsToCssPercent(card.bounds);
@@ -23,7 +25,6 @@ export function computeHitboxStyle(card: OverlayCard): HitboxStyle {
     top: percent.top,
     width: percent.width,
     height: percent.height,
-    transform: card.rotation ? `rotate(${card.rotation}deg)` : "",
     zIndex: card.zIndex !== undefined ? String(card.zIndex) : "0",
   };
 }
@@ -59,22 +60,30 @@ export interface TooltipPosition {
 }
 
 /**
- * Positions a tooltip next to the hovered hitbox rather than following the
- * cursor — anchored just above the card by default, flipping below when
- * there isn't room above, and clamped horizontally within the viewport.
- * This is a reasonable default for a debug tool; real stream-safe-zone
- * placement is a later concern once this feeds an actual Twitch overlay.
+ * Positions a popup next to the hovered hitbox rather than following the
+ * cursor — anchored to the right of the card by default (so it doesn't sit
+ * on top of the thing being hovered), flipping to the left when there
+ * isn't room on the right, vertically aligned with the card's top edge and
+ * shifted/clamped so it never overflows the viewport on any side. Shared by
+ * both the real Twitch viewer popup and debug-viewer's own tooltip.
  */
 export function computeTooltipPosition(target: Rect, tooltipSize: Size, viewport: Size, gap = 8): TooltipPosition {
-  let top = target.top - tooltipSize.height - gap;
-  if (top < 0) {
-    top = target.top + target.height + gap;
-  }
+  const rightLeft = target.left + target.width + gap;
+  const leftLeft = target.left - tooltipSize.width - gap;
+  const fitsRight = rightLeft + tooltipSize.width <= viewport.width;
+  const fitsLeft = leftLeft >= 0;
 
+  // Prefer the right side; only flip to the left when the right side
+  // genuinely doesn't fit but the left side does — otherwise keep the
+  // right-side placement and let the clamps below pull it back on-screen
+  // (unavoidable overlap with the card is preferable to placing the popup
+  // off the opposite edge instead).
+  let left = fitsRight || !fitsLeft ? rightLeft : leftLeft;
   const maxLeft = viewport.width - tooltipSize.width - 4;
-  let left = target.left;
-  if (left > maxLeft) left = maxLeft;
-  if (left < 4) left = 4;
+  left = Math.min(Math.max(left, 4), maxLeft);
+
+  const maxTop = viewport.height - tooltipSize.height - 4;
+  const top = Math.min(Math.max(target.top, 4), maxTop);
 
   return { left, top };
 }

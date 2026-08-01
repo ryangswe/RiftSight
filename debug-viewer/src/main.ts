@@ -309,7 +309,6 @@ function renderHitboxes(): void {
     box.style.top = style.top;
     box.style.width = style.width;
     box.style.height = style.height;
-    box.style.transform = style.transform;
     box.style.zIndex = style.zIndex;
 
     if (toggleLabels.checked) {

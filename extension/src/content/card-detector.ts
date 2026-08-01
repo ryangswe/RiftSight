@@ -32,6 +32,9 @@ const CARD_INSTANCE_ID_PATTERN = /^card_[0-9a-f]+$/i;
 const BATTLEFIELD_SLOT_ID_PATTERN = /^battlefield-marker:battlefield[AB]$/;
 const CARDBACK_IMAGE_PATTERN = /cardback-(white|blue)\.png/;
 
+/** RiftAtlas attaches this to every real card instance — see the module header. Exported so card-observer.ts can watch the exact same set of elements without duplicating the literal. */
+export const CARD_ANCHOR_SELECTOR = "[data-card-id]";
+
 const KNOWN_DROP_ZONES: ReadonlySet<string> = new Set<string>([
   "hand",
   "base",
@@ -200,7 +203,7 @@ function buildDetection(anchor: HTMLElement): CardDetection {
 export function detectCards(root: ParentNode = document): CardDetection[] {
   const byInstanceId = new Map<string, CardDetection>();
 
-  root.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
+  root.querySelectorAll<HTMLElement>(CARD_ANCHOR_SELECTOR).forEach((el) => {
     const instanceId = el.getAttribute("data-card-id");
     if (!instanceId || !isDetectableInstanceId(instanceId)) return;
 
