@@ -12,6 +12,7 @@ function cards(instanceIds: string[]): OverlayCard[] {
     visibility: "public",
     bounds: { x: 0, y: 0, width: 0.1, height: 0.1 },
     rotation: 0,
+    landscape: false,
   }));
 }
 

@@ -97,9 +97,25 @@ function createFallbackLabel(label: string): HTMLElement {
 // The fuller zone/owner/instanceId text (tooltipContentFor) only ever
 // appears here when debugOutlines is on, for calibration/QA purposes.
 function showTooltipFor(card: OverlayCard, target: HTMLElement): void {
+  // Hidden/unknown cards get no popup at all — there's nothing safe to show
+  // (cardPopupContentFor already withholds the image, but a "Hidden card"
+  // label on hover is itself an unwanted signal the viewer doesn't need).
+  // Still hides any popup already showing for a previously-hovered card.
+  if (card.visibility !== "public") {
+    hideTooltip();
+    return;
+  }
+
   cancelPendingHideTooltip();
   const content = cardPopupContentFor(card);
   tooltip.replaceChildren();
+  // Battlefield-type cards (e.g. Star Spring) are landscape-format art, so
+  // the same box that fits a portrait unit/spell card comfortably leaves
+  // them looking noticeably smaller — give them more room via a dedicated
+  // CSS class. Driven by the card's own landscape flag, not which zone it's
+  // in: a portrait unit card (e.g. Ruined Rex) sitting on a battlefield
+  // zone must keep the normal size, only the battlefield card itself grows.
+  tooltip.classList.toggle("tooltip-battlefield", card.landscape);
 
   if (content.imageUrl) {
     const img = document.createElement("img");

@@ -15,6 +15,7 @@ function baseDetection(overrides: Partial<DetectionInput> = {}): DetectionInput 
     rotationDeg: 0,
     zIndexHint: undefined,
     bounds: { x: 100, y: 100, width: 100, height: 100 },
+    landscape: false,
     ...overrides,
   };
 }
@@ -74,6 +75,13 @@ describe("toOverlayCard", () => {
     const b = toOverlayCard(baseDetection({ dropZone: "battlefieldB" }), viewport);
     expect(a!.zone).toBe("battlefield");
     expect(b!.zone).toBe("battlefield");
+  });
+
+  it("passes landscape through independently of visibility (not an identity field)", () => {
+    const a = toOverlayCard(baseDetection({ landscape: true, visibility: "public" }), viewport);
+    const b = toOverlayCard(baseDetection({ landscape: true, visibility: "hidden" }), viewport);
+    expect(a!.landscape).toBe(true);
+    expect(b!.landscape).toBe(true);
   });
 
   it("returns null when bounds cannot be normalized", () => {

@@ -42,6 +42,7 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     visibility: "public",
     bounds: { x: 0.3, y: 0.35, width: 0.12, height: 0.18 },
     rotation: 0,
+    landscape: false,
   },
   {
     instanceId: "preview-card-2",
@@ -50,6 +51,7 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     visibility: "hidden",
     bounds: { x: 0.62, y: 0.15, width: 0.08, height: 0.12 },
     rotation: 20,
+    landscape: false,
   },
 ];
 

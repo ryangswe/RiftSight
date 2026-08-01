@@ -59,6 +59,13 @@
         border-radius: 6px;
         filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.6));
       }
+      /* Battlefield art is landscape-oriented — the same box that fits a
+         portrait unit/spell card leaves it looking noticeably smaller, so
+         it gets a bigger box. See viewer/main.ts's showTooltipFor. */
+      #tooltip.tooltip-battlefield .tooltip-art {
+        max-width: 400px;
+        max-height: 500px;
+      }
       #tooltip .tooltip-fallback {
         max-width: 240px;
         background: rgba(17, 17, 17, 0.95);

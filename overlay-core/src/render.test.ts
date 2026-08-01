@@ -11,6 +11,7 @@ function card(overrides: Partial<OverlayCard> = {}): OverlayCard {
     visibility: "public",
     bounds: { x: 0.25, y: 0.5, width: 0.1, height: 0.2 },
     rotation: 0,
+    landscape: false,
     ...overrides,
   };
 }
