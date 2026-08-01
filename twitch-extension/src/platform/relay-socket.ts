@@ -1,4 +1,4 @@
-import { parseServerMessage, RELAY_URL, type OverlayState } from "@riftsight/protocol";
+import { parseServerMessage, type OverlayState } from "@riftsight/protocol";
 
 export type RelaySocketStatus = "connecting" | "connected" | "disconnected";
 
@@ -29,6 +29,7 @@ export class RelaySocket {
   private stopped = true;
 
   constructor(
+    private readonly relayUrl: string,
     private readonly buildSubscribeMessage: () => unknown,
     private readonly onStatusChange: (status: RelaySocketStatus) => void = () => {},
     private readonly createSocket: (url: string) => WebSocketLike = (url) => new WebSocket(url)
@@ -43,7 +44,7 @@ export class RelaySocket {
     if (this.stopped) return;
     this.onStatusChange("connecting");
 
-    const ws = this.createSocket(RELAY_URL);
+    const ws = this.createSocket(this.relayUrl);
     this.socket = ws;
 
     ws.addEventListener("open", () => {

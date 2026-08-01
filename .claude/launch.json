@@ -3,18 +3,8 @@
   "configurations": [
     {
       "name": "twitch-extension",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "esbuild",
-        "twitch-extension/src/viewer/main.ts",
-        "--bundle",
-        "--outdir=twitch-extension/dist",
-        "--outbase=twitch-extension/src",
-        "--format=iife",
-        "--target=es2020",
-        "--servedir=twitch-extension",
-        "--serve=8789"
-      ],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["twitch-extension/build.mjs", "--serve"],
       "port": 8789
     }
   ]

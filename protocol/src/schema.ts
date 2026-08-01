@@ -56,6 +56,12 @@ export const OverlayCardSchema = z
     bounds: NormalizedBoundsSchema,
     rotation: z.number().finite(),
     zIndex: z.number().finite().optional(),
+    // Whether the card's own art/frame is landscape-format — true for
+    // Battlefield-type cards (see extension's data-preview-landscape
+    // capture), independent of which zone the card currently sits in (a
+    // portrait unit card played onto a battlefield zone stays landscape:
+    // false). Drives popup sizing, not detection/geometry.
+    landscape: z.boolean(),
   })
   // A second, independent privacy boundary at the schema level (on top of
   // card-detector.ts's visibility classification and protocol's own

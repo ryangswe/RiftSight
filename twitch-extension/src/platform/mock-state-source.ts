@@ -12,16 +12,23 @@ export type MockConnectionStatus = RelaySocketStatus;
  * on the interface for TwitchOverlayStateSource, not because the relay
  * checks anything on this path. Mock auth must never be confused with
  * real Twitch JWT validation (see twitch-state-source.ts).
+ *
+ * `relayUrl` is resolved by the caller (main.ts, via getConfiguredRelayUrl)
+ * rather than read internally here — keeps this class free of any
+ * browser-global dependency, so it stays constructible in plain Node
+ * tests with an arbitrary string.
  */
 export class MockOverlayStateSource implements OverlayStateSource {
   private channelId = "";
   private readonly socket: RelaySocket;
 
   constructor(
+    relayUrl: string,
     onStatusChange: (status: MockConnectionStatus) => void = () => {},
     createSocket?: (url: string) => WebSocketLike
   ) {
     this.socket = new RelaySocket(
+      relayUrl,
       () => SubscribeMessageSchema.parse({ type: "subscribe", sessionId: this.channelId }),
       onStatusChange,
       createSocket

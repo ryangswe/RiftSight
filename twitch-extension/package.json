@@ -4,12 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "esbuild src/viewer/main.ts src/config/main.ts --bundle --outdir=dist --outbase=src --format=iife --target=es2020 --servedir=. --serve=8789",
-    "build": "esbuild src/viewer/main.ts src/config/main.ts --bundle --outdir=dist --outbase=src --format=iife --target=es2020",
+    "dev": "node build.mjs --serve",
+    "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@riftsight/overlay-core": "*",
     "@riftsight/protocol": "*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.1"
   }
 }

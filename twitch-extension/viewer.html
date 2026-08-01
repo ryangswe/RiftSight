@@ -41,25 +41,50 @@
         border-color: rgba(255, 102, 102, 0.6);
         background: rgba(255, 102, 102, 0.05);
       }
+      /* No background/border/padding on the container itself — the popup
+         is just the card's own image floating over the stream, not a
+         panel. Text states (fallback/debug) draw their own small
+         backdrop below, since they need contrast against arbitrary video
+         and no longer inherit one from this wrapper. */
       #tooltip {
         position: fixed;
         pointer-events: none;
-        background: rgba(17, 17, 17, 0.95);
-        border: 1px solid #444;
-        padding: 6px 8px;
-        font-size: 12px;
-        border-radius: 4px;
         display: none;
         z-index: 1000;
-        max-width: 240px;
-        white-space: pre-line;
       }
       #tooltip .tooltip-art {
         display: block;
-        max-width: 220px;
-        max-height: 260px;
-        margin-bottom: 4px;
-        border-radius: 3px;
+        max-width: 320px;
+        max-height: 448px;
+        border-radius: 6px;
+        filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.6));
+      }
+      /* Battlefield art is landscape-oriented — the same box that fits a
+         portrait unit/spell card leaves it looking noticeably smaller, so
+         it gets a bigger box. See viewer/main.ts's showTooltipFor. */
+      #tooltip.tooltip-battlefield .tooltip-art {
+        max-width: 400px;
+        max-height: 500px;
+      }
+      #tooltip .tooltip-fallback {
+        max-width: 240px;
+        background: rgba(17, 17, 17, 0.95);
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      /* Only ever appended when the broadcaster's debugOutlines config is
+         on — see viewer/main.ts's showTooltipFor. Normal viewers never see
+         this line. */
+      #tooltip .tooltip-debug {
+        margin-top: 4px;
+        max-width: 320px;
+        background: rgba(17, 17, 17, 0.85);
+        border-radius: 4px;
+        padding: 4px 8px;
+        color: #9fdf9f;
+        font-size: 11px;
       }
       #auth-status {
         position: absolute;
@@ -73,10 +98,30 @@
         padding: 4px 8px;
         pointer-events: none;
       }
+      /* Development-only connection diagnostics — only ever shown when
+         the broadcaster's own debug-outlines config is on (see
+         viewer/main.ts's setDiagnosticStage). Never visible to a normal
+         viewer by default. */
+      #diagnostics {
+        position: absolute;
+        top: 36px;
+        left: 8px;
+        z-index: 1000;
+        display: none;
+        background: rgba(17, 17, 17, 0.85);
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 4px 8px;
+        pointer-events: none;
+        max-width: 360px;
+        white-space: pre-line;
+        color: #9fdf9f;
+      }
     </style>
   </head>
   <body>
     <div id="auth-status"></div>
+    <div id="diagnostics"></div>
     <div id="overlay-stage"></div>
     <div id="tooltip"></div>
     <!-- Twitch Extensions JS Helper — must load before dist/viewer/main.js so window.Twitch.ext exists when it runs. https://dev.twitch.tv/docs/extensions/reference/ -->

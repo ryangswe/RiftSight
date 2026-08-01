@@ -19,6 +19,7 @@ export interface DetectionInput {
   rotationDeg: number;
   zIndexHint: number | undefined;
   bounds: PixelBounds;
+  landscape: boolean;
 }
 
 /**
@@ -53,5 +54,6 @@ export function toOverlayCard(
     bounds,
     rotation: detection.rotationDeg,
     zIndex: detection.zIndexHint,
+    landscape: detection.landscape,
   };
 }

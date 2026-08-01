@@ -14,6 +14,7 @@ import {
 } from "@riftsight/overlay-core";
 import type { OverlayCard } from "@riftsight/protocol";
 import { MockOverlayStateSource } from "../platform/mock-state-source.js";
+import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";
 import { TwitchOverlayStateSource } from "../platform/twitch-state-source.js";
 import { DEFAULT_OVERLAY_CONFIG, OVERLAY_CONFIG_VERSION, parseOverlayConfig, serializeOverlayConfig, type OverlayConfig } from "./overlay-config.js";
@@ -41,6 +42,7 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     visibility: "public",
     bounds: { x: 0.3, y: 0.35, width: 0.12, height: 0.18 },
     rotation: 0,
+    landscape: false,
   },
   {
     instanceId: "preview-card-2",
@@ -49,6 +51,7 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     visibility: "hidden",
     bounds: { x: 0.62, y: 0.15, width: 0.08, height: 0.12 },
     rotation: 20,
+    landscape: false,
   },
 ];
 
@@ -112,7 +115,6 @@ function renderPreviewHitboxes(): void {
     box.style.top = style.top;
     box.style.width = style.width;
     box.style.height = style.height;
-    box.style.transform = style.transform;
     box.style.zIndex = style.zIndex;
     previewHitboxLayer.appendChild(box);
   }
@@ -263,7 +265,7 @@ if (isMock) {
   // Read-only: this source only ever feeds the calibration preview, it
   // never publishes anything — "mode: config" distinguishes it from the
   // real overlay viewer's own subscription (same channel, two purposes).
-  const previewSource = new MockOverlayStateSource();
+  const previewSource = new MockOverlayStateSource(getConfiguredRelayUrl(true));
   previewSource.subscribe((state) => {
     previewCards = state.cards;
     renderPreviewHitboxes();
@@ -278,11 +280,26 @@ if (isMock) {
     statusText.textContent = "Twitch Extension Helper not found — this page must be loaded inside a Twitch extension iframe.";
   } else {
     const twitch = window.Twitch.ext;
-    const previewSource = new TwitchOverlayStateSource();
-    previewSource.subscribe((state) => {
-      previewCards = state.cards;
-      renderPreviewHitboxes();
-    });
+
+    // The calibration preview is best-effort — if RIFTSIGHT_RELAY_URL
+    // isn't configured for this build, the config page's actual job
+    // (reading/saving overlayEnabled/delayMs/debugOutlines/sourceRegion/
+    // sourceAspectRatio via Twitch's own configuration service) doesn't
+    // need a relay connection at all, so a missing relay URL shouldn't
+    // block it — just fall back to MOCK_PREVIEW_CARDS forever.
+    let previewSource: TwitchOverlayStateSource | undefined;
+    try {
+      previewSource = new TwitchOverlayStateSource(getConfiguredRelayUrl(false));
+      previewSource.subscribe((state) => {
+        previewCards = state.cards;
+        renderPreviewHitboxes();
+      });
+    } catch (err) {
+      console.warn(
+        "[twitch-extension] calibration preview unavailable (config saving still works):",
+        err instanceof Error ? err.message : err
+      );
+    }
 
     // onAuthorized fires again on every routine JWT refresh (same as
     // viewer/main.ts) — connect the read-only preview source once, then
@@ -295,9 +312,9 @@ if (isMock) {
       statusText.textContent = "Ready.";
       if (!authorized) {
         authorized = true;
-        previewSource.connect(buildPlatformContext(auth, "config"));
+        previewSource?.connect(buildPlatformContext(auth, "config"));
       } else {
-        previewSource.updateToken(auth.token);
+        previewSource?.updateToken(auth.token);
       }
     });
 
