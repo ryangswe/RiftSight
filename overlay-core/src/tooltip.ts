@@ -1,5 +1,34 @@
 import type { OverlayCard } from "@riftsight/protocol";
 
+export interface TooltipMaxSize {
+  maxWidthPx: number;
+  maxHeightPx: number;
+}
+
+/**
+ * Base (scale 1.0) tooltip art dimensions, in px — the single source of
+ * truth for both card orientations. Landscape (battlefield-type, e.g.
+ * Star Spring) art gets a larger box than portrait art at the same scale,
+ * since the same box that comfortably fits a portrait unit/spell card
+ * leaves landscape art looking noticeably smaller.
+ */
+const PORTRAIT_BASE_SIZE: TooltipMaxSize = { maxWidthPx: 320, maxHeightPx: 448 };
+const LANDSCAPE_BASE_SIZE: TooltipMaxSize = { maxWidthPx: 400, maxHeightPx: 500 };
+
+/**
+ * Broadcaster-configurable tooltip size, expressed as a single scale
+ * multiplier applied uniformly to whichever base size a card's own
+ * `landscape` flag selects — preserves the existing portrait/landscape
+ * size relationship (tuned above) rather than needing two independent
+ * settings. `scale` is trusted to already be validated/clamped by the
+ * caller (see config/overlay-config.ts's parseOverlayConfig); this
+ * function does no clamping of its own.
+ */
+export function computeTooltipMaxSize(landscape: boolean, scale: number): TooltipMaxSize {
+  const base = landscape ? LANDSCAPE_BASE_SIZE : PORTRAIT_BASE_SIZE;
+  return { maxWidthPx: base.maxWidthPx * scale, maxHeightPx: base.maxHeightPx * scale };
+}
+
 export interface TooltipContent {
   lines: string[];
   /** Only ever set for a public card — mirrors the wire-level guarantee, checked again here explicitly (defense in depth). */

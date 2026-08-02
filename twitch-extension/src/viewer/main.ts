@@ -11,6 +11,7 @@ import {
   FULL_FRAME_SOURCE_REGION,
   cardPopupContentFor,
   computeHitboxStyle,
+  computeTooltipMaxSize,
   computeTooltipPosition,
   delayedLiveTarget,
   hitboxClassName,
@@ -20,7 +21,7 @@ import {
   type SourceRegion,
 } from "@riftsight/overlay-core";
 import { TimeWindowBuffer, type OverlayCard, type OverlayState } from "@riftsight/protocol";
-import { parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
+import { DEFAULT_OVERLAY_CONFIG, parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
 import { MockOverlayStateSource, type MockConnectionStatus } from "../platform/mock-state-source.js";
 import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";
@@ -50,6 +51,7 @@ let debugOutlines = false; // hidden by default in production; the mock harness 
 let overlayEnabled = true; // broadcaster kill-switch, applied via broadcaster config in real Twitch mode
 let sourceAspectRatioOverride: number | undefined; // broadcaster-set override for checkAspectRatioMismatch, when set
 let sourceRegion: SourceRegion = FULL_FRAME_SOURCE_REGION; // where RiftAtlas sits within the stream canvas, broadcaster-calibrated
+let tooltipScale = DEFAULT_OVERLAY_CONFIG.tooltipScale; // broadcaster-set tooltip size multiplier — see overlay-core's computeTooltipMaxSize
 let latestCards: OverlayCard[] = [];
 let displayedState: OverlayState | undefined;
 let tickTimer: ReturnType<typeof setInterval> | undefined;
@@ -132,6 +134,15 @@ function showTooltipFor(card: OverlayCard, target: HTMLElement): void {
     // so normal browser HTTP caching still applies across hovers.
     img.decoding = "async";
     img.className = "tooltip-art";
+    // Base sizes (320x448 portrait, 400x500 landscape) live in one place —
+    // overlay-core's computeTooltipMaxSize — and are always applied here
+    // as inline styles, which is why viewer.html/index.html no longer
+    // carry their own max-width/max-height rules for .tooltip-art: an
+    // inline style would silently win over those anyway, so keeping both
+    // would just be a second, driftable copy of the same numbers.
+    const maxSize = computeTooltipMaxSize(card.landscape, tooltipScale);
+    img.style.maxWidth = `${maxSize.maxWidthPx}px`;
+    img.style.maxHeight = `${maxSize.maxHeightPx}px`;
     img.onerror = () => {
       // The popup may have already moved on to a different card by the
       // time a slow/broken image errors out — only replace content if
@@ -307,6 +318,7 @@ function applyConfig(config: OverlayConfig): void {
   debugOutlines = config.debugOutlines;
   sourceAspectRatioOverride = config.sourceAspectRatio;
   sourceRegion = config.sourceRegion;
+  tooltipScale = config.tooltipScale;
   if (!overlayEnabled) hideTooltip();
   delayedLiveTick(); // re-selects state under the new delay; applyState only re-renders if the *selected state* changed
   renderHitboxes(); // config fields like overlayEnabled/debugOutlines change what's rendered even when the state itself didn't — must re-render unconditionally, not just rely on delayedLiveTick's state-dedup path

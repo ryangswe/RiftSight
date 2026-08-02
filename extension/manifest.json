@@ -9,7 +9,7 @@
   "background": {
     "service_worker": "dist/background/background.js"
   },
-  "host_permissions": ["ws://localhost/*"],
+  "host_permissions": ["ws://localhost/*", "http://localhost:8788/*"],
   "content_scripts": [
     {
       "matches": ["*://play.riftatlas.com/*"],

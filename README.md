@@ -238,6 +238,193 @@ All three were exercised live against the real bundle (a stubbed `window.Twitch.
 - **Source-region calibration is direct rectangular mapping only, manually set:** no automatic OBS scene-region calibration, no computer-vision board detection, no automatic latency detection, and no contain/cover/crop-edge/letterbox/perspective correction — the broadcaster must select the exact rectangle RiftAtlas occupies. `checkAspectRatioMismatch` only warns (in debug mode) when the RiftAtlas source aspect ratio and the calibrated region's own rendered aspect ratio drift apart beyond a small tolerance; it never corrects anything.
 - **The calibration preview's own reference frame is a fixed 16:9 box**, not independently configurable — a broadcaster whose actual canvas isn't 16:9 calibrates by eye against that reference the same way they would in Twitch's own extension config panel.
 
+## Closed beta
+
+The Local Test workflow above is developer-operated: temporary tunnels, a hand-typed numeric Twitch channel ID, no auth on the producer side, nothing persisted across a restart. **Closed beta** is the same relay/protocol, hardened and extended so another RiftAtlas streamer (not you) can use it without running anything themselves — no tunnels, no manual channel ID, no terminals. It's still not a public release: onboarding is manual, capped at roughly 3–10 streamers.
+
+```
+RiftSight browser extension
+    │  "Connect Twitch" → OAuth identity, then a producer credential
+    │  authenticated producer WebSocket (/ws/producer?credential=...)
+    ▼
+RiftSight backend (relay/, one process)
+    ├── Twitch OAuth account linking       (auth/twitch-oauth.ts, http/routes/auth-twitch.ts)
+    ├── closed-beta allowlist + broadcaster identity (db/, persistent — see below)
+    ├── producer credential issuance/rotation (db/producer-credentials.ts)
+    ├── authenticated producer + viewer WebSocket fan-out (server.ts)
+    └── /health, /ready                     (http/routes/health.ts)
+          │  authenticated viewer subscription (twitch-subscribe, unchanged from Local Test)
+          ▼
+    Twitch video-overlay extension (twitch-extension/)
+```
+
+### Environment modes
+
+Set via `RIFTSIGHT_MODE` (relay and extension both read it; twitch-extension doesn't need it — it only ever talks to whatever `RIFTSIGHT_RELAY_URL` says). One of:
+
+- **`development`** (default) — today's Local Test-adjacent behavior: unauthenticated `local-debug` sessions stay enabled, the manual session-ID field stays in the extension panel, missing secrets only warn at startup.
+- **`twitch-local-test`** — the tunnel workflow described above: real Twitch Extension JWT verification is exercised, local-debug diagnostics remain available too.
+- **`closed-beta`** — stable-deployment mode: `local-debug` is force-disabled regardless of `ALLOW_LOCAL_DEBUG`, the extension's manual session-ID field is hidden in favor of "Connect Twitch," the plain unauthenticated producer path is rejected outright (`producerAuth.required`), and the relay **refuses to start** if any secret in `relay/src/env.ts`'s `REQUIRED_IN_CLOSED_BETA` is missing.
+
+### Environment variables
+
+**`relay/`** (copy `relay/.env.example` to `.env`, or `export` directly):
+
+| Variable | Required in | Purpose |
+|---|---|---|
+| `RIFTSIGHT_MODE` | — | `development` \| `twitch-local-test` \| `closed-beta`. Defaults to `development`. |
+| `RELAY_PORT` | — | Defaults to `8787`. |
+| `RIFTSIGHT_DB_PATH` | — | A libsql client URL. Defaults to a local file at `relay/data/riftsight.db`. `:memory:` for ephemeral/test storage, or a remote `libsql://…`/`https://…` URL for a hosted DB later. |
+| `TWITCH_EXTENSION_CLIENT_ID` | — | Logging/diagnostics only. |
+| `TWITCH_EXTENSION_SECRET` | closed-beta | Extension shared secret (base64), from the Developer Console. Verifies viewer `twitch-subscribe` JWTs. **Not** your API Client Secret — see "Don't confuse these" below. |
+| `ALLOW_LOCAL_DEBUG` | — | `"false"` disables the plain unauthenticated viewer `subscribe` path. Force-disabled in closed-beta regardless of this value. |
+| `TWITCH_API_CLIENT_ID` / `TWITCH_API_CLIENT_SECRET` | closed-beta | Twitch API app credentials for the "Log in with Twitch" OAuth flow (streamer account linking) — a **separate** Developer Console app registration from the Extension above. Client Secret is relay-only, never in any frontend. |
+| `TWITCH_OAUTH_REDIRECT_URI` | closed-beta | Must exactly match a redirect URI registered for the Twitch API app. `http://localhost:…` is fine in development; closed-beta requires `https:`. |
+
+**`extension/`** (copy `extension/.env.example` to `.env` — build-time only, rebuild after changing):
+
+| Variable | Purpose |
+|---|---|
+| `RIFTSIGHT_MODE` | Same three values as above. Only `closed-beta` hides the manual session-ID field. |
+| `RIFTSIGHT_BACKEND_URL` | The RiftSight backend's public origin (same service as `relay/` above) — used for `/auth/twitch/start` and `/api/link-status`. Defaults to `http://localhost:8788`. |
+
+**`twitch-extension/`** (copy `twitch-extension/.env.example` to `.env` — build-time only): unchanged from the Local Test workflow — `RIFTSIGHT_RELAY_URL`, now simply pointed at the closed-beta backend's public `wss://` origin instead of a temporary tunnel.
+
+**Don't confuse these** (four separate credential concepts, each touched by exactly one module): the **Twitch API Client Secret** (`auth/twitch-oauth.ts`, identifies the streamer once via OAuth) vs. the **Twitch Extension shared secret** (`twitch-auth.ts`, verifies viewer JWTs) vs. a **Twitch Extension JWT** (short-lived, issued by Twitch to a viewer's session, verified per-connection, never stored) vs. RiftSight's own **producer credential** (`auth/producer-credential.ts`, an opaque token scoped to one broadcaster, stored in the extension, revocable via the allowlist).
+
+### Persistence and the closed-beta allowlist
+
+SQLite via `@libsql/client` (see `relay/src/db/`) — the right size for one backend instance and 3–10 streamers, with room to point the same client API at a hosted libsql/Turso database later without an application-code change. Schema migrations are hand-rolled (`relay/src/db/migrate.ts` + `migrations/*.sql`) and applied automatically at every boot (idempotent — a no-op once current) as well as via a standalone command. No Twitch Extension JWTs or plaintext secrets are ever persisted — only broadcaster identity, allowlist membership, and a SHA-256 hash of each producer credential (the raw token is shown exactly once, at issuance).
+
+```bash
+npm run migrate -w relay                              # apply pending migrations without starting the server
+npm run seed-allowlist -w relay -- add <twitchUserId> [note...]
+npm run seed-allowlist -w relay -- remove <twitchUserId>   # revokes their producer credential on their next connection attempt
+npm run seed-allowlist -w relay -- list
+```
+
+A Twitch user ID (numeric), not a display name — find it via any Twitch user-ID lookup tool, or have the streamer attempt to link once and check the relay's `oauth_link_rejected`/403 log line, which includes it.
+
+### Deployment
+
+Provider-agnostic by construction: one Node process, environment-variable secrets, a local file path for SQLite. Two options that both provide stable HTTPS+WSS, secret management, a persistent volume, and straightforward redeploy:
+
+1. **Fly.io** — a Fly Machine running the built `relay/` process; Fly's edge proxy terminates HTTPS/WSS natively; a small Fly Volume holds the SQLite file (`RIFTSIGHT_DB_PATH=file:/data/riftsight.db` pointed at the mounted volume); `fly secrets set` for every secret above; `fly deploy` from a Dockerfile. More infrastructure control, more setup ceremony.
+2. **Railway** (Render is an equivalent) — GitHub-integration auto-deploy, built-in HTTPS+WSS, a persistent volume, dashboard-based secrets. Faster "connect repo, deploy" loop, less low-level control.
+
+Neither is wired up in this repo — choosing and configuring one is a deliberate step outside this milestone's automated scope.
+
+```bash
+# Build (each has its own build step; protocol/relay/overlay-core run from source)
+npm run build -w extension          # producer-side browser extension (unpacked, load from extension/)
+npm run build -w twitch-extension   # viewer/config pages — respects RIFTSIGHT_RELAY_URL at build time
+npm run package -w twitch-extension # build + write twitch-extension/deploy/ (the exact files to upload
+                                     # to your stable asset origin — see "Stable asset hosting" below)
+
+# Database migration (idempotent — also runs automatically at every relay boot, see above)
+npm run migrate -w relay
+
+# Startup
+npm run start -w relay              # tsx src/index.ts — reads RIFTSIGHT_MODE and every var above from the environment
+```
+
+**Health checks:** `GET /health` (process is up) and `GET /ready` (process is up *and* the database actually responds to a query) — point your platform's health-check config at `/health` for liveness and `/ready` for readiness/traffic admission if it distinguishes the two, otherwise `/health` alone is sufficient for a single-instance beta.
+
+**Graceful shutdown:** the relay handles `SIGTERM`/`SIGINT` by closing the WebSocket server, then the HTTP server, then the database, with a 10s force-exit fallback if anything hangs — safe to redeploy without special draining logic on your platform's side.
+
+**Rollback:** this backend has no destructive migrations (every migration so far only adds tables/columns) and no versioned wire-protocol break, so rolling back to a previous deploy of `relay/` is safe without a corresponding down-migration — the schema a newer version added simply goes unused by an older one. Keep the previous build artifact/image available on whatever platform you choose so a rollback is "redeploy the last known-good image," not a rebuild under pressure.
+
+**Secret rotation:** every secret above is read from the environment at process startup only (no in-memory caching that would need an explicit reload) — rotate a secret in your platform's secret manager, then restart the process; no rebuild needed (this was an explicit design goal, unlike `twitch-extension`'s `RIFTSIGHT_RELAY_URL`, which *is* build-time and does need a rebuild if the origin itself changes, not just a stream of the same origin). A single broadcaster's own producer credential is rotated independently via `POST /api/producer-credential/rotate` (bearer-authed with their current credential) — no backend restart needed for that.
+
+**Closed-beta deployment checklist:**
+- [ ] `relay/` deployed with `RIFTSIGHT_MODE=closed-beta` and every var in `REQUIRED_IN_CLOSED_BETA` set (the process refuses to start otherwise — check its startup logs).
+- [ ] `RIFTSIGHT_DB_PATH` points at a path on a **persistent** volume, not ephemeral container storage.
+- [ ] `TWITCH_OAUTH_REDIRECT_URI` is `https:` and exactly matches what's registered in the Twitch API app.
+- [ ] `npm run migrate -w relay` has been run at least once against the target database (or trust the automatic at-boot migration on first start).
+- [ ] `twitch-extension` built with `RIFTSIGHT_RELAY_URL=wss://<your-backend-host>` (the same host as the relay above) and `npm run package -w twitch-extension`'s `deploy/` output uploaded to your stable HTTPS asset origin.
+- [ ] That asset origin entered as the Twitch Developer Console's Testing Base URI for the closed-beta version.
+- [ ] `extension/` built with `RIFTSIGHT_MODE=closed-beta` and `RIFTSIGHT_BACKEND_URL=https://<your-backend-host>`.
+- [ ] `extension/manifest.json`'s `host_permissions` includes the real backend origin (it only lists `http://localhost:8788/*` by default — add the deployed origin before packaging).
+- [ ] At least one Twitch user ID added via `seed-allowlist add`.
+- [ ] `curl -I https://<backend-host>/health` returns `200`.
+
+### Stable asset hosting
+
+`npm run package -w twitch-extension` builds and writes `twitch-extension/deploy/` — `viewer.html`, `config.html`, and their bundles only (never the local mock harness, `index.html`/`config-mock.html`, which don't belong on a real Twitch-facing origin). Upload that directory's contents to any static HTTPS host, then enter that origin as the Twitch Developer Console's Testing Base URI (same console flow as Local Test's step 6 above, just a stable host instead of a rotating tunnel URL). A regression test (`twitch-extension/src/build-security.test.ts`) checks the deploy output both excludes the mock harness and loads Twitch's official Extension Helper script before its own bundle with no inline `<script>` content, matching Twitch's CSP.
+
+### Streamer onboarding
+
+What a beta streamer actually does — no Twitch ID, no backend URL, no terminal, no tunnel:
+
+1. Receive beta access (an operator adds your Twitch account via `seed-allowlist add`).
+2. Install the RiftSight browser extension.
+3. Click **Connect Twitch** in the extension panel's Account section.
+4. Authorize RiftSight on Twitch's consent screen.
+5. Install/activate the RiftSight Twitch Extension on your channel (Twitch Developer Console or your Extensions dashboard, same as any Twitch Extension).
+6. Open RiftAtlas.
+7. Confirm the Account section shows **Connected as `<your name>`**, then click **Start publishing**.
+8. Set your stream delay (in the Twitch Extension's own config page) to match your actual broadcast delay.
+9. Calibrate the source region (same config page) if RiftAtlas doesn't fill your entire stream canvas.
+10. Start streaming — then verify from a separate viewer account with no RiftSight extension installed that hovering over a card shows its art.
+
+### Streamer-facing error handling
+
+Every message below is deliberately short and non-technical — full diagnostics (stack traces, JWT claims, SQL errors) only ever go to the relay's structured logs (`relay/src/logging.ts`) or the browser console, never the panel a streamer reads.
+
+| What happened | What the streamer sees |
+|---|---|
+| RiftSight backend unreachable (OAuth linking) | *"RiftSight backend unavailable — try again shortly"* (`LINK_STATUS_LABEL`) |
+| Twitch authorization denied or expired | The OAuth tab shows "Could not connect — Twitch authorization was denied. You can close this tab and try again from the extension." |
+| Twitch account not on the beta allowlist | The OAuth tab shows "Not in the closed beta — this Twitch account is not part of the RiftSight closed beta yet." |
+| Producer credential expired/revoked | *"Producer credential expired — reconnect to Twitch"* (`LINK_STATUS_LABEL`) |
+| Another RiftSight connection publishing to the same channel | *"Another RiftSight connection took over publishing for your channel..."* (`error-messages.ts`'s `producer-replaced`) |
+| Producer WebSocket lost, reconnecting | *"Lost connection to the RiftSight backend — reconnecting automatically."* (`relay-reconnecting`) |
+| Background worker unreachable entirely | *"Can't reach the RiftSight backend right now..."* (`backend-unreachable`) |
+| RiftAtlas tab not detected | *"RiftSight isn't detecting a RiftAtlas game yet..."* (`riftatlas-not-detected` — defined for when a detection signal reaches the background worker; not yet wired to a live source, since nothing in this codebase currently pipes "is a RiftAtlas tab open" out of the content script) |
+
+### Manual acceptance test
+
+Needs a real Twitch Developer account, a deployed closed-beta backend (see "Deployment" above), and the closed-beta builds of `extension/` and `twitch-extension/`.
+
+1. Add a Twitch user to the beta allowlist (`npm run seed-allowlist -w relay -- add <twitchUserId>`).
+2. Deploy or start the stable beta backend (`npm run start -w relay` with `RIFTSIGHT_MODE=closed-beta` and every required var set).
+3. Install RiftSight (the closed-beta build of `extension/`) in a fresh browser profile.
+4. Click **Connect Twitch** in the extension panel's Account section.
+5. Complete Twitch authorization on the consent screen.
+6. Confirm the Account section shows **Connected as `<your Twitch login>`** — no numeric channel ID was ever typed in.
+7. Open RiftAtlas.
+8. Click **Start publishing** — there's no session-ID field to fill in (closed-beta mode hides it entirely).
+9. Activate the RiftSight Twitch Extension on your channel via the Twitch Developer Console/Extensions dashboard.
+10. Start an OBS stream (or just have RiftAtlas open and visible — see the Local Test acceptance test above for why a real stream isn't required to validate the RiftSight-specific parts).
+11. Open the stream from a separate viewer account, in a browser profile with **no** RiftSight extension installed.
+12. Confirm hovering a card shows its art after your configured stream delay.
+13. Restart the browser extension (reload it in `chrome://extensions`).
+14. Restart the backend process.
+15. Restart the stream.
+16. Confirm the producer reconnects (Account section still shows Connected; publishing resumes) and the viewer's overlay recovers without any manual reconfiguration.
+17. Remove the broadcaster from the beta allowlist (`seed-allowlist remove <twitchUserId>`) — or rotate their credential via `POST /api/producer-credential/rotate` if you want to test that path instead.
+18. Confirm they can no longer publish: their next producer connection attempt is rejected (`producer_rejected` in the relay's logs) and the extension's Account section reflects it's no longer connected.
+
+### Security review checklist
+
+Each item names where it's enforced and which test proves it — a claim without both isn't considered verified.
+
+| # | Item | Enforced by | Verified by |
+|---|---|---|---|
+| 1 | Producer cannot publish to another channel | `server.ts`'s `handleMessage` overrides an authenticated producer's `sessionId` with the credential-resolved `twitchUserId`, ignoring whatever the message itself claims | `closed-beta-flow.test.ts`'s happy-path test (sends a spoofed `sessionId`, asserts the delivered state uses the real one) |
+| 2 | Viewer cannot subscribe to a channel other than its Twitch JWT permits | `server.ts` rejects a `twitch-subscribe` whose JWT `channel_id` claim doesn't match the requested `channelId` | `server.test.ts`'s "rejects a twitch-subscribe when the JWT's channel_id does not match" |
+| 3 | Closed-beta user removal blocks future producer access | `validateProducerCredential`'s SQL JOINs through `twitch_allowlist` — no separate revocation step needed | `server.producer-auth.test.ts` + `closed-beta-flow.test.ts`'s allowlist-removal tests; the restart-persistence test additionally confirms the removal itself survives a restart |
+| 4 | Twitch Extension shared secret is backend-only | Only referenced in `relay/src/twitch-auth.ts`; never read by any frontend build script | `twitch-extension/src/build-security.test.ts` (runs the real build with the secret set in the environment, asserts it's absent from the output) |
+| 5 | Twitch API Client Secret is backend-only | Only referenced in `relay/src/auth/twitch-oauth.ts`/`env.ts` | `extension/build.mjs` never reads any Twitch secret env var at all (only `RIFTSIGHT_MODE`/`RIFTSIGHT_BACKEND_URL`) — structurally can't leak one, a stronger guarantee than a regression test needing to catch it |
+| 6 | Producer credentials never appear in logs | `logging.ts`'s `logEvent` only emits fields from an explicit allowlist; anything else is dropped, not just discouraged | `logging.test.ts`'s "drops a field not on the allowlist" |
+| 7 | Development bypasses are disabled in closed-beta mode | `env.ts` forces `allowLocalDebug = false` in closed-beta regardless of `ALLOW_LOCAL_DEBUG`; `producerAuth.required` is only ever true in closed-beta | `env.test.ts` |
+| 8 | Secure WebSocket is required | `twitch-extension`'s `resolveRelayUrl` rejects a `ws:` URL when served from a secure context (real Twitch pages always are) | `relay-url.test.ts`. TLS termination itself is the deployment platform's job (Fly.io/Railway both terminate HTTPS/WSS at the edge) — not something this application code can enforce on its own. |
+| 9 | CORS and allowed origins are restricted | `http/server.ts` deliberately sets no `Access-Control-Allow-Origin` header for any request — default-deny; the one legitimate cross-origin caller (the extension) isn't subject to CORS in the first place once its `host_permissions` covers the origin | Documented, not test-asserted (there's nothing to assert about an absent header beyond "it's absent," which every existing HTTP test already implicitly confirms by never receiving one) |
+| 10 | OAuth `state` is validated | `state-store.ts`: single-use, TTL-bound, consumed regardless of outcome | `state-store.test.ts`, `auth-twitch.test.ts`'s reused/invalid-state tests |
+| 11 | Redirect URIs are exact | Enforced by Twitch's own OAuth server against the registered URI (not something this codebase can independently double-check); this codebase requires it to be `https:` in closed-beta | `env.test.ts`'s `TWITCH_OAUTH_REDIRECT_URI` checks |
+| 12 | Payload limits exist | `rate-limit.ts`'s `MAX_MESSAGE_BYTES`/`MAX_CARDS_PER_SNAPSHOT`, enforced in `server.ts` before a message is broadcast | `server.rate-limit.test.ts` |
+| 13 | Hidden-card identity is stripped at producer serialization and checked again at backend validation | `protocol/src/serializer.ts` (producer-side) and `OverlayCardSchema`'s `.refine()` in `protocol/src/schema.ts` (backend validation boundary — a defense-in-depth second check, not trusting the producer alone) | `server.test.ts`'s "rejects a hidden card carrying identity fields" |
+
 ## Commands
 
 ```bash

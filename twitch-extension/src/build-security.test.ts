@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -45,4 +45,48 @@ describe("twitch-extension build security", () => {
     },
     20_000 // real esbuild subprocess spawn — default 5s test timeout is too tight
   );
+});
+
+describe("package.mjs (deployable asset directory)", () => {
+  it(
+    "produces deploy/ containing exactly the required entry points, excluding the local mock harness pages",
+    () => {
+      execFileSync("node", ["build.mjs"], {
+        cwd: packageDir,
+        env: { ...process.env, RIFTSIGHT_RELAY_URL: "wss://example.trycloudflare.com" },
+        stdio: "pipe",
+      });
+      execFileSync("node", ["scripts/package.mjs"], { cwd: packageDir, stdio: "pipe" });
+
+      const deployDir = path.join(packageDir, "deploy");
+      expect(existsSync(path.join(deployDir, "viewer.html"))).toBe(true);
+      expect(existsSync(path.join(deployDir, "config.html"))).toBe(true);
+      expect(existsSync(path.join(deployDir, "dist/viewer/main.js"))).toBe(true);
+      expect(existsSync(path.join(deployDir, "dist/config/main.js"))).toBe(true);
+
+      // The local-only mock harness (see index.html/config-mock.html's own
+      // header comments) must never end up in what's deployed to the real
+      // Twitch asset origin.
+      expect(existsSync(path.join(deployDir, "index.html"))).toBe(false);
+      expect(existsSync(path.join(deployDir, "config-mock.html"))).toBe(false);
+    },
+    20_000
+  );
+
+  it("deployed viewer.html/config.html load the official Twitch Extension Helper before their own bundle, with no inline <script> content (Twitch's CSP disallows it)", () => {
+    for (const [file, bundlePath] of [
+      ["deploy/viewer.html", "dist/viewer/main.js"],
+      ["deploy/config.html", "dist/config/main.js"],
+    ] as const) {
+      const html = readFileSync(path.join(packageDir, file), "utf8");
+      const helperIndex = html.indexOf('<script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js">');
+      // The actual <script src="..."> tag, not just any mention of the
+      // path — viewer.html's own explanatory HTML comment mentions
+      // "dist/viewer/main.js" by name before the real script tags.
+      const bundleIndex = html.indexOf(`<script src="${bundlePath}">`);
+      expect(helperIndex).toBeGreaterThan(-1);
+      expect(bundleIndex).toBeGreaterThan(helperIndex);
+      expect(html).not.toMatch(/<script(?![^>]*\ssrc=)[^>]*>[^<]+<\/script>/);
+    }
+  });
 });

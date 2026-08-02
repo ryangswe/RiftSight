@@ -73,16 +73,13 @@
         display: none;
         z-index: 1000;
       }
+      /* max-width/max-height are deliberately NOT set here — see
+         viewer.html's identical comment. Applied inline by
+         viewer/main.ts's showTooltipFor via computeTooltipMaxSize. */
       #tooltip .tooltip-art {
         display: block;
-        max-width: 320px;
-        max-height: 448px;
         border-radius: 6px;
         filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.6));
-      }
-      #tooltip.tooltip-battlefield .tooltip-art {
-        max-width: 400px;
-        max-height: 500px;
       }
       #tooltip .tooltip-fallback {
         max-width: 240px;

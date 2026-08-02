@@ -1,0 +1,43 @@
+import type { DbClient } from "./client.js";
+
+export interface AllowlistEntry {
+  twitchUserId: string;
+  addedAt: string;
+  note: string | null;
+}
+
+export async function isAllowed(db: DbClient, twitchUserId: string): Promise<boolean> {
+  const result = await db.execute({
+    sql: "SELECT 1 FROM twitch_allowlist WHERE twitch_user_id = ?",
+    args: [twitchUserId],
+  });
+  return result.rows.length > 0;
+}
+
+export async function addToAllowlist(db: DbClient, twitchUserId: string, note?: string): Promise<void> {
+  await db.execute({
+    sql: `
+      INSERT INTO twitch_allowlist (twitch_user_id, added_at, note)
+      VALUES (?, ?, ?)
+      ON CONFLICT (twitch_user_id) DO NOTHING
+    `,
+    args: [twitchUserId, new Date().toISOString(), note ?? null],
+  });
+}
+
+/** Also the mechanism for revoking a beta streamer — producer-credential validation (added in a later stage) checks this list, so removal here blocks future producer access without needing a separate revocation step. */
+export async function removeFromAllowlist(db: DbClient, twitchUserId: string): Promise<void> {
+  await db.execute({
+    sql: "DELETE FROM twitch_allowlist WHERE twitch_user_id = ?",
+    args: [twitchUserId],
+  });
+}
+
+export async function listAllowlist(db: DbClient): Promise<AllowlistEntry[]> {
+  const result = await db.execute("SELECT * FROM twitch_allowlist ORDER BY added_at ASC");
+  return result.rows.map((row) => ({
+    twitchUserId: String(row["twitch_user_id"]),
+    addedAt: String(row["added_at"]),
+    note: row["note"] === null ? null : String(row["note"]),
+  }));
+}

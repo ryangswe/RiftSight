@@ -28,6 +28,7 @@ describe("parseOverlayConfig", () => {
       debugOutlines: true,
       sourceAspectRatio: 1.778,
       sourceRegion: SOURCE_REGION_PRESETS.rightHalf,
+      tooltipScale: 1.5,
     };
     expect(parseOverlayConfig(JSON.stringify(config))).toEqual(config);
   });
@@ -64,6 +65,28 @@ describe("parseOverlayConfig", () => {
     expect(parseOverlayConfig(JSON.stringify({})).debugOutlines).toBe(false);
   });
 
+  it("tooltipScale defaults to 1 — a config saved before this field existed migrates to today's exact sizes", () => {
+    expect(DEFAULT_OVERLAY_CONFIG.tooltipScale).toBe(1);
+    expect(parseOverlayConfig(undefined).tooltipScale).toBe(1);
+    expect(parseOverlayConfig(JSON.stringify({ overlayEnabled: true, delayMs: 1000 })).tooltipScale).toBe(1);
+  });
+
+  it("parses a valid custom tooltipScale within [0.5, 2]", () => {
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 1.5 })).tooltipScale).toBe(1.5);
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 0.5 })).tooltipScale).toBe(0.5);
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 2 })).tooltipScale).toBe(2);
+  });
+
+  it("rejects an out-of-range tooltipScale back to the default rather than clamping it", () => {
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 0.1 })).tooltipScale).toBe(1);
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 5 })).tooltipScale).toBe(1);
+  });
+
+  it("rejects a non-finite or non-number tooltipScale back to the default", () => {
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: "big" })).tooltipScale).toBe(1);
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: null })).tooltipScale).toBe(1);
+  });
+
   // Migration: a config saved before sourceRegion existed (or one with a
   // corrupted/invalid region) must keep behaving exactly like the
   // full-frame-only milestone did — never crash, never silently render
@@ -95,6 +118,7 @@ describe("serializeOverlayConfig", () => {
       debugOutlines: true,
       sourceAspectRatio: 1.6,
       sourceRegion: SOURCE_REGION_PRESETS.leftHalf,
+      tooltipScale: 0.75,
     };
     expect(parseOverlayConfig(serializeOverlayConfig(config))).toEqual(config);
   });

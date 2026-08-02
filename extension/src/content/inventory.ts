@@ -12,6 +12,23 @@ import { DEFAULT_SESSION_ID } from "@riftsight/protocol";
 import { detectCards } from "./card-detector.js";
 import { isPublishing, publishedSnapshotCount, startPublishing, stopPublishing } from "./publisher.js";
 import type { CardDetection } from "./types.js";
+import { LINK_STATUS_LABEL, type LinkState } from "../background/link-state.js";
+import { describeStreamerError } from "../background/error-messages.js";
+
+// closed-beta hides the manual session-ID field and the account section
+// takes over as the sole "which channel does this publish to" mechanism —
+// development and twitch-local-test both keep today's manual field, per
+// the milestone spec ("existing tunnel workflow continues to work").
+const isClosedBeta = __RIFTSIGHT_MODE__ === "closed-beta";
+
+// Stage 6 open design question, not yet resolved with the relay: in
+// closed-beta mode there's no manual session field, so "Start publishing"
+// has nothing to send as a session id. Stage 7's authenticated producer
+// WebSocket is expected to resolve the real channel server-side from the
+// stored producer credential and ignore/override this value — flagging it
+// here as an explicit placeholder rather than silently deciding the wire
+// contract for that stage.
+const CLOSED_BETA_SESSION_PLACEHOLDER = "authenticated-producer";
 
 type Signal = "img-alt" | "bg-image" | "data-card-attr" | "aria-label";
 
@@ -337,6 +354,77 @@ function runDetectDelayed(): void {
 
 const PANEL_ID = "riftsight-inspector-panel";
 
+// --- Account / Twitch-linking section --------------------------------------
+// Talks to background/auth.ts exclusively through chrome.runtime messages —
+// this content script never touches chrome.storage or the linkId/poll flow
+// directly, mirroring how the Live Publishing section below only ever talks
+// to the relay connection through background.ts's message handlers.
+
+function buildAccountSection(panel: HTMLElement): void {
+  const accountTitle = document.createElement("div");
+  accountTitle.textContent = "Account";
+  accountTitle.style.cssText = "font-weight:bold;margin-bottom:4px;";
+  panel.appendChild(accountTitle);
+
+  const accountStatus = document.createElement("div");
+  accountStatus.id = `${PANEL_ID}-account-status`;
+  accountStatus.textContent = LINK_STATUS_LABEL["not-connected"];
+  accountStatus.style.cssText = "margin-bottom:6px;white-space:pre-wrap;";
+  panel.appendChild(accountStatus);
+
+  const connectButton = document.createElement("button");
+  connectButton.id = `${PANEL_ID}-connect-button`;
+  connectButton.textContent = "Connect Twitch";
+  connectButton.style.cssText = "margin-right:6px;cursor:pointer;";
+  connectButton.addEventListener("click", () => {
+    void chrome.runtime.sendMessage({ type: "start-link" }).then(updateAccountSection);
+  });
+  panel.appendChild(connectButton);
+
+  const disconnectButton = document.createElement("button");
+  disconnectButton.id = `${PANEL_ID}-disconnect-button`;
+  disconnectButton.textContent = "Disconnect";
+  disconnectButton.style.cssText = "cursor:pointer;display:none;";
+  disconnectButton.addEventListener("click", () => {
+    void chrome.runtime.sendMessage({ type: "disconnect-link" }).then(updateAccountSection);
+  });
+  panel.appendChild(disconnectButton);
+
+  updateAccountSection();
+}
+
+// Polls the background worker's link state rather than relying on a push —
+// same reasoning as updatePublishStatus below: robust to the MV3 service
+// worker being suspended and woken back up between polls. Never renders the
+// stored credential itself, only the human-facing status derived from it.
+function updateAccountSection(): void {
+  const panel = document.getElementById(PANEL_ID);
+  if (!panel) return;
+  const statusEl = panel.querySelector<HTMLDivElement>(`#${PANEL_ID}-account-status`);
+  const connectButton = panel.querySelector<HTMLButtonElement>(`#${PANEL_ID}-connect-button`);
+  const disconnectButton = panel.querySelector<HTMLButtonElement>(`#${PANEL_ID}-disconnect-button`);
+  if (!statusEl || !connectButton || !disconnectButton) return;
+
+  chrome.runtime
+    .sendMessage({ type: "get-link-state" })
+    .then((state: LinkState | undefined) => {
+      const status: LinkState["status"] = state?.status ?? "not-connected";
+      const label = LINK_STATUS_LABEL[status];
+      statusEl.textContent = status === "connected" && state?.displayName ? `${label} as ${state.displayName}` : label;
+
+      const showConnect = status === "not-connected" || status === "credential-expired" || status === "backend-unavailable";
+      connectButton.style.display = showConnect ? "inline-block" : "none";
+      disconnectButton.style.display = status === "connected" ? "inline-block" : "none";
+    })
+    .catch(() => {
+      statusEl.textContent = LINK_STATUS_LABEL["backend-unavailable"];
+      connectButton.style.display = "inline-block";
+      disconnectButton.style.display = "none";
+    });
+}
+
+setInterval(updateAccountSection, 2000);
+
 function ensurePanel(): HTMLElement {
   const existing = document.getElementById(PANEL_ID);
   if (existing) return existing;
@@ -364,6 +452,12 @@ function ensurePanel(): HTMLElement {
   title.textContent = "RiftSight Inspector (debug)";
   title.style.cssText = "font-weight:bold;margin-bottom:6px;";
   panel.appendChild(title);
+
+  buildAccountSection(panel);
+
+  const investigationDivider = document.createElement("hr");
+  investigationDivider.style.cssText = "margin:8px 0;border-color:#333;";
+  panel.appendChild(investigationDivider);
 
   const status = document.createElement("div");
   status.id = `${PANEL_ID}-status`;
@@ -421,26 +515,33 @@ function ensurePanel(): HTMLElement {
   publishTitle.style.cssText = "font-weight:bold;margin-bottom:4px;";
   panel.appendChild(publishTitle);
 
-  const sessionLabel = document.createElement("div");
-  sessionLabel.textContent = "Session ID (or Twitch test channel ID — Local Test only, see README)";
-  sessionLabel.style.cssText = "font-size:11px;color:#999;margin-bottom:2px;";
-  panel.appendChild(sessionLabel);
+  // In closed-beta mode the Account section above is the sole "which
+  // channel does this publish to" mechanism (the linked Twitch identity
+  // resolves it server-side) — the manual field stays available only in
+  // development/twitch-local-test, per the milestone spec.
+  let sessionInput: HTMLInputElement | undefined;
+  if (!isClosedBeta) {
+    const sessionLabel = document.createElement("div");
+    sessionLabel.textContent = "Session ID (or Twitch test channel ID — Local Test only, see README)";
+    sessionLabel.style.cssText = "font-size:11px;color:#999;margin-bottom:2px;";
+    panel.appendChild(sessionLabel);
 
-  // This one field is the entire "which channel/session does this
-  // publisher route to" mechanism — the relay and every viewer (debug
-  // viewer, Twitch overlay) just key off whatever string ends up here.
-  // For a real Twitch Local Test run, that means typing your numeric
-  // Twitch channel ID in directly; there's no separate Twitch-specific
-  // setting because none is needed. See README's Local Test section.
-  const sessionInput = document.createElement("input");
-  sessionInput.id = `${PANEL_ID}-session-input`;
-  sessionInput.type = "text";
-  sessionInput.value = DEFAULT_SESSION_ID;
-  sessionInput.placeholder = "local-debug, or a Twitch channel id for Local Test";
-  sessionInput.spellcheck = false;
-  sessionInput.style.cssText =
-    "width:100%;margin-bottom:4px;box-sizing:border-box;background:#000;color:#eee;border:1px solid #444;padding:2px 4px;";
-  panel.appendChild(sessionInput);
+    // This one field is the entire "which channel/session does this
+    // publisher route to" mechanism — the relay and every viewer (debug
+    // viewer, Twitch overlay) just key off whatever string ends up here.
+    // For a real Twitch Local Test run, that means typing your numeric
+    // Twitch channel ID in directly; there's no separate Twitch-specific
+    // setting because none is needed. See README's Local Test section.
+    sessionInput = document.createElement("input");
+    sessionInput.id = `${PANEL_ID}-session-input`;
+    sessionInput.type = "text";
+    sessionInput.value = DEFAULT_SESSION_ID;
+    sessionInput.placeholder = "local-debug, or a Twitch channel id for Local Test";
+    sessionInput.spellcheck = false;
+    sessionInput.style.cssText =
+      "width:100%;margin-bottom:4px;box-sizing:border-box;background:#000;color:#eee;border:1px solid #444;padding:2px 4px;";
+    panel.appendChild(sessionInput);
+  }
 
   const publishStatus = document.createElement("div");
   publishStatus.id = `${PANEL_ID}-publish-status`;
@@ -456,10 +557,11 @@ function ensurePanel(): HTMLElement {
     if (isPublishing()) {
       stopPublishing();
     } else {
-      startPublishing(sessionInput.value.trim() || DEFAULT_SESSION_ID);
+      const sessionId = isClosedBeta ? CLOSED_BETA_SESSION_PLACEHOLDER : sessionInput?.value.trim() || DEFAULT_SESSION_ID;
+      startPublishing(sessionId);
     }
     publishToggle.textContent = isPublishing() ? "Stop publishing" : "Start publishing";
-    sessionInput.disabled = isPublishing();
+    if (sessionInput) sessionInput.disabled = isPublishing();
     updatePublishStatus();
   });
   panel.appendChild(publishToggle);
@@ -480,15 +582,23 @@ function updatePublishStatus(): void {
 
   chrome.runtime
     .sendMessage({ type: "get-status" })
-    .then((response: { status?: string; hasUnsent?: boolean } | undefined) => {
-      statusEl.textContent = [
-        "Publishing.",
-        `Relay: ${response?.status ?? "unknown"}`,
-        `Snapshots sent: ${publishedSnapshotCount()}`,
-      ].join("\n");
+    .then((response: { status?: string; hasUnsent?: boolean; replaced?: boolean } | undefined) => {
+      // "disconnected" always implies background.ts's scheduleReconnect is
+      // already retrying (see connect()'s close handler) — the friendly
+      // wording says so rather than the bare technical status string.
+      // "replaced" is the one disconnect reason distinguishable from a
+      // generic one (a visible WS close code on an already-open socket —
+      // see background.ts's PRODUCER_REPLACED_CLOSE_CODE), so it gets its
+      // own, more specific message.
+      const relayLine = response?.replaced
+        ? describeStreamerError("producer-replaced")
+        : response?.status === "disconnected"
+          ? describeStreamerError("relay-reconnecting")
+          : `Relay: ${response?.status ?? "unknown"}`;
+      statusEl.textContent = ["Publishing.", relayLine, `Snapshots sent: ${publishedSnapshotCount()}`].join("\n");
     })
     .catch(() => {
-      statusEl.textContent = `Publishing.\nRelay: unreachable (background worker asleep or missing)\nSnapshots sent: ${publishedSnapshotCount()}`;
+      statusEl.textContent = `Publishing.\n${describeStreamerError("backend-unreachable")}\nSnapshots sent: ${publishedSnapshotCount()}`;
     });
 }
 
