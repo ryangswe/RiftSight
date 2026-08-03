@@ -1,10 +1,20 @@
 {
   "manifest_version": 3,
-  "name": "RiftSight Card Inspector (Investigation Build)",
+  "name": "RiftSight",
   "version": "0.1.0",
-  "description": "Debug-only tooling that inventories candidate card elements on RiftAtlas so we can design the real detector from evidence instead of guesses.",
+  "description": "Publishes RiftAtlas card previews to your Twitch stream overlay.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
-    "default_title": "RiftSight Inspector"
+    "default_title": "RiftSight",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "background": {
     "service_worker": "dist/background/background.js"

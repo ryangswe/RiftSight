@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RiftSight Privacy Policy</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0e0e12;
+        color: #e6e6e6;
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 48px 24px 96px;
+      }
+      h1 {
+        color: #fff;
+        font-size: 28px;
+      }
+      h2 {
+        color: #b794f6;
+        font-size: 18px;
+        margin-top: 40px;
+      }
+      p {
+        color: #cfcfd6;
+      }
+      a {
+        color: #b794f6;
+      }
+      .updated {
+        color: #8a8a94;
+        font-size: 13px;
+        margin-top: -8px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>RiftSight Privacy Policy</h1>
+      <p class="updated">Last updated: August 2026</p>
+
+      <p>
+        RiftSight is an unofficial, fan-made Twitch Extension that shows card details for Riftbound games streamed
+        through RiftAtlas. RiftSight is not affiliated with Riot Games, UVS Games, RiftAtlas, or Twitch.
+      </p>
+
+      <h2>If you're a viewer</h2>
+      <p>
+        RiftSight does not collect, store, or process any personal data about viewers. When you watch a stream with
+        RiftSight activated, your browser verifies your session with Twitch's own Extension platform to confirm
+        which channel you're watching &mdash; this happens entirely through Twitch's standard Extension Helper
+        mechanism and is never stored by RiftSight. We do not use cookies, analytics, or tracking of any kind on the
+        viewer-facing overlay.
+      </p>
+
+      <h2>If you're a streamer</h2>
+      <p>To use RiftSight as a streamer, you connect your Twitch account through Twitch's own OAuth authorization flow. We store:</p>
+      <ul>
+        <li>Your Twitch user ID and Twitch login name, so we know which channel to publish card data to.</li>
+        <li>A one-way cryptographic hash of a connection credential we issue you (never the credential itself), so we can verify future connections came from you.</li>
+        <li>Basic timestamps (when your account was linked, when a credential was last used or rotated).</li>
+      </ul>
+      <p>
+        We never store your Twitch password &mdash; that's handled entirely by Twitch's own OAuth consent screen and
+        never passes through RiftSight. We do not sell or share this data with any third party.
+      </p>
+
+      <h2>What RiftSight publishes to your stream</h2>
+      <p>
+        While you're actively using RiftSight, it reads publicly visible card information from your own RiftAtlas
+        browser tab (card art, names, and stats already visible on your screen) and relays it in real time so
+        viewers can see it in the overlay. This never includes hidden information (opponents' hands, hidden zones)
+        and is not retained after your stream ends.
+      </p>
+
+      <h2>Operational logs</h2>
+      <p>
+        RiftSight's backend keeps short-lived operational logs (connection counts, error rates, timestamps) to keep
+        the service running reliably. These logs never include card data, viewer identities, or full credential
+        values.
+      </p>
+
+      <h2>Removing your data</h2>
+      <p>
+        If you stop using RiftSight, you can ask us to remove your linked account and all associated data by
+        emailing <a href="mailto:riftsight.support@gmail.com">riftsight.support@gmail.com</a>.
+      </p>
+
+      <h2>Contact</h2>
+      <p>Questions about this policy: <a href="mailto:riftsight.support@gmail.com">riftsight.support@gmail.com</a></p>
+    </main>
+  </body>
+</html>

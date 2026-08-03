@@ -365,7 +365,7 @@ npm run start -w relay              # tsx src/index.ts — reads RIFTSIGHT_MODE 
 What a beta streamer actually does — no Twitch ID, no backend URL, no terminal, no tunnel:
 
 1. Receive beta access (an operator adds your Twitch account via `seed-allowlist add`).
-2. Install the RiftSight browser extension.
+2. Install the RiftSight browser extension: unzip the closed-beta build you were given, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped folder.
 3. Click **Connect Twitch** in the extension panel's Account section.
 4. Authorize RiftSight on Twitch's consent screen.
 5. Install/activate the RiftSight Twitch Extension on your channel (Twitch Developer Console or your Extensions dashboard, same as any Twitch Extension).
