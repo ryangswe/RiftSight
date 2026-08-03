@@ -1,5 +1,6 @@
 node_modules/
 dist/
+deploy/
 *.log
 .DS_Store
 .idea/
@@ -9,3 +10,7 @@ dist/
 !.env.example
 server.crt
 server.key
+relay/data/
+*.db
+*.db-journal
+extension/manifest.json

@@ -9,7 +9,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "rootDir": "src"
+    "rootDir": "."
   },
-  "include": ["src"]
+  "include": ["src", "scripts"]
 }

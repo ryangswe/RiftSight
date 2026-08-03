@@ -19,7 +19,22 @@ export interface OverlayConfig {
   sourceAspectRatio: number | undefined;
   /** Where RiftAtlas sits within the final stream canvas — see overlay-core/src/source-region.ts. Always present (never optional) so every consumer can rely on it without an extra undefined-check; a config saved before this field existed parses to FULL_FRAME_SOURCE_REGION, preserving the old full-frame-only behavior exactly. */
   sourceRegion: SourceRegion;
+  /**
+   * Multiplier applied uniformly to both the portrait and landscape
+   * tooltip base sizes (see overlay-core/src/tooltip.ts's
+   * computeTooltipMaxSize) — a single scale rather than two independent
+   * sizes, so the existing portrait/landscape size relationship stays
+   * intact. 1 = today's default sizes, unchanged. Always present (never
+   * optional), same reasoning as sourceRegion above — a config saved
+   * before this field existed parses to 1, preserving old behavior
+   * exactly.
+   */
+  tooltipScale: number;
 }
+
+/** Inclusive bounds a saved tooltipScale must fall within, or it's rejected back to the default — small enough to stay legible, large enough to be a meaningfully bigger popup without dwarfing the stream. */
+export const MIN_TOOLTIP_SCALE = 0.5;
+export const MAX_TOOLTIP_SCALE = 2;
 
 export const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
   overlayEnabled: true,
@@ -27,6 +42,7 @@ export const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
   debugOutlines: false,
   sourceAspectRatio: undefined,
   sourceRegion: FULL_FRAME_SOURCE_REGION,
+  tooltipScale: 1,
 };
 
 /**
@@ -62,6 +78,13 @@ export function parseOverlayConfig(content: string | undefined): OverlayConfig {
     // something safe" fallback (undefined input -> full frame), so a
     // config saved before sourceRegion existed migrates transparently.
     sourceRegion: parseSourceRegion(obj["sourceRegion"]),
+    tooltipScale:
+      typeof obj["tooltipScale"] === "number" &&
+      Number.isFinite(obj["tooltipScale"]) &&
+      obj["tooltipScale"] >= MIN_TOOLTIP_SCALE &&
+      obj["tooltipScale"] <= MAX_TOOLTIP_SCALE
+        ? obj["tooltipScale"]
+        : DEFAULT_OVERLAY_CONFIG.tooltipScale,
   };
 }
 

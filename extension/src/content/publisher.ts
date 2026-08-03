@@ -57,6 +57,27 @@ export function isPublishing(): boolean {
   return observerHandle !== null;
 }
 
+/**
+ * Forces a fresh full snapshot to be sent right now, regardless of whether
+ * the board looks unchanged since the last publish. Meant to be called
+ * right after the producer WebSocket reconnects (see
+ * content/inventory.ts's disconnected -> connected detection in its
+ * get-status poll): a plain reconnect alone is not enough to guarantee a
+ * freshly-restarted relay ever receives anything, since publisher.next()'s
+ * ordinary dedup would otherwise suppress publishing entirely until the
+ * board next actually changes — which, for a static board, could be
+ * arbitrarily far in the future. reset() clears the dedup fingerprint (so
+ * the very next detection is guaranteed to be treated as new) and the
+ * sequence counter (a fresh relay-side session has no prior sequence to
+ * continue from — see OverlayStatePublisher.reset's own doc comment).
+ * A no-op if nothing is currently being published.
+ */
+export function republishCurrentState(): void {
+  if (!statePublisher) return;
+  statePublisher.reset();
+  publishOnce();
+}
+
 export function publishedSnapshotCount(): number {
   return publishedCount;
 }
@@ -69,6 +90,25 @@ export function startPublishing(sessionId: string): void {
 }
 
 export function stopPublishing(): void {
+  // Explicit clear before disconnecting: without this, a viewer would keep
+  // rendering whatever hitboxes were last published until either the relay's
+  // own stale-state TTL sweep eventually clears it (relay/src/server.ts,
+  // on the order of tens of seconds) or the streamer starts publishing
+  // again and the board happens to differ from its last-known state. This
+  // sends immediately instead of waiting on either. next([], ...) still
+  // goes through the same dedup as every other publish — if the board was
+  // already empty (nothing to clear), it correctly sends nothing.
+  if (statePublisher) {
+    const state = statePublisher.next([], currentViewport());
+    if (state) {
+      chrome.runtime.sendMessage({ type: "overlay-state", payload: state }).catch(() => {
+        // Best-effort: if the background worker is mid-suspend/wake and
+        // misses this, the relay's own TTL sweep is the fallback safety
+        // net — see server.ts's sweepStaleSessions.
+      });
+    }
+  }
+
   observerHandle?.disconnect();
   observerHandle = null;
   statePublisher = null;

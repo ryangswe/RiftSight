@@ -65,6 +65,8 @@ const overlayEnabledInput = requireElement<HTMLInputElement>("overlay-enabled-in
 const delayInput = requireElement<HTMLInputElement>("delay-input");
 const debugOutlinesInput = requireElement<HTMLInputElement>("debug-outlines-input");
 const aspectRatioInput = requireElement<HTMLInputElement>("aspect-ratio-input");
+const tooltipScaleInput = requireElement<HTMLInputElement>("tooltip-scale-input");
+const tooltipScaleReadout = requireElement<HTMLElement>("tooltip-scale-readout");
 const regionXInput = requireElement<HTMLInputElement>("region-x-input");
 const regionYInput = requireElement<HTMLInputElement>("region-y-input");
 const regionWidthInput = requireElement<HTMLInputElement>("region-width-input");
@@ -211,11 +213,17 @@ function readSourceRegionFromInputs(): SourceRegion {
   };
 }
 
+function updateTooltipScaleReadout(): void {
+  tooltipScaleReadout.textContent = `${Number.parseFloat(tooltipScaleInput.value).toFixed(1)}x`;
+}
+
 function applyToForm(config: OverlayConfig): void {
   overlayEnabledInput.checked = config.overlayEnabled;
   delayInput.value = String(config.delayMs);
   debugOutlinesInput.checked = config.debugOutlines;
   aspectRatioInput.value = config.sourceAspectRatio !== undefined ? String(config.sourceAspectRatio) : "";
+  tooltipScaleInput.value = String(config.tooltipScale);
+  updateTooltipScaleReadout();
   currentSourceRegion = config.sourceRegion;
   applyRegionToInputs(config.sourceRegion);
   renderRegionBox(config.sourceRegion);
@@ -230,8 +238,14 @@ function readFromForm(): OverlayConfig {
     debugOutlines: debugOutlinesInput.checked,
     sourceAspectRatio: Number.isFinite(parsedAspectRatio) && parsedAspectRatio > 0 ? parsedAspectRatio : undefined,
     sourceRegion: currentSourceRegion,
+    // The <input type="range" min="0.5" max="2"> can't produce an
+    // out-of-range value through normal browser interaction, so no extra
+    // clamping is needed here — unlike aspectRatioInput (free-text) above.
+    tooltipScale: Number.parseFloat(tooltipScaleInput.value) || DEFAULT_OVERLAY_CONFIG.tooltipScale,
   };
 }
+
+tooltipScaleInput.addEventListener("input", updateTooltipScaleReadout);
 
 Array.from(document.querySelectorAll<HTMLButtonElement>("[data-delay-preset]")).forEach((button) => {
   button.addEventListener("click", () => {

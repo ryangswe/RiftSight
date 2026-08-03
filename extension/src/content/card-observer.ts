@@ -23,11 +23,27 @@ const DEBOUNCE_MS = 300;
 const SETTLE_CHECK_INTERVAL_MS = 60;
 const MAX_SETTLE_CHECKS = 8;
 
-// The board root RiftAtlas renders under (see card-detector.ts's captured
-// evidence — `section.gb-board`). Falls back to document.body if that
-// selector ever changes; watching the whole body just means more
-// mutation events to debounce through, not incorrect behavior.
-const BOARD_ROOT_SELECTOR = "section.gb-board, body";
+// RiftAtlas's actual game-board DOM root (see card-detector.ts's captured
+// evidence). Exported on its own — distinct from BOARD_ROOT_SELECTOR below
+// — because it's also the presence-heartbeat's "is a game board present"
+// signal (see content/inventory.ts's heartbeat tick and
+// background/presence.ts): a real, empty-of-cards board still has this
+// element, so checking for it (rather than checking for any
+// CARD_ANCHOR_SELECTOR match) is what makes "no cards currently visible"
+// distinguishable from "no game open at all."
+export const GAME_BOARD_SELECTOR = "section.gb-board";
+
+// Falls back to document.body if the selector above ever changes;
+// watching the whole body just means more mutation events to debounce
+// through for the MutationObserver below, not incorrect behavior — this
+// fallback is specifically about "always have *something* to observe,"
+// not about detecting board presence (see isGameBoardDetected for that).
+const BOARD_ROOT_SELECTOR = `${GAME_BOARD_SELECTOR}, body`;
+
+/** True only when a real game board is present — independent of whether any cards currently happen to be on it (an empty board at match start has zero cards but a real board root). See the heartbeat/presence design notes above for why this distinction matters. */
+export function isGameBoardDetected(): boolean {
+  return document.querySelector(GAME_BOARD_SELECTOR) !== null;
+}
 
 export interface CardObserverHandle {
   disconnect(): void;

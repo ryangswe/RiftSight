@@ -1,0 +1,27 @@
+# The Dockerfile's own COPY instructions are already explicit/minimal (see
+# its comments), so this mostly matters for keeping the build context sent
+# to the Docker daemon small and fast — belt and suspenders, not the only
+# thing preventing something unwanted from ending up in the image.
+
+node_modules
+**/node_modules
+**/dist
+**/deploy
+**/data
+
+.git
+.github
+.claude
+
+*.md
+docs/
+
+.env
+.env.*
+!.env.example
+
+*.db
+*.db-journal
+
+# Never bake real streamer data into an image, even by accident.
+relay/data/

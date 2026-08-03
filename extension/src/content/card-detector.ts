@@ -2,13 +2,23 @@
 //
 // Anchors on [data-card-id], which RiftAtlas attaches to every real card
 // instance — hand, base, battlefield, rune area, legend, champion, trash,
-// and the chain. Real per-instance cards use ids like "card_18076bb4".
-// Battlefield-type cards (Windswept Hillock, Star Spring, ...) are the one
-// exception found so far: RiftAtlas gives them the slot's own marker id
-// ("battlefield-marker:battlefieldA"/"...B") instead of a card_ id, so both
-// patterns are treated as detectable. The base-area marker
-// ("base-area-marker:...") is a different, much larger drop target covering
-// a whole lane — not a specific card — and stays excluded.
+// and the chain. Real per-instance cards use ids like "card_18076bb4" (an
+// earlier capture's short hex form) or a full UUID like
+// "card_80552594-720d-493b-b569-8ed4162a75b4" (seen in a later capture,
+// same room type — RiftAtlas evidently doesn't guarantee one fixed id
+// shape). CARD_INSTANCE_ID_PATTERN accepts both rather than assuming
+// either is the only one that'll ever appear: a real live incident showed
+// the short-hex-only version of this pattern silently rejecting every
+// UUID-shaped card id, which meant only the two battlefield markers (their
+// own separate, unaffected pattern) were ever detected — 41 real cards on
+// the board went completely undetected with no error, only an
+// unexpectedly-low card count. Battlefield-type cards (Windswept Hillock,
+// Star Spring, ...) are the one exception found so far: RiftAtlas gives
+// them the slot's own marker id ("battlefield-marker:battlefieldA"/"...B")
+// instead of a card_ id, so that's its own separate accepted pattern. The
+// base-area marker ("base-area-marker:...") is a different, much larger
+// drop target covering a whole lane — not a specific card — and stays
+// excluded.
 //
 // CRITICAL, established from a live capture: every card slot renders BOTH
 // its front-face image and a cardback image in the DOM simultaneously (used
@@ -28,7 +38,14 @@ import { resolveElementRotationDeg } from "./rotation.js";
 import type { CardDetection, DropZone, Owner, PixelBounds, Visibility } from "./types.js";
 
 const CARD_IMAGE_URL_PATTERN = /\/cards\/(?:original|small-v2)\/([A-Z0-9]+-\d+)\.webp/;
-const CARD_INSTANCE_ID_PATTERN = /^card_[0-9a-f]+$/i;
+// Deliberately permissive on shape (hex digits and dashes, any length)
+// rather than pinned to one exact id format — see the module header for
+// why: RiftAtlas has been observed using both a short hex hash and a full
+// UUID for the same "card_" prefix, and there is no reason to assume it
+// won't vary again. This is only a "does this look like a per-card
+// instance id" filter, not a security boundary (that's buildDetection's
+// visibility resolution below), so erring permissive here is safe.
+const CARD_INSTANCE_ID_PATTERN = /^card_[0-9a-f-]+$/i;
 const BATTLEFIELD_SLOT_ID_PATTERN = /^battlefield-marker:battlefield[AB]$/;
 const CARDBACK_IMAGE_PATTERN = /cardback-(white|blue)\.png/;
 
@@ -47,7 +64,8 @@ const KNOWN_DROP_ZONES: ReadonlySet<string> = new Set<string>([
   "chain",
 ]);
 
-function isDetectableInstanceId(id: string): boolean {
+/** Exported for unit testing — this pattern-matching decision is what silently under-detected cards on a real live capture (see the module header), so it's worth testing directly rather than only via the DOM-dependent detectCards() as a whole. */
+export function isDetectableInstanceId(id: string): boolean {
   return CARD_INSTANCE_ID_PATTERN.test(id) || BATTLEFIELD_SLOT_ID_PATTERN.test(id);
 }
 

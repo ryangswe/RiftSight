@@ -38,6 +38,7 @@ export class OverlayStatePublisher {
     };
   }
 
+  /** Clears dedup/sequencing state so the next next() call is unconditionally treated as new, regardless of whether it matches whatever was last published — e.g. after a fresh relay connection that has no memory of anything sent before it existed. */
   reset(): void {
     this.sequence = 0;
     this.lastFingerprint = null;

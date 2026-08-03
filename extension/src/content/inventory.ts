@@ -10,8 +10,90 @@
 
 import { DEFAULT_SESSION_ID } from "@riftsight/protocol";
 import { detectCards } from "./card-detector.js";
-import { isPublishing, publishedSnapshotCount, startPublishing, stopPublishing } from "./publisher.js";
+import { isGameBoardDetected } from "./card-observer.js";
+import { nextPublishingAction } from "./publishing-lifecycle.js";
+import { isPublishing, publishedSnapshotCount, republishCurrentState, startPublishing, stopPublishing } from "./publisher.js";
 import type { CardDetection } from "./types.js";
+import { LINK_STATUS_LABEL, type LinkState } from "../background/link-state.js";
+import { HEARTBEAT_INTERVAL_MS, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
+import { describeStreamerError } from "../background/error-messages.js";
+
+// closed-beta hides the manual session-ID field and the account section
+// takes over as the sole "which channel does this publish to" mechanism —
+// development and twitch-local-test both keep today's manual field, per
+// the milestone spec ("existing tunnel workflow continues to work").
+const isClosedBeta = __RIFTSIGHT_MODE__ === "closed-beta";
+
+// Stage 6 open design question, not yet resolved with the relay: in
+// closed-beta mode there's no manual session field, so "Start publishing"
+// has nothing to send as a session id. Stage 7's authenticated producer
+// WebSocket is expected to resolve the real channel server-side from the
+// stored producer credential and ignore/override this value — flagging it
+// here as an explicit placeholder rather than silently deciding the wire
+// contract for that stage.
+const CLOSED_BETA_SESSION_PLACEHOLDER = "authenticated-producer";
+
+// Hoisted out of ensurePanel's local scope so the heartbeat tick below can
+// read the streamer's manually-entered session id when auto-resuming
+// publishing after the board reappears (only relevant outside closed-beta —
+// see currentSessionId()).
+let sessionInput: HTMLInputElement | undefined;
+
+// The streamer's persisted desire to be publishing — true from the moment
+// they click "Start publishing" until they explicitly click "Stop
+// publishing", surviving a RiftAtlas reload, tab close/reopen, a
+// background-worker restart, and a full browser restart, since it's backed
+// by background/publishing-intent.ts's chrome.storage.local persistence.
+// Deliberately distinct from publisher.ts's isPublishing() (the actual
+// current state, which the heartbeat tick below pauses/resumes as the
+// board disappears/reappears without the streamer touching the button).
+// This is a local CACHE of that persisted value, not its source of truth —
+// a content script can't share memory with the background worker directly
+// (separate JS contexts), so it's populated once at load via
+// initPublishingIntent() and kept in sync by every place THIS tab changes
+// it (setIntent, called only from the click handler) — never re-polled,
+// since nothing outside this tab's own clicks changes it while it's alive.
+let cachedPublishingIntent = false;
+
+/** Fetches the persisted intent once at content-script load and syncs the panel to match. Safe to call before the panel exists — syncPublishToggleUI() itself no-ops if the panel isn't there yet, and the very next heartbeat tick (at most HEARTBEAT_INTERVAL_MS later) will pick up an intent that arrives just after ensurePanel() runs. */
+async function initPublishingIntent(): Promise<void> {
+  const response = (await chrome.runtime.sendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
+    | { intent?: boolean }
+    | undefined;
+  cachedPublishingIntent = Boolean(response?.intent);
+  syncPublishToggleUI();
+}
+
+/** The only place cachedPublishingIntent is ever changed after initial load — always in response to the streamer's own click on THIS tab. */
+async function setIntent(intent: boolean): Promise<void> {
+  cachedPublishingIntent = intent;
+  await chrome.runtime.sendMessage({ type: "set-publishing-intent", intent }).catch(() => {
+    // Best-effort — if the background worker is mid-suspend/wake, the
+    // in-memory cache above still reflects the streamer's actual click for
+    // the rest of this tab's lifetime; a genuinely dropped persist would
+    // only matter across a subsequent reload/restart, which is an edge
+    // case rare enough not to warrant a retry loop here.
+  });
+}
+
+function currentSessionId(): string {
+  return isClosedBeta ? CLOSED_BETA_SESSION_PLACEHOLDER : sessionInput?.value.trim() || DEFAULT_SESSION_ID;
+}
+
+// Tracks the relay connection status as of the most recent get-status poll
+// below, purely to detect a disconnected -> connected transition (a
+// backend restart, most notably) and trigger publisher.ts's
+// republishCurrentState() at that moment — see updatePublishStatus.
+// undefined means "no poll has completed yet since publishing last
+// (re)started"; reset alongside every startPublishing() call so a fresh
+// publish session never mistakes leftover state from a previous one for a
+// reconnect.
+let lastKnownConnectionStatus: string | undefined;
+
+function beginPublishing(sessionId: string): void {
+  lastKnownConnectionStatus = undefined;
+  startPublishing(sessionId);
+}
 
 type Signal = "img-alt" | "bg-image" | "data-card-attr" | "aria-label";
 
@@ -337,6 +419,77 @@ function runDetectDelayed(): void {
 
 const PANEL_ID = "riftsight-inspector-panel";
 
+// --- Account / Twitch-linking section --------------------------------------
+// Talks to background/auth.ts exclusively through chrome.runtime messages —
+// this content script never touches chrome.storage or the linkId/poll flow
+// directly, mirroring how the Live Publishing section below only ever talks
+// to the relay connection through background.ts's message handlers.
+
+function buildAccountSection(panel: HTMLElement): void {
+  const accountTitle = document.createElement("div");
+  accountTitle.textContent = "Account";
+  accountTitle.style.cssText = "font-weight:bold;margin-bottom:4px;";
+  panel.appendChild(accountTitle);
+
+  const accountStatus = document.createElement("div");
+  accountStatus.id = `${PANEL_ID}-account-status`;
+  accountStatus.textContent = LINK_STATUS_LABEL["not-connected"];
+  accountStatus.style.cssText = "margin-bottom:6px;white-space:pre-wrap;";
+  panel.appendChild(accountStatus);
+
+  const connectButton = document.createElement("button");
+  connectButton.id = `${PANEL_ID}-connect-button`;
+  connectButton.textContent = "Connect Twitch";
+  connectButton.style.cssText = "margin-right:6px;cursor:pointer;";
+  connectButton.addEventListener("click", () => {
+    void chrome.runtime.sendMessage({ type: "start-link" }).then(updateAccountSection);
+  });
+  panel.appendChild(connectButton);
+
+  const disconnectButton = document.createElement("button");
+  disconnectButton.id = `${PANEL_ID}-disconnect-button`;
+  disconnectButton.textContent = "Disconnect";
+  disconnectButton.style.cssText = "cursor:pointer;display:none;";
+  disconnectButton.addEventListener("click", () => {
+    void chrome.runtime.sendMessage({ type: "disconnect-link" }).then(updateAccountSection);
+  });
+  panel.appendChild(disconnectButton);
+
+  updateAccountSection();
+}
+
+// Polls the background worker's link state rather than relying on a push —
+// same reasoning as updatePublishStatus below: robust to the MV3 service
+// worker being suspended and woken back up between polls. Never renders the
+// stored credential itself, only the human-facing status derived from it.
+function updateAccountSection(): void {
+  const panel = document.getElementById(PANEL_ID);
+  if (!panel) return;
+  const statusEl = panel.querySelector<HTMLDivElement>(`#${PANEL_ID}-account-status`);
+  const connectButton = panel.querySelector<HTMLButtonElement>(`#${PANEL_ID}-connect-button`);
+  const disconnectButton = panel.querySelector<HTMLButtonElement>(`#${PANEL_ID}-disconnect-button`);
+  if (!statusEl || !connectButton || !disconnectButton) return;
+
+  chrome.runtime
+    .sendMessage({ type: "get-link-state" })
+    .then((state: LinkState | undefined) => {
+      const status: LinkState["status"] = state?.status ?? "not-connected";
+      const label = LINK_STATUS_LABEL[status];
+      statusEl.textContent = status === "connected" && state?.displayName ? `${label} as ${state.displayName}` : label;
+
+      const showConnect = status === "not-connected" || status === "credential-expired" || status === "backend-unavailable";
+      connectButton.style.display = showConnect ? "inline-block" : "none";
+      disconnectButton.style.display = status === "connected" ? "inline-block" : "none";
+    })
+    .catch(() => {
+      statusEl.textContent = LINK_STATUS_LABEL["backend-unavailable"];
+      connectButton.style.display = "inline-block";
+      disconnectButton.style.display = "none";
+    });
+}
+
+setInterval(updateAccountSection, 2000);
+
 function ensurePanel(): HTMLElement {
   const existing = document.getElementById(PANEL_ID);
   if (existing) return existing;
@@ -364,6 +517,12 @@ function ensurePanel(): HTMLElement {
   title.textContent = "RiftSight Inspector (debug)";
   title.style.cssText = "font-weight:bold;margin-bottom:6px;";
   panel.appendChild(title);
+
+  buildAccountSection(panel);
+
+  const investigationDivider = document.createElement("hr");
+  investigationDivider.style.cssText = "margin:8px 0;border-color:#333;";
+  panel.appendChild(investigationDivider);
 
   const status = document.createElement("div");
   status.id = `${PANEL_ID}-status`;
@@ -421,26 +580,38 @@ function ensurePanel(): HTMLElement {
   publishTitle.style.cssText = "font-weight:bold;margin-bottom:4px;";
   panel.appendChild(publishTitle);
 
-  const sessionLabel = document.createElement("div");
-  sessionLabel.textContent = "Session ID (or Twitch test channel ID — Local Test only, see README)";
-  sessionLabel.style.cssText = "font-size:11px;color:#999;margin-bottom:2px;";
-  panel.appendChild(sessionLabel);
+  const presenceStatus = document.createElement("div");
+  presenceStatus.id = `${PANEL_ID}-presence-status`;
+  presenceStatus.textContent = PRESENCE_STATUS_LABEL["no-riftatlas"];
+  presenceStatus.style.cssText = "margin-bottom:6px;white-space:pre-wrap;color:#9cf;";
+  panel.appendChild(presenceStatus);
 
-  // This one field is the entire "which channel/session does this
-  // publisher route to" mechanism — the relay and every viewer (debug
-  // viewer, Twitch overlay) just key off whatever string ends up here.
-  // For a real Twitch Local Test run, that means typing your numeric
-  // Twitch channel ID in directly; there's no separate Twitch-specific
-  // setting because none is needed. See README's Local Test section.
-  const sessionInput = document.createElement("input");
-  sessionInput.id = `${PANEL_ID}-session-input`;
-  sessionInput.type = "text";
-  sessionInput.value = DEFAULT_SESSION_ID;
-  sessionInput.placeholder = "local-debug, or a Twitch channel id for Local Test";
-  sessionInput.spellcheck = false;
-  sessionInput.style.cssText =
-    "width:100%;margin-bottom:4px;box-sizing:border-box;background:#000;color:#eee;border:1px solid #444;padding:2px 4px;";
-  panel.appendChild(sessionInput);
+  // In closed-beta mode the Account section above is the sole "which
+  // channel does this publish to" mechanism (the linked Twitch identity
+  // resolves it server-side) — the manual field stays available only in
+  // development/twitch-local-test, per the milestone spec.
+  if (!isClosedBeta) {
+    const sessionLabel = document.createElement("div");
+    sessionLabel.textContent = "Session ID (or Twitch test channel ID — Local Test only, see README)";
+    sessionLabel.style.cssText = "font-size:11px;color:#999;margin-bottom:2px;";
+    panel.appendChild(sessionLabel);
+
+    // This one field is the entire "which channel/session does this
+    // publisher route to" mechanism — the relay and every viewer (debug
+    // viewer, Twitch overlay) just key off whatever string ends up here.
+    // For a real Twitch Local Test run, that means typing your numeric
+    // Twitch channel ID in directly; there's no separate Twitch-specific
+    // setting because none is needed. See README's Local Test section.
+    sessionInput = document.createElement("input");
+    sessionInput.id = `${PANEL_ID}-session-input`;
+    sessionInput.type = "text";
+    sessionInput.value = DEFAULT_SESSION_ID;
+    sessionInput.placeholder = "local-debug, or a Twitch channel id for Local Test";
+    sessionInput.spellcheck = false;
+    sessionInput.style.cssText =
+      "width:100%;margin-bottom:4px;box-sizing:border-box;background:#000;color:#eee;border:1px solid #444;padding:2px 4px;";
+    panel.appendChild(sessionInput);
+  }
 
   const publishStatus = document.createElement("div");
   publishStatus.id = `${PANEL_ID}-publish-status`;
@@ -453,19 +624,62 @@ function ensurePanel(): HTMLElement {
   publishToggle.textContent = "Start publishing";
   publishToggle.style.cssText = "cursor:pointer;";
   publishToggle.addEventListener("click", () => {
-    if (isPublishing()) {
+    if (cachedPublishingIntent) {
+      void setIntent(false);
+      // Safe to call even if nothing is actually running right now (the
+      // idle-waiting state, intent true but no board) — stopPublishing()
+      // already no-ops its explicit-clear/disconnect steps when there's
+      // nothing to clear.
       stopPublishing();
     } else {
-      startPublishing(sessionInput.value.trim() || DEFAULT_SESSION_ID);
+      void setIntent(true);
+      // Only actually start observing if a board already exists right
+      // now — otherwise leave it to the next heartbeat tick's
+      // nextPublishingAction() check once one appears, rather than
+      // running an observer against a boardless page.
+      if (isGameBoardDetected()) {
+        beginPublishing(currentSessionId());
+      }
     }
-    publishToggle.textContent = isPublishing() ? "Stop publishing" : "Start publishing";
-    sessionInput.disabled = isPublishing();
-    updatePublishStatus();
+    syncPublishToggleUI();
   });
   panel.appendChild(publishToggle);
 
   document.body.appendChild(panel);
   return panel;
+}
+
+// Shared between the button's own click handler, initPublishingIntent()
+// (the initial load), and the heartbeat tick below (which can start/stop
+// publishing on its own — auto-resume/auto-stop as the board
+// disappears/reappears — without the streamer touching the button) — all
+// three paths need the button label, session-input disabled state, and
+// status text to stay in sync.
+//
+// The button reflects DESIRED state (cachedPublishingIntent), not actual
+// state (isPublishing()) — deliberately: while intent is true but no board
+// is detected yet, the button still reads "Stop publishing" so a click
+// always means "I want to stop," and updatePublishStatus() below is what
+// shows the actual/idle state in more detail.
+function syncPublishToggleUI(): void {
+  const panel = document.getElementById(PANEL_ID);
+  if (!panel) return;
+  const toggle = panel.querySelector<HTMLButtonElement>(`#${PANEL_ID}-publish-toggle`);
+  if (toggle) toggle.textContent = cachedPublishingIntent ? "Stop publishing" : "Start publishing";
+  if (sessionInput) sessionInput.disabled = cachedPublishingIntent;
+  updatePublishStatus();
+}
+
+// Most recent presence status from updatePresenceSection()'s own poll below
+// — reused here (rather than a second, separate get-presence-state call)
+// purely to pick which idle-publishing message applies when intent is on
+// but nothing is actually running yet.
+let lastKnownPresenceStatus: PresenceStatus = "no-riftatlas";
+
+function idlePublishingMessage(): string {
+  return lastKnownPresenceStatus === "no-riftatlas"
+    ? "Publishing enabled — open RiftAtlas to continue"
+    : "Publishing enabled — waiting for an active RiftAtlas game";
 }
 
 function updatePublishStatus(): void {
@@ -474,21 +688,77 @@ function updatePublishStatus(): void {
   if (!statusEl) return;
 
   if (!isPublishing()) {
-    statusEl.textContent = "Not publishing.";
+    statusEl.textContent = cachedPublishingIntent ? idlePublishingMessage() : "Not publishing.";
     return;
   }
 
   chrome.runtime
     .sendMessage({ type: "get-status" })
-    .then((response: { status?: string; hasUnsent?: boolean } | undefined) => {
-      statusEl.textContent = [
-        "Publishing.",
-        `Relay: ${response?.status ?? "unknown"}`,
-        `Snapshots sent: ${publishedSnapshotCount()}`,
-      ].join("\n");
+    .then((response: { status?: string; hasUnsent?: boolean; replaced?: boolean } | undefined) => {
+      // A not-connected -> connected transition means the relay connection
+      // just came back (most notably: the backend restarted, or a network
+      // blip). The board may well look identical to before the drop, which
+      // would otherwise mean publisher.ts's ordinary dedup suppresses
+      // everything until it next actually changes — so force one fresh
+      // full snapshot right now rather than waiting on that. See
+      // publisher.ts's republishCurrentState doc comment for the full
+      // reasoning.
+      //
+      // Deliberately checking "was NOT connected" rather than "was
+      // exactly disconnected" — background.ts's status passes through an
+      // intermediate "connecting" state on every reconnect attempt
+      // (openSocket's retry loop starts at a 500ms backoff), and against
+      // this 2s poll interval it's entirely possible — a real live
+      // incident confirmed it happens — for a poll to only ever sample
+      // "connecting" as its last reading before the connection succeeds,
+      // never once catching an explicit "disconnected" value. Missing
+      // that meant this transition went undetected and no republish ever
+      // fired, even though the connection genuinely had been down.
+      // `lastKnownConnectionStatus === undefined` (no poll has completed
+      // yet since publishing last started) is excluded on purpose — a
+      // fresh startPublishing() already sends its own first full
+      // snapshot; treating "never polled yet" as "was disconnected" would
+      // just redundantly double that initial publish.
+      const wasNotConnected = lastKnownConnectionStatus !== undefined && lastKnownConnectionStatus !== "connected";
+      if (wasNotConnected && response?.status === "connected") {
+        republishCurrentState();
+      }
+      lastKnownConnectionStatus = response?.status;
+
+      // "disconnected" always implies background.ts's scheduleReconnect is
+      // already retrying (see connect()'s close handler) — the friendly
+      // wording says so rather than the bare technical status string.
+      // "replaced" is the one disconnect reason distinguishable from a
+      // generic one (a visible WS close code on an already-open socket —
+      // see background.ts's PRODUCER_REPLACED_CLOSE_CODE), so it gets its
+      // own, more specific message.
+      const relayLine = response?.replaced
+        ? describeStreamerError("producer-replaced")
+        : response?.status === "disconnected"
+          ? describeStreamerError("relay-reconnecting")
+          : `Relay: ${response?.status ?? "unknown"}`;
+      statusEl.textContent = ["Publishing.", relayLine, `Snapshots sent: ${publishedSnapshotCount()}`].join("\n");
     })
     .catch(() => {
-      statusEl.textContent = `Publishing.\nRelay: unreachable (background worker asleep or missing)\nSnapshots sent: ${publishedSnapshotCount()}`;
+      // A failed message (not a successful "disconnected" response, but
+      // chrome.runtime.sendMessage itself rejecting) means the background
+      // worker couldn't even be reached — e.g. evicted/asleep for longer
+      // than a normal MV3 suspend-and-instant-wake cycle. This is at least
+      // as much a "not connected" signal as an explicit disconnected
+      // status, and it matters for the same reason: without recording it
+      // here, a long outage where every poll fails this way (never once
+      // succeeding with an explicit "disconnected" reading) would leave
+      // lastKnownConnectionStatus frozen at whatever it was right before
+      // the outage — so the very next poll that succeeds with "connected"
+      // would see no disconnected -> connected transition at all, and
+      // republishCurrentState() above would never fire. A real live
+      // incident showed exactly this: a producer sat "connected" per its
+      // own object state but silently unreachable for several minutes,
+      // then resumed normal dedup-gated publishing with no forced
+      // republish once it recovered, leaving viewers on a stale/cleared
+      // overlay until the board happened to change on its own.
+      lastKnownConnectionStatus = "disconnected";
+      statusEl.textContent = `Publishing.\n${describeStreamerError("backend-unreachable")}\nSnapshots sent: ${publishedSnapshotCount()}`;
     });
 }
 
@@ -496,6 +766,59 @@ function updatePublishStatus(): void {
 // push — simpler, and robust to the background service worker being
 // suspended and woken back up between polls.
 setInterval(updatePublishStatus, 2000);
+
+// Polls background/presence-tracker.ts's derived status rather than
+// pushing — same reasoning as updatePublishStatus/updateAccountSection
+// above (robust to the background worker being suspended between polls).
+function updatePresenceSection(): void {
+  const panel = document.getElementById(PANEL_ID);
+  if (!panel) return;
+  const el = panel.querySelector<HTMLDivElement>(`#${PANEL_ID}-presence-status`);
+  if (!el) return;
+
+  chrome.runtime
+    .sendMessage({ type: "get-presence-state" })
+    .then((response: { status?: PresenceStatus } | undefined) => {
+      lastKnownPresenceStatus = response?.status ?? "no-riftatlas";
+      el.textContent = PRESENCE_STATUS_LABEL[lastKnownPresenceStatus];
+    })
+    .catch(() => {
+      lastKnownPresenceStatus = "no-riftatlas";
+      el.textContent = PRESENCE_STATUS_LABEL["no-riftatlas"];
+    });
+}
+
+setInterval(updatePresenceSection, 2000);
+
+// Independent of whether the streamer has clicked "Start publishing" — the
+// panel should be able to show "RiftAtlas detected" even before publishing
+// starts. Also drives auto-resume/auto-stop via publishing-lifecycle.ts's
+// pure nextPublishingAction(): if the streamer wants to be publishing
+// (cachedPublishingIntent) and the board just reappeared — including right
+// after a reload, since cachedPublishingIntent is populated from persisted
+// state at load time — resume without requiring another click; if actively
+// publishing and the board just disappeared, stop (a match ending,
+// navigating away, etc.). Either way the streamer's intent itself is only
+// ever changed by an explicit click (setIntent) — never by this tick.
+function sendHeartbeat(): void {
+  const boardDetected = isGameBoardDetected();
+  const publicCardCount = detectCards().filter((card) => card.visibility === "public").length;
+
+  chrome.runtime.sendMessage({ type: "heartbeat", boardDetected, publicCardCount }).catch(() => {
+    // Background worker may be waking from suspension; the next tick will retry.
+  });
+
+  const action = nextPublishingAction({ intent: cachedPublishingIntent, boardDetected, isPublishing: isPublishing() });
+  if (action === "start") {
+    beginPublishing(currentSessionId());
+    syncPublishToggleUI();
+  } else if (action === "stop") {
+    stopPublishing();
+    syncPublishToggleUI();
+  }
+}
+
+setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
 
 function updatePanel(result: ScanResult, counts: Record<Signal, number>): void {
   const panel = ensurePanel();
@@ -529,4 +852,20 @@ window.addEventListener("keydown", (event) => {
   if (key === "h") runDetectDelayed();
 });
 
+// Pushed by background.ts the instant its own relay WebSocket opens —
+// deliberately not something this content script has to poll for (see
+// background.ts's module header for why the polling-only version of this,
+// updatePublishStatus()'s own disconnected -> connected detection above,
+// isn't reliable enough on its own: a backgrounded tab's setInterval can
+// stall for a long time, but an incoming message to this already-
+// registered listener isn't subject to that same throttling). Safe to
+// call unconditionally — republishCurrentState() itself already no-ops if
+// nothing is currently being published.
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "relay-connected") {
+    republishCurrentState();
+  }
+});
+
 ensurePanel();
+void initPublishingIntent();
