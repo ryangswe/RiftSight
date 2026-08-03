@@ -6,9 +6,10 @@ import { createDbClient, type DbClient } from "../../db/client.js";
 import { runMigrations } from "../../db/migrate.js";
 import { addToAllowlist } from "../../db/allowlist.js";
 import { upsertBroadcaster } from "../../db/broadcasters.js";
-import { issueProducerCredential, validateProducerCredential } from "../../db/producer-credentials.js";
+import { issueProducerCredential, revokeAllCredentialsForBroadcaster, validateProducerCredential } from "../../db/producer-credentials.js";
+import { removeFromAllowlist } from "../../db/allowlist.js";
 import { createLinkHandoffStore, type LinkHandoffStore } from "../../auth/link-handoff.js";
-import { handleLinkStatus, handleRotateProducerCredential } from "./producer-credential.js";
+import { handleLinkStatus, handleProducerCredentialStatus, handleRotateProducerCredential } from "./producer-credential.js";
 
 const migrationsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
 
@@ -19,7 +20,7 @@ let broadcasterId: number;
 beforeEach(async () => {
   db = createDbClient(":memory:");
   const migrations = await Promise.all(
-    ["0001_init.sql", "0002_producer_credentials.sql"].map(async (file, index) => ({
+    ["0001_init.sql", "0002_producer_credentials.sql", "0003_producer_credential_lifecycle.sql"].map(async (file, index) => ({
       version: index + 1,
       name: file,
       sql: await readFile(path.join(migrationsDir, file), "utf8"),
@@ -99,5 +100,51 @@ describe("handleRotateProducerCredential", () => {
     expect(newToken).not.toBe(oldToken);
     expect(await validateProducerCredential(db, oldToken)).toBeNull();
     expect(await validateProducerCredential(db, newToken)).not.toBeNull();
+  });
+});
+
+describe("handleProducerCredentialStatus", () => {
+  it("401s when no Authorization header is present", async () => {
+    const req = { method: "GET", url: "/api/producer-credential/status", headers: {} };
+    const response = await handleProducerCredentialStatus(req, db);
+    expect(response.status).toBe(401);
+  });
+
+  it("reports status 200 {status: \"valid\"} for a valid credential", async () => {
+    const token = await issueProducerCredential(db, broadcasterId);
+    const req = { method: "GET", url: "/api/producer-credential/status", headers: { authorization: `Bearer ${token}` } };
+    const response = await handleProducerCredentialStatus(req, db);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ status: "valid" });
+  });
+
+  it("reports {status: \"invalid_or_malformed\"} for an unknown token, still as a 200", async () => {
+    const req = { method: "GET", url: "/api/producer-credential/status", headers: { authorization: "Bearer not-a-real-token" } };
+    const response = await handleProducerCredentialStatus(req, db);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ status: "invalid_or_malformed" });
+  });
+
+  it("reports {status: \"revoked_or_replaced\"} for a revoked credential", async () => {
+    const token = await issueProducerCredential(db, broadcasterId);
+    await revokeAllCredentialsForBroadcaster(db, broadcasterId);
+    const req = { method: "GET", url: "/api/producer-credential/status", headers: { authorization: `Bearer ${token}` } };
+    const response = await handleProducerCredentialStatus(req, db);
+    expect(JSON.parse(response.body)).toEqual({ status: "revoked_or_replaced" });
+  });
+
+  it("reports {status: \"not_allowlisted\"} for a valid credential whose broadcaster was removed from the allowlist", async () => {
+    const token = await issueProducerCredential(db, broadcasterId);
+    await removeFromAllowlist(db, "141981764");
+    const req = { method: "GET", url: "/api/producer-credential/status", headers: { authorization: `Bearer ${token}` } };
+    const response = await handleProducerCredentialStatus(req, db);
+    expect(JSON.parse(response.body)).toEqual({ status: "not_allowlisted" });
+  });
+
+  it("never includes the bearer token itself anywhere in the response body", async () => {
+    const token = await issueProducerCredential(db, broadcasterId);
+    const req = { method: "GET", url: "/api/producer-credential/status", headers: { authorization: `Bearer ${token}` } };
+    const response = await handleProducerCredentialStatus(req, db);
+    expect(response.body).not.toContain(token);
   });
 });

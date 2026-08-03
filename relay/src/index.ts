@@ -7,6 +7,7 @@ import { createLinkHandoffStore } from "./auth/link-handoff.js";
 import type { TwitchOAuthConfig } from "./auth/twitch-oauth.js";
 import { createHttpRouter } from "./http/server.js";
 import { attachRelayWebSocketServer } from "./server.js";
+import { logEvent } from "./logging.js";
 
 const result = validateEnv(process.env);
 
@@ -51,6 +52,28 @@ const oauthConfig: TwitchOAuthConfig | undefined =
 const stateStore = createStateStore();
 const linkHandoff = createLinkHandoffStore();
 
+// Sanitized, closed-beta-only startup snapshot — booleans and a bare
+// hostname only, so it's safe to leave in any log stream by default. The
+// first thing an operator should check after a deploy/restart (see
+// docs/operator-runbook.md's "Inspect the startup configuration summary").
+if (config.mode === "closed-beta") {
+  logEvent("startup_summary", {
+    mode: config.mode,
+    databaseConfigured: config.dbUrl.length > 0,
+    // A heuristic, not a guarantee this code can actually verify (it has
+    // no way to know whether a given path is on a mounted volume) — true
+    // for an absolute file path or a remote libsql/https URL, false for
+    // the relative-to-cwd default, which is the shape most likely to be
+    // silently ephemeral inside a container.
+    databasePersistentPath: !config.dbUrl.startsWith("file:./"),
+    localDebugEnabled: config.allowLocalDebug,
+    producerAuthRequired: config.mode === "closed-beta",
+    twitchViewerAuthConfigured: Boolean(config.twitchExtensionSecret),
+    oauthConfigured: Boolean(oauthConfig),
+    publicBackendOrigin: config.twitchOAuthRedirectUri ? new URL(config.twitchOAuthRedirectUri).hostname : undefined,
+  });
+}
+
 const httpServer = createServer(
   createHttpRouter({
     db,
@@ -78,8 +101,11 @@ httpServer.on("error", (err) => {
   process.exit(1);
 });
 
-httpServer.listen(config.port, () => {
-  console.log(`[relay] listening on http://localhost:${config.port} (mode: ${config.mode})`);
+// Explicit host bind rather than Node's platform-dependent default —
+// Railway (and most PaaS platforms) require binding 0.0.0.0 specifically
+// for their proxy to reach the container.
+httpServer.listen(config.port, "0.0.0.0", () => {
+  console.log(`[relay] listening on http://0.0.0.0:${config.port} (mode: ${config.mode})`);
 });
 
 let shuttingDown = false;

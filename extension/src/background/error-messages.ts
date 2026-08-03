@@ -11,18 +11,13 @@
 // LINK_STATUS_LABEL. This module covers producer-connection failures that
 // can happen after linking has already succeeded.
 
-export type StreamerErrorCode =
-  | "backend-unreachable"
-  | "producer-replaced"
-  | "riftatlas-not-detected"
-  | "relay-reconnecting";
+export type StreamerErrorCode = "backend-unreachable" | "producer-replaced" | "relay-reconnecting";
 
 export const STREAMER_ERROR_MESSAGE: Record<StreamerErrorCode, string> = {
   "backend-unreachable":
     "Can't reach the RiftSight backend right now. Check your internet connection — RiftSight will keep retrying automatically.",
   "producer-replaced":
     "Another RiftSight connection took over publishing for your channel. If that wasn't you, reconnect Twitch to get a new producer credential.",
-  "riftatlas-not-detected": "RiftSight isn't detecting a RiftAtlas game yet. Make sure you have a RiftAtlas tab open before starting to publish.",
   "relay-reconnecting": "Lost connection to the RiftSight backend — reconnecting automatically.",
 };
 

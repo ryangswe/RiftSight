@@ -1,9 +1,11 @@
 import { createServer, type Server } from "node:http";
 import fetch from "node-fetch";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDbClient, type DbClient } from "../db/client.js";
 import { runMigrations } from "../db/migrate.js";
 import { addToAllowlist } from "../db/allowlist.js";
+import { upsertBroadcaster } from "../db/broadcasters.js";
+import { issueProducerCredential } from "../db/producer-credentials.js";
 import { createStateStore, type StateStore } from "../auth/state-store.js";
 import { createLinkHandoffStore, type LinkHandoffStore } from "../auth/link-handoff.js";
 import type { TwitchOAuthConfig } from "../auth/twitch-oauth.js";
@@ -59,7 +61,9 @@ beforeEach(async () => {
           broadcaster_id INTEGER NOT NULL REFERENCES broadcasters(id),
           token_hash TEXT NOT NULL UNIQUE,
           created_at TEXT NOT NULL,
-          revoked_at TEXT
+          revoked_at TEXT,
+          last_used_at TEXT,
+          rotated_at TEXT
         );
       `,
     },
@@ -163,6 +167,52 @@ describe("createHttpRouter", () => {
     // CREDENTIAL_ROTATE_LIMIT.maxEvents is 10 — issue one more than that.
     for (let i = 0; i < 11; i++) {
       const response = await fetch(`${baseUrl}/api/producer-credential/rotate`, { method: "POST" });
+      lastStatus = response.status;
+    }
+    expect(lastStatus).toBe(429);
+  });
+
+  it("GET /api/producer-credential/status 401s without a bearer credential", async () => {
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    const response = await fetch(`${baseUrl}/api/producer-credential/status`);
+    expect(response.status).toBe(401);
+  });
+
+  it("GET /api/producer-credential/status reports {status: \"valid\"} for a real credential, over a real HTTP round trip", async () => {
+    await addToAllowlist(db, "141981764");
+    const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
+    const token = await issueProducerCredential(db, broadcaster.id);
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+
+    const response = await fetch(`${baseUrl}/api/producer-credential/status`, { headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "valid" });
+  });
+
+  it("never logs the bearer token presented to GET /api/producer-credential/status", async () => {
+    await addToAllowlist(db, "141981764");
+    const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
+    const token = await issueProducerCredential(db, broadcaster.id);
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await fetch(`${baseUrl}/api/producer-credential/status`, { headers: { authorization: `Bearer ${token}` } });
+      for (const call of logSpy.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain(token);
+      }
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("rate-limits GET /api/producer-credential/status after PRODUCER_STATUS_LIMIT requests from the same client", async () => {
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+
+    let lastStatus = 0;
+    // PRODUCER_STATUS_LIMIT.maxEvents is 20 — issue one more than that.
+    for (let i = 0; i < 21; i++) {
+      const response = await fetch(`${baseUrl}/api/producer-credential/status`, { headers: { authorization: "Bearer not-a-real-token" } });
       lastStatus = response.status;
     }
     expect(lastStatus).toBe(429);

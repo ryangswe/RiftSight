@@ -12,11 +12,11 @@ import type { StateStore } from "../auth/state-store.js";
 import type { LinkHandoffStore } from "../auth/link-handoff.js";
 import type { TwitchOAuthConfig } from "../auth/twitch-oauth.js";
 import { handleAuthCallback, handleAuthStart } from "./routes/auth-twitch.js";
-import { handleLinkStatus, handleRotateProducerCredential } from "./routes/producer-credential.js";
+import { handleLinkStatus, handleProducerCredentialStatus, handleRotateProducerCredential } from "./routes/producer-credential.js";
 import { handleHealth, handleReady } from "./routes/health.js";
 import { jsonResponse, type HttpRequest, type HttpResponse } from "./types.js";
 import { logEvent } from "../logging.js";
-import { createRateLimiter, CREDENTIAL_ROTATE_LIMIT, OAUTH_START_LIMIT } from "../rate-limit.js";
+import { createRateLimiter, CREDENTIAL_ROTATE_LIMIT, OAUTH_START_LIMIT, PRODUCER_STATUS_LIMIT } from "../rate-limit.js";
 
 export interface HttpRouterDeps {
   db: DbClient;
@@ -74,6 +74,7 @@ const RATE_LIMITED = jsonResponse(429, { error: "too many requests — please wa
 export function createHttpRouter(deps: HttpRouterDeps): (req: IncomingMessage, res: ServerResponse) => void {
   const oauthStartLimiter = createRateLimiter(OAUTH_START_LIMIT);
   const credentialRotateLimiter = createRateLimiter(CREDENTIAL_ROTATE_LIMIT);
+  const producerStatusLimiter = createRateLimiter(PRODUCER_STATUS_LIMIT);
 
   return (req, res) => {
     const httpRequest = toHttpRequest(req);
@@ -134,6 +135,20 @@ export function createHttpRouter(deps: HttpRouterDeps): (req: IncomingMessage, r
       }
       void handleRotateProducerCredential(httpRequest, deps.db).then((response) => {
         logEvent(response.status === 200 ? "credential_rotated" : "credential_rotate_failed", { status: response.status });
+        sendHttpResponse(res, response);
+      });
+      return;
+    }
+
+    if (httpRequest.method === "GET" && pathname === "/api/producer-credential/status") {
+      if (!producerStatusLimiter.tryConsume(remoteAddress)) {
+        logEvent("producer_status_check", { reason: "rate-limited", remoteAddress });
+        sendHttpResponse(res, RATE_LIMITED);
+        return;
+      }
+      void handleProducerCredentialStatus(httpRequest, deps.db).then((response) => {
+        const body = response.status === 200 ? (JSON.parse(response.body) as { status: string }).status : undefined;
+        logEvent("producer_status_check", { reason: body ?? "missing-bearer-credential", status: response.status });
         sendHttpResponse(res, response);
       });
       return;

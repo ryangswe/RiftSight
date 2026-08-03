@@ -13,3 +13,4 @@ server.key
 relay/data/
 *.db
 *.db-journal
+extension/manifest.json

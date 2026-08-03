@@ -45,4 +45,29 @@ describe("logEvent", () => {
     const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
     expect(parsed).not.toHaveProperty("reason");
   });
+
+  it("allows every startup_summary field through with no warning", () => {
+    logEvent("startup_summary", {
+      mode: "closed-beta",
+      databaseConfigured: true,
+      databasePersistentPath: true,
+      localDebugEnabled: false,
+      producerAuthRequired: true,
+      twitchViewerAuthConfigured: true,
+      oauthConfigured: true,
+      publicBackendOrigin: "beta.example.com",
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(parsed).toMatchObject({
+      mode: "closed-beta",
+      databaseConfigured: true,
+      databasePersistentPath: true,
+      localDebugEnabled: false,
+      producerAuthRequired: true,
+      twitchViewerAuthConfigured: true,
+      oauthConfigured: true,
+      publicBackendOrigin: "beta.example.com",
+    });
+  });
 });

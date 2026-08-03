@@ -117,7 +117,53 @@ export async function disconnect(): Promise<void> {
   await persistState(reduceLinkState(currentState, { type: "disconnect" }));
 }
 
-/** Called when the relay rejects our stored credential (revoked/no-longer-permitted) — see background.ts's connection handling, wired up in a later stage alongside the actual authenticated WS handshake. */
+/** Called when the relay rejects our stored credential (revoked/no-longer-permitted) — see background.ts's connection handling. */
 export async function reportCredentialRejected(): Promise<void> {
   await persistState(reduceLinkState(currentState, { type: "credential-rejected" }));
+}
+
+/**
+ * The four real diagnostic outcomes the backend can report (matching
+ * relay/src/db/producer-credentials.ts's ProducerCredentialStatus), plus
+ * "network-error" for everything that isn't a clean 200 with one of those
+ * four values — a non-2xx response (including a 429 if this ever got
+ * called more than the backend's own rate limit allows), a malformed
+ * body, or the fetch itself throwing (backend unreachable, DNS failure,
+ * offline). Collapsing all of those into one outcome is deliberate: none
+ * of them say anything definitive about the credential itself, so none of
+ * them should ever be treated as a reason to erase it.
+ */
+export type ProducerCredentialStatusResult =
+  | { status: "valid" | "invalid_or_malformed" | "revoked_or_replaced" | "not_allowlisted" }
+  | { status: "network-error" };
+
+/**
+ * Calls GET /api/producer-credential/status with the given credential —
+ * see background.ts for when/why this gets called (only after an
+ * ambiguous WebSocket connection failure, never continuously). Kept as a
+ * one-shot function taking the credential as a parameter, rather than
+ * reading getStoredCredential() itself, so the caller controls exactly
+ * which credential is being diagnosed without a second storage read racing
+ * against whatever prompted this call in the first place.
+ */
+export async function checkProducerCredentialStatus(credential: string): Promise<ProducerCredentialStatusResult> {
+  try {
+    const response = await fetch(`${backendUrl()}/api/producer-credential/status`, {
+      headers: { Authorization: `Bearer ${credential}` },
+    });
+    if (!response.ok) return { status: "network-error" };
+
+    const data = (await response.json()) as { status?: string };
+    if (
+      data.status === "valid" ||
+      data.status === "invalid_or_malformed" ||
+      data.status === "revoked_or_replaced" ||
+      data.status === "not_allowlisted"
+    ) {
+      return { status: data.status };
+    }
+    return { status: "network-error" };
+  } catch {
+    return { status: "network-error" };
+  }
 }

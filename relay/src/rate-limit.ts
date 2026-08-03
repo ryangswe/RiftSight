@@ -30,6 +30,9 @@ export const OAUTH_START_LIMIT = { maxEvents: 20, windowMs: 60_000 };
 /** POST /api/producer-credential/rotate attempts per source IP, per window. */
 export const CREDENTIAL_ROTATE_LIMIT = { maxEvents: 10, windowMs: 60_000 };
 
+/** GET /api/producer-credential/status attempts per source IP, per window. The extension only calls this after a WS connection failure it can't otherwise diagnose (see background.ts), never continuously — generous, but real, to bound a client stuck in a fast reconnect loop. */
+export const PRODUCER_STATUS_LIMIT = { maxEvents: 20, windowMs: 60_000 };
+
 export interface RateLimiter {
   /** Records one event for `key` and returns whether it's within the limit (true = allowed, false = over limit — caller should reject/drop/disconnect). */
   tryConsume(key: string): boolean;

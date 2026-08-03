@@ -352,4 +352,147 @@ describe("relay server", () => {
     viewer.close();
     producer.close();
   });
+
+  describe("stale-state TTL", () => {
+    it("broadcasts a synthesized empty-cards state to already-connected viewers once a session goes stale (producer actually gone, not just quiet)", async () => {
+      server = await createRelayServer(0, { stateTtl: { ttlMs: 100, sweepIntervalMs: 20 } });
+      const url = `ws://localhost:${server.port}`;
+
+      const viewer = new WebSocket(url);
+      await waitForOpen(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "ttl-session" }));
+      await wait(50);
+
+      const producer = new WebSocket(url);
+      await waitForOpen(producer);
+      const firstReceived = waitForMessage(viewer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("ttl-session", 1) }));
+      await firstReceived;
+
+      // The producer's own connection has to actually be gone for staleness
+      // to mean anything — see isProducerConnectionOpen's doc comment. A
+      // still-open producer that simply has nothing new to say must never
+      // trigger this (that's the "does not expire a session with a
+      // connected-but-quiet producer" test below).
+      producer.close();
+      await wait(30);
+
+      const staleReceived = waitForMessage(viewer);
+      const message = (await staleReceived) as { type: string; payload: { cards: unknown[]; sequence: number } };
+      expect(message.type).toBe("overlay-state");
+      expect(message.payload.cards).toEqual([]);
+      expect(message.payload.sequence).toBe(2); // one more than the real state it supersedes
+
+      viewer.close();
+    });
+
+    it("never hands a newly-connecting viewer a state older than the TTL once the producer that sent it is actually gone", async () => {
+      server = await createRelayServer(0, { stateTtl: { ttlMs: 50, sweepIntervalMs: 20 } });
+      const url = `ws://localhost:${server.port}`;
+
+      const producer = new WebSocket(url);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("ttl-late-join", 1) }));
+      await wait(30);
+      producer.close(); // gone, not just quiet — see the test above
+      await wait(200); // well past both the TTL and a sweep tick
+
+      const viewer = new WebSocket(url);
+      await waitForOpen(viewer);
+      let receivedAnything = false;
+      viewer.on("message", () => {
+        receivedAnything = true;
+      });
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "ttl-late-join" }));
+      await wait(100);
+
+      expect(receivedAnything).toBe(false);
+
+      viewer.close();
+    });
+
+    it("does not expire a session whose producer is still connected, even with a quiet/unchanged board well past the TTL", async () => {
+      // Regression test for a real bug found via live testing: a healthy,
+      // still-connected producer that simply has nothing new to report
+      // (the board hasn't changed — completely normal during a slow turn
+      // or a paused test) was having its accurate overlay state wiped
+      // purely because no message had arrived in stateTtlMs, even though
+      // the producer never disconnected. Connection liveness, not time
+      // since the last *content* change, is what staleness should mean.
+      server = await createRelayServer(0, { stateTtl: { ttlMs: 80, sweepIntervalMs: 20 } });
+      const url = `ws://localhost:${server.port}`;
+
+      const producer = new WebSocket(url);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("quiet-but-connected", 1) }));
+      await wait(30);
+
+      const viewer = new WebSocket(url);
+      await waitForOpen(viewer);
+      let viewerReceivedAnything = false;
+      viewer.on("message", () => {
+        viewerReceivedAnything = true;
+      });
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "quiet-but-connected" }));
+      await wait(50); // the initial admit-time send of the existing state
+
+      viewerReceivedAnything = false; // only care about anything AFTER this point — no synthesized clear should ever arrive
+      await wait(250); // comfortably past ttlMs and several sweep ticks, producer still open, still silent
+      expect(viewerReceivedAnything).toBe(false);
+
+      // A brand-new viewer joining during this same quiet-but-connected
+      // window must still receive the accurate (just old) state — not be
+      // treated as if nothing were there.
+      const lateViewer = new WebSocket(url);
+      await waitForOpen(lateViewer);
+      const lateReceived = waitForMessage(lateViewer);
+      lateViewer.send(JSON.stringify({ type: "subscribe", sessionId: "quiet-but-connected" }));
+      const lateMessage = (await lateReceived) as { payload: { cards: unknown[]; sequence: number } };
+      expect(lateMessage.payload.sequence).toBe(1);
+
+      producer.close();
+      viewer.close();
+      lateViewer.close();
+    });
+
+    it("does not expire a session that keeps receiving fresh producer updates", async () => {
+      // Wide margins deliberately: this is a real-wall-clock test running
+      // alongside other test files (CPU contention can stretch a
+      // nominally-30ms gap well past it under load), so ttlMs needs
+      // generous headroom over the actual send spacing, not just the
+      // nominal one, to avoid a flaky false expiry.
+      server = await createRelayServer(0, { stateTtl: { ttlMs: 400, sweepIntervalMs: 40 } });
+      const url = `ws://localhost:${server.port}`;
+
+      const viewer = new WebSocket(url);
+      await waitForOpen(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "kept-fresh" }));
+      await wait(50);
+
+      const producer = new WebSocket(url);
+      await waitForOpen(producer);
+
+      const receivedSequences: number[] = [];
+      viewer.on("message", (raw) => {
+        const parsed = JSON.parse(raw.toString()) as { payload: { sequence: number } };
+        receivedSequences.push(parsed.payload.sequence);
+      });
+
+      // Sends well inside ttlMs apart, for longer than ttlMs total — the
+      // session should never be judged stale, so the viewer should see
+      // exactly the 6 real sequence numbers sent and nothing else (a
+      // synthesized TTL-expiry broadcast would insert an extra message
+      // with a sequence one past whichever real one it superseded).
+      for (let i = 1; i <= 6; i++) {
+        producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("kept-fresh", i) }));
+        await wait(40);
+      }
+      await wait(100);
+
+      expect(receivedSequences).toEqual([1, 2, 3, 4, 5, 6]);
+
+      viewer.close();
+      producer.close();
+    });
+  });
 });

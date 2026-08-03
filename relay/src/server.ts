@@ -41,7 +41,38 @@ interface Session {
   producer: WebSocket | null;
   viewers: Set<WebSocket>;
   latestState: OverlayState | null;
+  /** Set whenever latestState is — either a real producer update or the synthesized empty-cards state the TTL sweep below broadcasts. Drives both admitViewer's "don't hand a new viewer stale hitboxes" gate and the sweep's own "has this crossed STATE_TTL_MS" check. */
+  lastUpdatedAt: number;
 }
+
+/**
+ * Defense in depth for when publisher.ts's explicit clear-on-stop never
+ * arrives (extension crash, force-quit, network drop mid-close) — without
+ * this, a session's last real snapshot would otherwise sit there
+ * indefinitely just because nobody new happened to connect to notice it's
+ * stale. 45s is the midpoint of the hardening spec's suggested 30-60s
+ * range: long enough that a producer's normal per-mutation publish cadence
+ * (bounded by card-observer.ts's debounce/settle timing, well under a
+ * second) never spuriously trips it, short enough that a viewer joining
+ * mid-outage doesn't sit looking at a hitbox layout from a minute-old,
+ * possibly completely different board state.
+ *
+ * Deliberately gated on producer *connection* liveness, not just elapsed
+ * time — see isProducerConnectionOpen below. A perfectly healthy, still-
+ * connected producer legitimately sends nothing at all for well over 45s
+ * whenever the board itself is static (a slow turn, a paused test session,
+ * a quiet stretch of real gameplay): OverlayStatePublisher's dedup means no
+ * message is sent when nothing changed, which is correct — but treating
+ * "no message in 45s" alone as "producer is gone" would then spuriously
+ * clear a completely accurate, still-live overlay. This was a real bug
+ * found via live testing: hitboxes disappeared after ~45s of a static
+ * board with the producer still fully connected. Time-since-last-update
+ * only means anything once the connection itself is actually gone.
+ */
+const STATE_TTL_MS = 45_000;
+
+/** How often the sweep below checks every session against STATE_TTL_MS. A fraction of the TTL itself so the worst-case delay between "state crossed the TTL" and "already-connected viewers get cleared" stays well inside the TTL's own already-generous window, without sweeping so often it's needless overhead for what's normally an idle check over a small Map. */
+const TTL_SWEEP_INTERVAL_MS = 5_000;
 
 interface ProducerBinding {
   broadcasterId: number;
@@ -95,6 +126,13 @@ export interface RelayConfig {
     /** closed-beta: true — plain unauthenticated overlay-state messages on the legacy bare-socket path are rejected outright rather than accepted with a client-asserted sessionId. */
     required: boolean;
   };
+  /**
+   * Overrides STATE_TTL_MS/TTL_SWEEP_INTERVAL_MS. Test-only escape hatch —
+   * every real caller (index.ts) omits this and gets the real ~45s/5s
+   * defaults; without it, a test proving TTL expiry behavior would need to
+   * wait 45+ real seconds.
+   */
+  stateTtl?: { ttlMs: number; sweepIntervalMs: number };
 }
 
 /**
@@ -107,6 +145,8 @@ export interface RelayConfig {
  */
 export function attachRelayWebSocketServer(httpServer: HttpServer, config: RelayConfig = {}): { close(): Promise<void> } {
   const allowLocalDebug = config.allowLocalDebug ?? true;
+  const stateTtlMs = config.stateTtl?.ttlMs ?? STATE_TTL_MS;
+  const ttlSweepIntervalMs = config.stateTtl?.sweepIntervalMs ?? TTL_SWEEP_INTERVAL_MS;
   const sessions = new Map<string, Session>();
   // Set during verifyClient (upgrade time), consumed once in the
   // "connection" handler for the same request — this is how the resolved
@@ -119,10 +159,67 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   function getSession(sessionId: string): Session {
     const existing = sessions.get(sessionId);
     if (existing) return existing;
-    const created: Session = { producer: null, viewers: new Set(), latestState: null };
+    const created: Session = { producer: null, viewers: new Set(), latestState: null, lastUpdatedAt: Date.now() };
     sessions.set(sessionId, created);
     return created;
   }
+
+  /**
+   * True as long as this session's producer socket is still open — the
+   * actual liveness signal STATE_TTL_MS's staleness check needs, distinct
+   * from "has latestState changed recently" (see STATE_TTL_MS's doc
+   * comment for the real bug this distinction fixes). Does not (and
+   * cannot, with no ws-level ping/pong heartbeat in this codebase today)
+   * detect a connection that's gone dead without ever firing a close event
+   * — e.g. a hard network drop with no TCP FIN/RST ever reaching this
+   * process — readyState would still report OPEN in that case. That
+   * narrower gap is a known, separate limitation of not having an
+   * application-level heartbeat, not something this check claims to solve.
+   */
+  function isProducerConnectionOpen(session: Session): boolean {
+    return session.producer !== null && session.producer.readyState === WebSocket.OPEN;
+  }
+
+  /** Builds the TTL sweep's synthesized clear broadcast — reuses the expiring state's own protocolVersion/sourceViewport (both required, non-optional schema fields) rather than inventing placeholder values, and bumps sequence by one so a viewer watching the raw stream sees a normal-looking next state, not a repeat. */
+  function synthesizeEmptyState(sessionId: string, previous: OverlayState): OverlayState {
+    return {
+      protocolVersion: previous.protocolVersion,
+      sessionId,
+      sequence: previous.sequence + 1,
+      capturedAt: Date.now(),
+      sourceViewport: previous.sourceViewport,
+      cards: [],
+    };
+  }
+
+  /**
+   * Runs on a timer, independent of any single connection's activity —
+   * this is what catches a session going stale even when no new viewer
+   * ever connects to trigger admitViewer's own TTL gate. Only touches
+   * sessions that actually have a latestState to expire; once cleared,
+   * latestState is null and this stops re-triggering for that session
+   * until a producer sends something new.
+   */
+  function sweepStaleSessions(): void {
+    const now = Date.now();
+    for (const [sessionId, session] of sessions) {
+      if (!session.latestState) continue;
+      if (isProducerConnectionOpen(session)) continue; // still connected — a static board is not staleness
+      if (now - session.lastUpdatedAt <= stateTtlMs) continue;
+
+      const emptyState = synthesizeEmptyState(sessionId, session.latestState);
+      session.latestState = null;
+      logEvent("state_ttl_expired", { sessionId, viewers: session.viewers.size });
+
+      const encoded = JSON.stringify({ type: "overlay-state", payload: emptyState });
+      for (const viewer of session.viewers) {
+        if (viewer.readyState !== WebSocket.OPEN) continue;
+        viewer.send(encoded);
+      }
+    }
+  }
+
+  const ttlSweepInterval = setInterval(sweepStaleSessions, ttlSweepIntervalMs);
 
   function bindAuthenticatedProducer(ws: WebSocket, state: ConnectionState, binding: ProducerBinding): void {
     state.producerBinding = binding;
@@ -163,7 +260,15 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     const session = getSession(sessionId);
     session.viewers.add(ws);
     logEvent("viewer_admitted", { sessionId, viewers: session.viewers.size });
-    if (session.latestState) {
+    // Belt-and-suspenders alongside sweepStaleSessions above: the sweep
+    // only runs every TTL_SWEEP_INTERVAL_MS, so a state that just crossed
+    // STATE_TTL_MS moments ago (with no live producer) could still be
+    // sitting in latestState when a new viewer connects — this check means
+    // a newly-admitted viewer never receives truly stale hitboxes
+    // regardless of sweep timing. A live producer connection always means
+    // the state is trusted, however long ago it last actually changed —
+    // see isProducerConnectionOpen's doc comment.
+    if (session.latestState && (isProducerConnectionOpen(session) || Date.now() - session.lastUpdatedAt <= stateTtlMs)) {
       ws.send(JSON.stringify({ type: "overlay-state", payload: session.latestState }));
     }
   }
@@ -228,6 +333,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       // by bindAuthenticatedProducer's replace-on-reconnect.
       session.producer = ws;
       session.latestState = overlayState;
+      session.lastUpdatedAt = Date.now();
 
       const encoded = JSON.stringify({ type: "overlay-state", payload: overlayState });
       let delivered = 0;
@@ -341,6 +447,10 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   return {
     close: () =>
       new Promise<void>((resolve, reject) => {
+        // Must be cleared here, not left running — an un-cleared
+        // setInterval keeps the Node process (and, in tests, the test
+        // runner) alive/hanging past this close() resolving.
+        clearInterval(ttlSweepInterval);
         // wss.close() with an external server attached does NOT close that
         // server itself — only its own internal state and open sockets.
         // The caller (createRelayServer below, or index.ts) owns closing

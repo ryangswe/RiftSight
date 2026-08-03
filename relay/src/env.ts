@@ -73,6 +73,14 @@ export const REQUIRED_IN_CLOSED_BETA: readonly string[] = [
   "TWITCH_API_CLIENT_ID",
   "TWITCH_API_CLIENT_SECRET",
   "TWITCH_OAUTH_REDIRECT_URI",
+  // Every other mode is fine defaulting dbUrl to a relative ./data path —
+  // that default is almost certainly wrong (ephemeral, wiped on every
+  // container restart) for a real deployment, so closed-beta requires an
+  // operator to consciously set it rather than silently inheriting the
+  // dev-friendly default. See the dedicated :memory: rejection below too —
+  // this required-var check alone wouldn't catch that specific case, since
+  // ":memory:" is itself a non-empty, "set" value.
+  "RIFTSIGHT_DB_PATH",
 ];
 
 /**
@@ -115,7 +123,12 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  const port = Number(env["RELAY_PORT"]) || 8787;
+  // Most hosting platforms (Fly.io, Railway, Render, Heroku-likes) inject a
+  // PORT env var the process is expected to bind — checked first so a
+  // deployed process listens where the platform's own proxy/load balancer
+  // actually expects it. RELAY_PORT remains the local-dev-friendly override
+  // (used throughout this README/scripts) when PORT isn't present.
+  const port = Number(env["PORT"]) || Number(env["RELAY_PORT"]) || 8787;
   const twitchExtensionClientId = env["TWITCH_EXTENSION_CLIENT_ID"] || undefined;
   const twitchExtensionSecret = env["TWITCH_EXTENSION_SECRET"] || undefined;
   const dbUrl = env["RIFTSIGHT_DB_PATH"] || "file:./data/riftsight.db";
@@ -135,6 +148,14 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
     if (twitchOAuthRedirectUri) {
       const checked = requireHttpsUrl(twitchOAuthRedirectUri, "TWITCH_OAUTH_REDIRECT_URI");
       if (typeof checked !== "string") errors.push(checked.error);
+    }
+    // ":memory:" is a "set" value (passes the REQUIRED_IN_CLOSED_BETA loop
+    // above) but is always ephemeral by definition — the one ephemeral-
+    // storage case this code can actually detect and reject outright,
+    // versus "is this file path on a mounted persistent volume," which it
+    // can't know from here.
+    if (dbUrl === ":memory:") {
+      errors.push("RIFTSIGHT_DB_PATH must not be \":memory:\" in closed-beta mode — that data is lost on every restart.");
     }
   } else if (!twitchExtensionSecret) {
     warnings.push(

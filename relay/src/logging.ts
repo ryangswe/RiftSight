@@ -43,6 +43,16 @@ const ALLOWED_LOG_FIELDS = new Set([
   "method",
   "status",
   "closeCode",
+  // startup_summary fields (closed-beta only, see index.ts) — booleans and
+  // a bare hostname, never a secret value or a full URL/token.
+  "mode",
+  "databaseConfigured",
+  "databasePersistentPath",
+  "localDebugEnabled",
+  "producerAuthRequired",
+  "twitchViewerAuthConfigured",
+  "oauthConfigured",
+  "publicBackendOrigin",
 ]);
 
 const warnedUnknownFields = new Set<string>();

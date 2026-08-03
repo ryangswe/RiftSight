@@ -9,6 +9,7 @@
   "background": {
     "service_worker": "dist/background/background.js"
   },
+  "permissions": ["storage", "alarms"],
   "host_permissions": ["ws://localhost/*", "http://localhost:8788/*"],
   "content_scripts": [
     {

@@ -12,6 +12,7 @@ function closedBetaRequiredVars(): Record<string, string> {
     TWITCH_API_CLIENT_ID: "id",
     TWITCH_API_CLIENT_SECRET: "secret",
     TWITCH_OAUTH_REDIRECT_URI: "https://beta.example.com/auth/twitch/callback",
+    RIFTSIGHT_DB_PATH: "file:./data/test.db",
   };
 }
 
@@ -136,7 +137,9 @@ describe("validateEnv", () => {
   });
 
   it("closed-beta: missing TWITCH_API_CLIENT_ID/SECRET/TWITCH_OAUTH_REDIRECT_URI refuses to start", () => {
-    const result = validateEnv(env({ RIFTSIGHT_MODE: "closed-beta", TWITCH_EXTENSION_SECRET: "secret" }));
+    const result = validateEnv(
+      env({ RIFTSIGHT_MODE: "closed-beta", TWITCH_EXTENSION_SECRET: "secret", RIFTSIGHT_DB_PATH: "file:./data/test.db" })
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("TWITCH_API_CLIENT_ID"))).toBe(true);
@@ -153,6 +156,7 @@ describe("validateEnv", () => {
         TWITCH_API_CLIENT_ID: "id",
         TWITCH_API_CLIENT_SECRET: "secret",
         TWITCH_OAUTH_REDIRECT_URI: "http://beta.example.com/auth/twitch/callback",
+        RIFTSIGHT_DB_PATH: "file:./data/test.db",
       })
     );
     expect(result.ok).toBe(false);
@@ -167,10 +171,47 @@ describe("validateEnv", () => {
         TWITCH_API_CLIENT_ID: "id",
         TWITCH_API_CLIENT_SECRET: "secret",
         TWITCH_OAUTH_REDIRECT_URI: "https://beta.example.com/auth/twitch/callback",
+        RIFTSIGHT_DB_PATH: "file:./data/test.db",
       })
     );
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.config.twitchOAuthRedirectUri).toBe("https://beta.example.com/auth/twitch/callback");
+  });
+
+  it("closed-beta: missing RIFTSIGHT_DB_PATH refuses to start", () => {
+    const result = validateEnv(
+      env({
+        RIFTSIGHT_MODE: "closed-beta",
+        TWITCH_EXTENSION_SECRET: "secret",
+        TWITCH_API_CLIENT_ID: "id",
+        TWITCH_API_CLIENT_SECRET: "secret",
+        TWITCH_OAUTH_REDIRECT_URI: "https://beta.example.com/auth/twitch/callback",
+      })
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.some((e) => e.includes("RIFTSIGHT_DB_PATH"))).toBe(true);
+  });
+
+  it("closed-beta: RIFTSIGHT_DB_PATH=:memory: is rejected even though it's a non-empty, \"set\" value", () => {
+    const result = validateEnv(env({ RIFTSIGHT_MODE: "closed-beta", ...closedBetaRequiredVars(), RIFTSIGHT_DB_PATH: ":memory:" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.some((e) => e.includes(":memory:"))).toBe(true);
+  });
+
+  it("development: RIFTSIGHT_DB_PATH=:memory: is still fine — the rejection is closed-beta only", () => {
+    const result = validateEnv(env({ RIFTSIGHT_MODE: "development", RIFTSIGHT_DB_PATH: ":memory:" }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.config.dbUrl).toBe(":memory:");
+  });
+
+  it("PORT takes precedence over RELAY_PORT when both are set", () => {
+    const result = validateEnv(env({ PORT: "3000", RELAY_PORT: "9000" }));
+    if (result.ok) expect(result.config.port).toBe(3000);
+  });
+
+  it("falls back to RELAY_PORT when PORT is unset", () => {
+    const result = validateEnv(env({ RELAY_PORT: "9000" }));
+    if (result.ok) expect(result.config.port).toBe(9000);
   });
 
   it("development: an http TWITCH_OAUTH_REDIRECT_URI (e.g. localhost) is fine, not rejected", () => {

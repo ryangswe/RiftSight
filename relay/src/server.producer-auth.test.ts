@@ -47,7 +47,9 @@ beforeEach(async () => {
           broadcaster_id INTEGER NOT NULL REFERENCES broadcasters(id),
           token_hash TEXT NOT NULL UNIQUE,
           created_at TEXT NOT NULL,
-          revoked_at TEXT
+          revoked_at TEXT,
+          last_used_at TEXT,
+          rotated_at TEXT
         );
       `,
     },

@@ -208,3 +208,72 @@ describe("persistence across a restart", () => {
     }
   });
 });
+
+describe("session recovery across a relay restart", () => {
+  it("a producer and viewer can reconnect and exchange fresh state after the relay process itself restarts, with no leftover in-memory session state from before the restart interfering", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "riftsight-restart-"));
+    const dbPath = `file:${path.join(dir, "test.db")}`;
+    try {
+      const fileDb = createDbClient(dbPath);
+      const migrations = await loadMigrations();
+      await runMigrations(fileDb, migrations);
+      await addToAllowlist(fileDb, "141981764");
+      const broadcaster = await upsertBroadcaster(fileDb, "141981764", "juicykaraage");
+      const credential = await issueProducerCredential(fileDb, broadcaster.id);
+
+      // First "process": producer connects and publishes, viewer receives it.
+      server = await createRelayServer(0, { producerAuth: { db: fileDb, required: true } });
+      const port = server.port;
+
+      const firstProducer = new WebSocket(`ws://localhost:${server.port}/ws/producer?credential=${credential}`);
+      await waitForOpen(firstProducer);
+      const firstViewer = new WebSocket(`ws://localhost:${server.port}`);
+      await waitForOpen(firstViewer);
+      const firstReceived = waitForMessage(firstViewer);
+      firstViewer.send(JSON.stringify({ type: "subscribe", sessionId: "141981764" }));
+      await wait(50);
+      firstProducer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("whatever-client-claims", 1) }));
+      const firstMessage = await firstReceived;
+      expect(firstMessage.payload.sessionId).toBe("141981764");
+
+      firstProducer.close();
+      firstViewer.close();
+
+      // Simulate a real backend restart: close the relay process entirely
+      // (all in-memory session/viewer/producer state is gone — nothing
+      // like sessions Map survives this) and start a brand new one bound
+      // to the same port, against the same persistent database file so
+      // broadcaster identity/allowlist/credential validity carry over
+      // exactly as the "persistence across a restart" tests above already
+      // prove independently.
+      await server.close();
+      server = await createRelayServer(port, { producerAuth: { db: fileDb, required: true } });
+
+      // A fresh producer connection with the same (still-valid, unrevoked,
+      // unrotated) credential must be accepted — the restart didn't
+      // require re-issuing anything.
+      const secondProducer = new WebSocket(`ws://localhost:${server.port}/ws/producer?credential=${credential}`);
+      await waitForOpen(secondProducer);
+
+      // A fresh viewer subscription after the restart must also work and
+      // receive newly-published state — proving the new process's session
+      // bookkeeping is fully independent of whatever existed before the
+      // restart, not silently broken by some leftover reference.
+      const secondViewer = new WebSocket(`ws://localhost:${server.port}`);
+      await waitForOpen(secondViewer);
+      const secondReceived = waitForMessage(secondViewer);
+      secondViewer.send(JSON.stringify({ type: "subscribe", sessionId: "141981764" }));
+      await wait(50);
+      secondProducer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("whatever-client-claims", 1) }));
+      const secondMessage = await secondReceived;
+      expect(secondMessage.payload.sessionId).toBe("141981764");
+      expect(secondMessage.payload.sequence).toBe(1);
+
+      secondProducer.close();
+      secondViewer.close();
+      fileDb.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

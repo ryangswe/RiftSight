@@ -6,7 +6,7 @@ RiftSight is a browser extension and Twitch overlay for [RiftAtlas](https://rift
 
 - `extension/` — MV3 Chromium extension. Content script detects cards on the RiftAtlas board (`src/content/card-detector.ts`) and, optionally, publishes sanitized state (`src/content/publisher.ts`); a background service worker (`src/background/background.ts`) owns the relay connection.
 - `protocol/` — shared, DOM-free types/validation/privacy-serializer/publisher used by both the extension and the debug viewer. Also home to `history.ts` (the binary-search state lookup + rolling time-window buffer shared by delayed-live and recording playback) and `recording.ts` (the recording data model, import validation, and `OverlayRecorder`).
-- `relay/` — minimal local WebSocket relay. In-memory only, no auth, one process, no history — it only ever holds the single latest state per session. Delayed-live and recordings are entirely a debug-viewer-side concern (see "Viewer modes" below).
+- `relay/` — the RiftSight backend: one process, unified HTTP+WebSocket server. Its posture depends on mode (see "Closed beta" below) — in `development`/`twitch-local-test` the producer path is unauthenticated and everything is in-memory, matching the original local-prototype design; in `closed-beta` it additionally does Twitch OAuth account linking, persists broadcaster identity/allowlist/producer-credential state to SQLite (`relay/src/db/`), and requires an authenticated producer WebSocket. Live `OverlayState` itself is always in-memory-only in every mode — it only ever holds the single latest state per session, with no history. Delayed-live and recordings are entirely a debug-viewer-side concern (see "Viewer modes" below).
 - `overlay-core/` — shared, DOM-free (no DOM lib in its `tsconfig.json`) card-hitbox/tooltip rendering geometry (`render.ts`, `tooltip.ts`), the delayed-live/recording-playback state-selection calculators (`mode.ts`), the broadcaster-calibrated source-region mapping (`source-region.ts` — see "Source-region calibration" below), and the platform-adapter seam (`platform.ts`'s `ViewerPlatformContext`/`OverlayStateSource`) shared between `debug-viewer` and `twitch-extension` without either depending on the other.
 - `debug-viewer/` — static HTML/TS page that renders hoverable hitboxes over an optional screenshot or video background, in one of three modes (live / delayed-live / recording-playback — see below).
 - `twitch-extension/` — the real Twitch video-overlay extension frontend, built for Twitch's Local Test workflow (see "Twitch overlay" below). Two entry points: `src/viewer/main.ts` (the video overlay itself) and `src/config/main.ts` (a minimal broadcaster configuration page). Both reuse `overlay-core`'s rendering/tooltip/delay logic — no card-rendering code is duplicated from `debug-viewer`.
@@ -242,6 +242,8 @@ All three were exercised live against the real bundle (a stubbed `window.Twitch.
 
 The Local Test workflow above is developer-operated: temporary tunnels, a hand-typed numeric Twitch channel ID, no auth on the producer side, nothing persisted across a restart. **Closed beta** is the same relay/protocol, hardened and extended so another RiftAtlas streamer (not you) can use it without running anything themselves — no tunnels, no manual channel ID, no terminals. It's still not a public release: onboarding is manual, capped at roughly 3–10 streamers.
 
+Once you're operating a deployed closed-beta backend day to day (adding streamers, checking logs, rotating a credential, restarting, backing up the database), see **[docs/operator-runbook.md](docs/operator-runbook.md)** — this section covers the architecture and one-time setup; the runbook covers the recurring operational tasks.
+
 ```
 RiftSight browser extension
     │  "Connect Twitch" → OAuth identity, then a producer credential
@@ -273,8 +275,8 @@ Set via `RIFTSIGHT_MODE` (relay and extension both read it; twitch-extension doe
 | Variable | Required in | Purpose |
 |---|---|---|
 | `RIFTSIGHT_MODE` | — | `development` \| `twitch-local-test` \| `closed-beta`. Defaults to `development`. |
-| `RELAY_PORT` | — | Defaults to `8787`. |
-| `RIFTSIGHT_DB_PATH` | — | A libsql client URL. Defaults to a local file at `relay/data/riftsight.db`. `:memory:` for ephemeral/test storage, or a remote `libsql://…`/`https://…` URL for a hosted DB later. |
+| `PORT` / `RELAY_PORT` | — | `PORT` takes precedence if both are set (most platforms — Fly.io, Railway, Render — inject `PORT`). Defaults to `8787` if neither is set. |
+| `RIFTSIGHT_DB_PATH` | closed-beta | A libsql client URL. Defaults to a local file at `relay/data/riftsight.db` outside closed-beta. **Required** in closed-beta (no silent ephemeral-storage default), and `:memory:` is rejected outright there too — the process refuses to start rather than boot into a mode that loses all data on every restart. `:memory:` remains fine in `development`/`twitch-local-test`. |
 | `TWITCH_EXTENSION_CLIENT_ID` | — | Logging/diagnostics only. |
 | `TWITCH_EXTENSION_SECRET` | closed-beta | Extension shared secret (base64), from the Developer Console. Verifies viewer `twitch-subscribe` JWTs. **Not** your API Client Secret — see "Don't confuse these" below. |
 | `ALLOW_LOCAL_DEBUG` | — | `"false"` disables the plain unauthenticated viewer `subscribe` path. Force-disabled in closed-beta regardless of this value. |
@@ -309,10 +311,15 @@ A Twitch user ID (numeric), not a display name — find it via any Twitch user-I
 
 Provider-agnostic by construction: one Node process, environment-variable secrets, a local file path for SQLite. Two options that both provide stable HTTPS+WSS, secret management, a persistent volume, and straightforward redeploy:
 
-1. **Fly.io** — a Fly Machine running the built `relay/` process; Fly's edge proxy terminates HTTPS/WSS natively; a small Fly Volume holds the SQLite file (`RIFTSIGHT_DB_PATH=file:/data/riftsight.db` pointed at the mounted volume); `fly secrets set` for every secret above; `fly deploy` from a Dockerfile. More infrastructure control, more setup ceremony.
-2. **Railway** (Render is an equivalent) — GitHub-integration auto-deploy, built-in HTTPS+WSS, a persistent volume, dashboard-based secrets. Faster "connect repo, deploy" loop, less low-level control.
+1. **Railway** (the chosen closed-beta target) — GitHub-integration auto-deploy from the repo-root `Dockerfile`, built-in HTTPS+WSS via a generated domain, a persistent volume, dashboard-based secrets, a `/ready`-gated health check, single-replica by config (this backend's local SQLite + in-memory session state cannot run multi-replica — see below). First-class support: [`railway.json`](railway.json) plus a full step-by-step guide at **[docs/railway-deployment.md](docs/railway-deployment.md)** (project creation, volume mount, every env var, obtaining and wiring in the public domain, redeploy/restart/rollback/backup/restore). Render is architecturally equivalent if you'd rather use it, though the setup guide here is Railway-specific.
+2. **Fly.io** — a Fly Machine running the built `relay/` process; Fly's edge proxy terminates HTTPS/WSS natively; a small Fly Volume holds the SQLite file (`RIFTSIGHT_DB_PATH=file:/data/riftsight.db` pointed at the mounted volume); `fly secrets set` for every secret above; `fly deploy` from a Dockerfile. More infrastructure control, more setup ceremony; no dedicated setup guide in this repo (Railway is the chosen target — this option stays provider-agnostic-by-construction, not further documented).
 
-Neither is wired up in this repo — choosing and configuring one is a deliberate step outside this milestone's automated scope.
+Not automatically wired up or deployed by anything in this repo — choosing and configuring a provider is a deliberate operator step. The repo-root `Dockerfile` (Node 20-alpine, runs `relay/` from source via `npx tsx` — no separate build step, matching `npm run start -w relay`) is what both options above build from:
+
+```bash
+docker build -t riftsight-relay .
+docker run -p 8787:8787 --env-file relay/.env riftsight-relay
+```
 
 ```bash
 # Build (each has its own build step; protocol/relay/overlay-core run from source)
@@ -347,6 +354,7 @@ npm run start -w relay              # tsx src/index.ts — reads RIFTSIGHT_MODE 
 - [ ] `extension/manifest.json`'s `host_permissions` includes the real backend origin (it only lists `http://localhost:8788/*` by default — add the deployed origin before packaging).
 - [ ] At least one Twitch user ID added via `seed-allowlist add`.
 - [ ] `curl -I https://<backend-host>/health` returns `200`.
+- [ ] Deployed at **exactly one replica**, with `RIFTSIGHT_DB_PATH` pointed at a real mounted persistent volume — this backend's local SQLite and in-memory live session state cannot run correctly (or at all) across more than one replica. On Railway specifically, see [docs/railway-deployment.md](docs/railway-deployment.md) for the volume-creation and `railway.json`'s `numReplicas: 1` steps.
 
 ### Stable asset hosting
 
@@ -380,7 +388,7 @@ Every message below is deliberately short and non-technical — full diagnostics
 | Another RiftSight connection publishing to the same channel | *"Another RiftSight connection took over publishing for your channel..."* (`error-messages.ts`'s `producer-replaced`) |
 | Producer WebSocket lost, reconnecting | *"Lost connection to the RiftSight backend — reconnecting automatically."* (`relay-reconnecting`) |
 | Background worker unreachable entirely | *"Can't reach the RiftSight backend right now..."* (`backend-unreachable`) |
-| RiftAtlas tab not detected | *"RiftSight isn't detecting a RiftAtlas game yet..."* (`riftatlas-not-detected` — defined for when a detection signal reaches the background worker; not yet wired to a live source, since nothing in this codebase currently pipes "is a RiftAtlas tab open" out of the content script) |
+| RiftAtlas presence (open / no active game / detected / lost contact) | The panel's own presence line, updated from a heartbeat the content script sends every 5s (`background/presence.ts`'s `PRESENCE_STATUS_LABEL`) — independent of the table above, since this is routine status rather than an error condition. |
 
 ### Manual acceptance test
 
@@ -392,18 +400,23 @@ Needs a real Twitch Developer account, a deployed closed-beta backend (see "Depl
 4. Click **Connect Twitch** in the extension panel's Account section.
 5. Complete Twitch authorization on the consent screen.
 6. Confirm the Account section shows **Connected as `<your Twitch login>`** — no numeric channel ID was ever typed in.
-7. Open RiftAtlas.
+7. Open RiftAtlas. Confirm the panel's presence line reads **RiftAtlas detected** once the board loads (it should say **Open RiftAtlas to begin** before this, and **no active game is detected** if you're on a RiftAtlas page but not yet in a match).
 8. Click **Start publishing** — there's no session-ID field to fill in (closed-beta mode hides it entirely).
 9. Activate the RiftSight Twitch Extension on your channel via the Twitch Developer Console/Extensions dashboard.
 10. Start an OBS stream (or just have RiftAtlas open and visible — see the Local Test acceptance test above for why a real stream isn't required to validate the RiftSight-specific parts).
 11. Open the stream from a separate viewer account, in a browser profile with **no** RiftSight extension installed.
 12. Confirm hovering a card shows its art after your configured stream delay.
-13. Restart the browser extension (reload it in `chrome://extensions`).
-14. Restart the backend process.
-15. Restart the stream.
-16. Confirm the producer reconnects (Account section still shows Connected; publishing resumes) and the viewer's overlay recovers without any manual reconfiguration.
-17. Remove the broadcaster from the beta allowlist (`seed-allowlist remove <twitchUserId>`) — or rotate their credential via `POST /api/producer-credential/rotate` if you want to test that path instead.
-18. Confirm they can no longer publish: their next producer connection attempt is rejected (`producer_rejected` in the relay's logs) and the extension's Account section reflects it's no longer connected.
+13. **Board-loss recovery:** navigate the RiftAtlas tab away from the game (or close the match) without clicking Stop publishing. Confirm the viewer's hitboxes clear within a few seconds (the content script's own explicit clear, not the backend's slower TTL fallback), the status line switches to *"Publishing enabled — waiting for an active RiftAtlas game"*, and the toggle button itself still reads **Stop publishing** the whole time (it reflects your intent, not whether a board happens to be visible right now — clicking it always means "I want to stop"). Navigate back into a game and confirm publishing auto-resumes with no click needed, and the viewer's overlay comes back.
+14. **RiftAtlas tab reload:** while actively publishing, reload the RiftAtlas tab (F5). Confirm that once the page and a board reload, publishing resumes automatically (within a few seconds — it's tied to the heartbeat cadence, not instant) with no click needed, and the viewer receives a fresh snapshot even if the board looks identical to before the reload.
+15. **Close and reopen the RiftAtlas tab:** while actively publishing, close the tab entirely, then open a new tab to RiftAtlas. Confirm the same auto-resume behavior as the reload case above — publishing intent isn't tied to any one tab's lifetime.
+16. **Browser restart:** while actively publishing, fully quit and relaunch the browser, then reopen RiftAtlas. Confirm publishing resumes automatically — intent is persisted via `chrome.storage.local`, which survives this on top of everything above.
+17. **Explicit Stop persists:** click **Stop publishing**, confirm the viewer's hitboxes clear, then reload the RiftAtlas tab (or restart the browser). Confirm publishing does **not** resume on its own and the button still reads "Start publishing" — an explicit Stop must stick until clicked again, even across everything in steps 14-16.
+18. **Normal backend restart:** restart the browser extension (reload it in `chrome://extensions`), the backend process, and the stream. Confirm the producer reconnects (Account section still shows Connected; publishing resumes) and the viewer's overlay recovers without any manual reconfiguration — the first snapshot after reconnecting should be a full, current one even if the board looked the same right before the drop.
+19. **RiftAtlas closed during a backend restart:** close the RiftAtlas tab entirely, then restart the backend, then reopen RiftAtlas and start publishing again. Confirm this works exactly like a fresh start — no stuck state left over from the previous session.
+20. **Database temporarily unavailable:** if your platform lets you simulate this (e.g. detach the persistent volume, or point `RIFTSIGHT_DB_PATH` at an unwritable path and restart), confirm `GET /ready` returns `503` while unavailable and `200` once the database is reachable again, and that the process doesn't crash-loop — it should keep retrying/serving `/health` throughout.
+21. **Persistent SQLite survives a restart:** after any restart above, confirm the broadcaster's allowlist entry, Twitch link, and producer credential are all still exactly as they were (`npm run seed-allowlist -w relay -- list` and `credential-status <twitchUserId>`) — nothing above should ever require re-linking or re-adding to the allowlist.
+22. Remove the broadcaster from the beta allowlist (`seed-allowlist remove <twitchUserId>`) — or rotate their credential via `POST /api/producer-credential/rotate` if you want to test that path instead.
+23. Confirm they can no longer publish: their next producer connection attempt is rejected (`producer_rejected` in the relay's logs) and the extension's Account section reflects it's no longer connected.
 
 ### Security review checklist
 
@@ -444,8 +457,8 @@ npm run dev:twitch:relay    # start the relay (respects the same env vars as `np
 
 - **MV3 service worker lifecycle:** the background worker can be suspended by Chrome after ~30s idle, dropping the relay connection. Reconnect-on-wake (the worker re-initializes and reconnects when Chrome wakes it) handles this adequately for local use; there's no keepalive workaround.
 - **Geometry is axis-aligned only:** `bounds` is a card's post-rotation bounding box, not its true rotated silhouette. The viewer applies `rotation` as a CSS transform on top of that box, which is a visual approximation, not exact geometry.
-- **Single producer per session, last-write-wins:** if two extension instances publish to the same session id, there's no arbitration — whichever sent most recently is treated as current.
-- **No auth, no persistence, no database:** the relay keeps everything in memory for one process and accepts any producer/viewer. This is a local prototype, not something to expose beyond `localhost`.
+- **Single producer per session — behavior differs by mode.** In `development`/`twitch-local-test` (the unauthenticated bare-socket path), there's no arbitration at all: if two extension instances publish to the same session id, whichever sent most recently is silently treated as current. In `closed-beta` (the authenticated `/ws/producer` path), a second producer connecting for the same broadcaster explicitly **replaces** the first — the relay closes the old socket with a specific code (`server.ts`'s `CLOSE_CODE.PRODUCER_REPLACED`) rather than the two silently racing.
+- **No auth, no persistence, no database — `development`/`twitch-local-test` only.** In those two modes the relay keeps everything in memory for one process and accepts any producer/viewer, exactly as originally designed: not something to expose beyond `localhost` or a throwaway tunnel. `closed-beta` mode is different: Twitch OAuth account linking, an authenticated producer WebSocket, and persistent SQLite storage (broadcaster identity, allowlist, producer-credential validity) — see "Closed beta" below.
 - **Old bundled npm (8.1.2, from Node 16) has a workspace-linking bug** that can surface as a spurious registry 404 for `@riftsight/*` packages after adding/changing a dependency. If `npm install` fails that way, run `rm -rf node_modules package-lock.json && npm install` for a clean re-link.
 - **`capturedAt` is single-machine wall-clock time, not synchronized:** it's `Date.now()` on whichever machine ran the extension, trusted as-is by the relay, delayed-live's buffer, and recording. That's fine here because every component in this prototype runs on the one machine — a real multi-machine deployment would need a synchronized or server-authoritative clock instead of raw `Date.now()` deltas. See the doc comment on `capturedAt` in `protocol/src/schema.ts`.
 - **Delayed-live's buffer is per-tab and in-memory, not the relay:** reloading the debug viewer resets its collected history (and briefly re-enters "waiting for history"), and two viewer tabs on the same session each keep their own independent buffer. The relay itself still only ever holds one latest state — it was deliberately not extended for this milestone (see `protocol/src/history.ts`'s header comment for why).

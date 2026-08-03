@@ -10,7 +10,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { DbClient } from "../db/client.js";
-import { validateProducerCredential } from "../db/producer-credentials.js";
+import { touchProducerCredentialLastUsed, validateProducerCredential } from "../db/producer-credentials.js";
 
 export const PRODUCER_WS_PATH = "/ws/producer";
 
@@ -35,6 +35,10 @@ export async function authenticateProducerUpgrade(req: IncomingMessage, db: DbCl
 
   const validated = await validateProducerCredential(db, credential);
   if (!validated) return { authenticated: false, reason: "invalid, revoked, or de-allowlisted credential" };
+
+  // Best-effort — a failure to record last-used-at must never turn a
+  // successful authentication into a rejection.
+  await touchProducerCredentialLastUsed(db, credential).catch(() => {});
 
   return { authenticated: true, broadcasterId: validated.broadcasterId, twitchUserId: validated.twitchUserId };
 }

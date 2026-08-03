@@ -6,9 +6,20 @@
 // credential; atomically revokes it and issues a fresh one. Lets a
 // streamer (or the extension, on suspected compromise) force a new
 // credential without going through OAuth again.
+//
+// GET /api/producer-credential/status — bearer-authed diagnostic-only
+// lookup, called by the extension after a producer WebSocket connection
+// fails for a reason it can't otherwise tell apart (see background.ts):
+// the browser's WebSocket API never exposes the HTTP status of a failed
+// upgrade, so "backend unreachable," "invalid credential," and "revoked
+// credential" would otherwise all look identical. Uses
+// inspectProducerCredential — a separate, read-only query from
+// validateProducerCredential above, which remains the ONLY function that
+// actually decides whether a producer connection is admitted; this route
+// can never grant a connection, only describe one.
 
 import type { DbClient } from "../../db/client.js";
-import { rotateProducerCredential, validateProducerCredential } from "../../db/producer-credentials.js";
+import { inspectProducerCredential, rotateProducerCredential, validateProducerCredential } from "../../db/producer-credentials.js";
 import type { LinkHandoffStore } from "../../auth/link-handoff.js";
 import { jsonResponse, type HttpRequest, type HttpResponse } from "../types.js";
 
@@ -53,4 +64,15 @@ export async function handleRotateProducerCredential(req: HttpRequest, db: DbCli
 
   const newCredential = await rotateProducerCredential(db, validated.broadcasterId);
   return jsonResponse(200, { credential: newCredential });
+}
+
+/** A missing bearer header is a malformed request (401) — a token that IS present but doesn't resolve to anything is a genuine diagnostic outcome, reported as `{status: "invalid_or_malformed"}` in a normal 200, not a second kind of 401. That split mirrors "did you even try to authenticate" vs. "here's what we found" once you did. */
+export async function handleProducerCredentialStatus(req: HttpRequest, db: DbClient): Promise<HttpResponse> {
+  const token = extractBearerToken(req);
+  if (!token) {
+    return jsonResponse(401, { error: "missing bearer credential" });
+  }
+
+  const status = await inspectProducerCredential(db, token);
+  return jsonResponse(200, { status });
 }
