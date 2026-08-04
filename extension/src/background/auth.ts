@@ -87,6 +87,14 @@ async function pollOnce(linkId: string, deadline: number): Promise<void> {
     return;
   }
 
+  if (data.status === "rejected") {
+    // Terminal — the backend already knows this account isn't allowlisted;
+    // no point waiting out the rest of the timeout.
+    stopPolling();
+    await persistState(reduceLinkState(currentState, { type: "poll-rejected" }));
+    return;
+  }
+
   if (data.status === "not-found") {
     stopPolling();
     await persistState(reduceLinkState(currentState, { type: "poll-not-found" }));

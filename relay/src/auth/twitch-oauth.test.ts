@@ -1,6 +1,13 @@
 import { Response } from "node-fetch";
 import { describe, expect, it, vi } from "vitest";
-import { buildAuthorizeUrl, exchangeCodeForToken, validateTwitchToken, type FetchLike } from "./twitch-oauth.js";
+import {
+  buildAuthorizeUrl,
+  exchangeCodeForToken,
+  getAppAccessToken,
+  resolveTwitchUserIdByLogin,
+  validateTwitchToken,
+  type FetchLike,
+} from "./twitch-oauth.js";
 
 const config = { clientId: "test-client-id", clientSecret: "test-client-secret", redirectUri: "https://beta.example.com/auth/twitch/callback" };
 
@@ -114,5 +121,108 @@ describe("validateTwitchToken", () => {
     const fetchFn: FetchLike = vi.fn(async () => jsonResponse(200, { client_id: "x" }));
     const result = await validateTwitchToken("token", fetchFn);
     expect("error" in result).toBe(true);
+  });
+});
+
+describe("getAppAccessToken", () => {
+  it("posts a client_credentials grant to Twitch's real token endpoint", async () => {
+    const fetchFn: FetchLike = vi.fn(async (url, init) => {
+      expect(url).toBe("https://id.twitch.tv/oauth2/token");
+      const body = init?.body as URLSearchParams;
+      expect(body.get("client_id")).toBe("test-client-id");
+      expect(body.get("client_secret")).toBe("test-client-secret");
+      expect(body.get("grant_type")).toBe("client_credentials");
+      return jsonResponse(200, { access_token: "app-token-abc", expires_in: 5000, token_type: "bearer" });
+    });
+
+    const result = await getAppAccessToken(config, fetchFn);
+    expect(result).toEqual({ accessToken: "app-token-abc" });
+  });
+
+  it("returns an error for a non-ok response", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => jsonResponse(401, { message: "invalid client" }));
+    const result = await getAppAccessToken(config, fetchFn);
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns an error when the network request itself fails", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    const result = await getAppAccessToken(config, fetchFn);
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns an error when the response is missing access_token", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => jsonResponse(200, { token_type: "bearer" }));
+    const result = await getAppAccessToken(config, fetchFn);
+    expect("error" in result).toBe(true);
+  });
+});
+
+describe("resolveTwitchUserIdByLogin", () => {
+  function appTokenThenUsersFetch(usersHandler: (url: string) => Response): FetchLike {
+    let call = 0;
+    return async (url) => {
+      call++;
+      if (call === 1) {
+        expect(url).toBe("https://id.twitch.tv/oauth2/token");
+        return jsonResponse(200, { access_token: "app-token-abc", expires_in: 5000, token_type: "bearer" });
+      }
+      return usersHandler(url as string);
+    };
+  }
+
+  it("gets an app token, then Helix's /users?login= with a Bearer token and Client-Id header", async () => {
+    let usersUrl: string | undefined;
+    let usersHeaders: Record<string, string> | undefined;
+    const fetchFn: FetchLike = async (url, init) => {
+      if (url === "https://id.twitch.tv/oauth2/token") {
+        return jsonResponse(200, { access_token: "app-token-abc", expires_in: 5000, token_type: "bearer" });
+      }
+      usersUrl = url;
+      usersHeaders = init?.headers as Record<string, string>;
+      return jsonResponse(200, { data: [{ id: "141981764", login: "juicykaraage" }] });
+    };
+
+    const result = await resolveTwitchUserIdByLogin(config, "juicykaraage", fetchFn);
+
+    expect(result).toEqual({ status: "found", userId: "141981764" });
+    expect(usersUrl).toBe("https://api.twitch.tv/helix/users?login=juicykaraage");
+    expect(usersHeaders?.["Authorization"]).toBe("Bearer app-token-abc");
+    expect(usersHeaders?.["Client-Id"]).toBe("test-client-id");
+  });
+
+  it("URL-encodes the login", async () => {
+    let usersUrl: string | undefined;
+    const fetchFn: FetchLike = async (url) => {
+      if (url === "https://id.twitch.tv/oauth2/token") {
+        return jsonResponse(200, { access_token: "app-token-abc", expires_in: 5000, token_type: "bearer" });
+      }
+      usersUrl = url;
+      return jsonResponse(200, { data: [] });
+    };
+
+    await resolveTwitchUserIdByLogin(config, "weird name", fetchFn);
+    expect(usersUrl).toBe("https://api.twitch.tv/helix/users?login=weird%20name");
+  });
+
+  it("reports not-found for a login with no matching account, distinct from a request error", async () => {
+    const fetchFn = appTokenThenUsersFetch(() => jsonResponse(200, { data: [] }));
+    const result = await resolveTwitchUserIdByLogin(config, "no_such_user", fetchFn);
+    expect(result).toEqual({ status: "not-found" });
+  });
+
+  it("propagates a failed app-token request as an error, without ever attempting the users lookup", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => jsonResponse(401, { message: "invalid client" }));
+    const result = await resolveTwitchUserIdByLogin(config, "juicykaraage", fetchFn);
+    expect(result.status).toBe("error");
+    expect(fetchFn).toHaveBeenCalledTimes(1); // never reached the users endpoint
+  });
+
+  it("returns an error for a non-ok users response", async () => {
+    const fetchFn = appTokenThenUsersFetch(() => jsonResponse(500, { message: "server error" }));
+    const result = await resolveTwitchUserIdByLogin(config, "juicykaraage", fetchFn);
+    expect(result.status).toBe("error");
   });
 });

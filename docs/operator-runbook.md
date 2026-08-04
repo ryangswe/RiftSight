@@ -24,15 +24,17 @@ npm run migrate -w relay
 
 ## Add / list / remove a beta user
 
-Allowlist membership is by numeric Twitch user ID, never display name (a display name can change or be reused; an ID can't):
+Allowlist membership is stored by numeric Twitch user ID, never display name (a display name can change or be reused; an ID can't) — but `add`/`remove`/`credential-status` all accept a plain username too, resolved to its numeric ID automatically via Twitch's own API (using the same `TWITCH_API_CLIENT_ID`/`SECRET` already configured for OAuth linking). A streamer virtually never knows their own numeric ID offhand, so in practice you'll almost always just use their username:
 
 ```bash
-npm run seed-allowlist -w relay -- add <twitchUserId> [note...]
+npm run seed-allowlist -w relay -- add <twitchUserId-or-username> [note...]
 npm run seed-allowlist -w relay -- list
-npm run seed-allowlist -w relay -- remove <twitchUserId>
+npm run seed-allowlist -w relay -- remove <twitchUserId-or-username>
 ```
 
-`remove` doesn't just stop future account linking — it blocks that broadcaster's *existing* producer credential too (see "Rotate or revoke a producer credential" below for why no separate revocation step is needed). Finding a numeric ID: any Twitch user-ID lookup tool, or have the streamer attempt to link once and check the relay's `oauth_link_failed` log line, which includes it.
+A purely-numeric argument is trusted as an ID directly (no API round trip); anything else is resolved as a username, printing the resolved ID so you can confirm it matched who you expected before it's written to the allowlist.
+
+`remove` doesn't just stop future account linking — it blocks that broadcaster's *existing* producer credential too (see "Rotate or revoke a producer credential" below for why no separate revocation step is needed).
 
 ## Verify `/health`
 
@@ -97,7 +99,7 @@ Atomically invalidates the old token and returns a new one. Never ask a streamer
 **Revoke** (streamer should no longer be able to publish at all): remove them from the allowlist —
 
 ```bash
-npm run seed-allowlist -w relay -- remove <twitchUserId>
+npm run seed-allowlist -w relay -- remove <twitchUserId-or-username>
 ```
 
 Their next producer connection attempt is rejected (`producer_rejected`, `reason: "invalid, revoked, or de-allowlisted credential"`); an already-open connection isn't force-disconnected by this alone, only blocked from reconnecting.
@@ -109,7 +111,7 @@ Producer credentials are long-lived by design in this stage — there's no force
 Inspect a streamer's credential history (never prints a hash or the raw token):
 
 ```bash
-npm run seed-allowlist -w relay -- credential-status <twitchUserId>
+npm run seed-allowlist -w relay -- credential-status <twitchUserId-or-username>
 ```
 
 **Compromise-response procedure**, if a streamer reports (or you suspect) their credential leaked:

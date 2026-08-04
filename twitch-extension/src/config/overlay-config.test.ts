@@ -1,6 +1,6 @@
 import { FULL_FRAME_SOURCE_REGION, SOURCE_REGION_PRESETS } from "@riftsight/overlay-core";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_OVERLAY_CONFIG, parseOverlayConfig, serializeOverlayConfig } from "./overlay-config.js";
+import { DEFAULT_OVERLAY_CONFIG, MAX_DELAY_MS, parseOverlayConfig, serializeOverlayConfig } from "./overlay-config.js";
 
 describe("parseOverlayConfig", () => {
   it("returns defaults for undefined content", () => {
@@ -46,6 +46,14 @@ describe("parseOverlayConfig", () => {
 
   it("falls back to default delayMs for a non-finite value", () => {
     expect(parseOverlayConfig(JSON.stringify({ delayMs: "not a number" })).delayMs).toBe(DEFAULT_OVERLAY_CONFIG.delayMs);
+  });
+
+  it("accepts a delayMs exactly at MAX_DELAY_MS", () => {
+    expect(parseOverlayConfig(JSON.stringify({ delayMs: MAX_DELAY_MS })).delayMs).toBe(MAX_DELAY_MS);
+  });
+
+  it("falls back to default delayMs for a value above MAX_DELAY_MS — this is the bound that prevents a permanently blank overlay (the viewer's history buffer can't serve a delay longer than it retains)", () => {
+    expect(parseOverlayConfig(JSON.stringify({ delayMs: MAX_DELAY_MS + 1 })).delayMs).toBe(DEFAULT_OVERLAY_CONFIG.delayMs);
   });
 
   it("ignores a non-boolean overlayEnabled/debugOutlines", () => {

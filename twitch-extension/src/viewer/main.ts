@@ -21,7 +21,7 @@ import {
   type SourceRegion,
 } from "@riftsight/overlay-core";
 import { TimeWindowBuffer, type OverlayCard, type OverlayState } from "@riftsight/protocol";
-import { DEFAULT_OVERLAY_CONFIG, parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
+import { DEFAULT_OVERLAY_CONFIG, MAX_DELAY_MS, parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
 import { MockOverlayStateSource, type MockConnectionStatus } from "../platform/mock-state-source.js";
 import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";
@@ -42,7 +42,21 @@ const tooltip = requireElement<HTMLElement>("tooltip");
 // just "no meaningful lag" through the same pipeline, not a separate
 // code path) — mirrors debug-viewer's delayed-live wiring exactly, reusing
 // the same overlay-core calculators.
-const stateBuffer = new TimeWindowBuffer<OverlayState>();
+//
+// Retention is explicitly sized to MAX_DELAY_MS (the broadcaster's own
+// configurable ceiling) plus a margin, rather than TimeWindowBuffer's
+// 60s default — a real incident: the default silently fell short of a
+// delay a broadcaster could actually configure, leaving a blank overlay
+// with no error once a delayed lookup asked for history the buffer had
+// already pruned. The margin absorbs normal tick/timing slack right at
+// the boundary rather than pruning an entry the very moment it's needed.
+// maxEntries is raised well past its own 1000 default too — at this
+// retention window, a worst-case actively-changing board could otherwise
+// hit the entry-count cap before the time-based one, silently giving less
+// retention than MAX_DELAY_MS actually promises.
+const BUFFER_RETENTION_MARGIN_MS = 30_000;
+const BUFFER_MAX_ENTRIES = 2000;
+const stateBuffer = new TimeWindowBuffer<OverlayState>(MAX_DELAY_MS + BUFFER_RETENTION_MARGIN_MS, BUFFER_MAX_ENTRIES);
 const bufferStartedAt = Date.now();
 const DELAYED_LIVE_TICK_MS = 200;
 
@@ -137,12 +151,23 @@ function showTooltipFor(card: OverlayCard, target: HTMLElement): void {
     // Base sizes (320x448 portrait, 400x500 landscape) live in one place —
     // overlay-core's computeTooltipMaxSize — and are always applied here
     // as inline styles, which is why viewer.html/index.html no longer
-    // carry their own max-width/max-height rules for .tooltip-art: an
-    // inline style would silently win over those anyway, so keeping both
-    // would just be a second, driftable copy of the same numbers.
+    // carry their own width/height rules for .tooltip-art: an inline style
+    // would silently win over those anyway, so keeping both would just be
+    // a second, driftable copy of the same numbers.
+    //
+    // Explicit width/height (not max-width/max-height) is deliberate: a
+    // bare max-* only caps growth, it never enlarges an <img> past its own
+    // source file's native resolution. RiftAtlas serves visibly
+    // lower-resolution art for some zones than others (e.g. hand/trash
+    // thumbnails vs. the base zone), so a max-only box left those cards'
+    // tooltips rendering smaller than everything else even though every
+    // card is asking for the exact same intended box here. Forcing
+    // width/height plus the CSS class's object-fit: contain gets every
+    // card the same box size regardless of its source resolution, without
+    // distorting whatever aspect ratio the real image actually has.
     const maxSize = computeTooltipMaxSize(card.landscape, tooltipScale);
-    img.style.maxWidth = `${maxSize.maxWidthPx}px`;
-    img.style.maxHeight = `${maxSize.maxHeightPx}px`;
+    img.style.width = `${maxSize.maxWidthPx}px`;
+    img.style.height = `${maxSize.maxHeightPx}px`;
     img.onerror = () => {
       // The popup may have already moved on to a different card by the
       // time a slow/broken image errors out — only replace content if

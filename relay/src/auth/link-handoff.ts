@@ -7,7 +7,7 @@
 // — same reasoning as state-store.ts, and a raw producer credential must
 // never touch persistent storage in plaintext regardless.
 
-export type LinkStatus = "pending" | "ready" | "not-found";
+export type LinkStatus = "pending" | "ready" | "rejected" | "not-found";
 
 export interface ReadyLinkResult {
   credential: string;
@@ -18,15 +18,17 @@ export interface ReadyLinkResult {
 export interface LinkHandoffStore {
   markPending(linkId: string): void;
   markReady(linkId: string, result: ReadyLinkResult): void;
+  /** The OAuth callback determined this Twitch account isn't on the closed-beta allowlist — a terminal outcome distinct from "not-found" (which means the link attempt was never valid/expired), so the extension can show a specific message instead of a silent multi-minute poll timeout. */
+  markRejected(linkId: string): void;
   status(linkId: string): LinkStatus;
-  /** Single-use: returns the result once, then clears the entry so it can never be fetched a second time. */
+  /** Single-use: returns the result once, then clears the entry so it can never be fetched a second time. Never returns anything for a rejected entry. */
   redeem(linkId: string): ReadyLinkResult | undefined;
 }
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
 
 interface Entry {
-  result: ReadyLinkResult | undefined; // undefined while pending
+  result: ReadyLinkResult | "rejected" | undefined; // undefined while pending
   createdAt: number;
 }
 
@@ -51,14 +53,19 @@ export function createLinkHandoffStore(options: { ttlMs?: number; now?: () => nu
       const existing = entries.get(linkId);
       entries.set(linkId, { result, createdAt: existing?.createdAt ?? now() });
     },
+    markRejected(linkId: string): void {
+      const existing = entries.get(linkId);
+      entries.set(linkId, { result: "rejected", createdAt: existing?.createdAt ?? now() });
+    },
     status(linkId: string): LinkStatus {
       const entry = entries.get(linkId);
       if (!entry || isExpired(entry)) return "not-found";
+      if (entry.result === "rejected") return "rejected";
       return entry.result === undefined ? "pending" : "ready";
     },
     redeem(linkId: string): ReadyLinkResult | undefined {
       const entry = entries.get(linkId);
-      if (!entry || isExpired(entry) || entry.result === undefined) return undefined;
+      if (!entry || isExpired(entry) || entry.result === undefined || entry.result === "rejected") return undefined;
       entries.delete(linkId); // single-use regardless of outcome
       return entry.result;
     },

@@ -36,6 +36,23 @@ export interface OverlayConfig {
 export const MIN_TOOLTIP_SCALE = 0.5;
 export const MAX_TOOLTIP_SCALE = 2;
 
+/**
+ * Upper bound a saved delayMs must fall within, or it's rejected back to
+ * the default. This isn't an arbitrary UX limit — it exists because the
+ * viewer's TimeWindowBuffer (see viewer/main.ts) can only serve a delayed
+ * lookup as far back as it has actually retained history for. A real
+ * incident: with no bound here and the buffer's own 60s default retention,
+ * a broadcaster setting a delay above ~60s (not unusual — 2-3 minute
+ * anti-stream-sniping delays are common for competitive games) got a
+ * permanently blank overlay with no error surfaced to anyone, since
+ * findAtOrBefore() would never find a state old enough. 5 minutes
+ * comfortably covers realistic anti-snipe/moderation delay use cases while
+ * keeping the buffer's memory footprint bounded; viewer/main.ts's
+ * TimeWindowBuffer is constructed with matching retention (plus a small
+ * margin — see its own comment) specifically so this bound is never a lie.
+ */
+export const MAX_DELAY_MS = 5 * 60 * 1000;
+
 export const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
   overlayEnabled: true,
   delayMs: 0,
@@ -66,7 +83,10 @@ export function parseOverlayConfig(content: string | undefined): OverlayConfig {
   return {
     overlayEnabled: typeof obj["overlayEnabled"] === "boolean" ? obj["overlayEnabled"] : DEFAULT_OVERLAY_CONFIG.overlayEnabled,
     delayMs:
-      typeof obj["delayMs"] === "number" && Number.isFinite(obj["delayMs"]) && obj["delayMs"] >= 0
+      typeof obj["delayMs"] === "number" &&
+      Number.isFinite(obj["delayMs"]) &&
+      obj["delayMs"] >= 0 &&
+      obj["delayMs"] <= MAX_DELAY_MS
         ? obj["delayMs"]
         : DEFAULT_OVERLAY_CONFIG.delayMs,
     debugOutlines: typeof obj["debugOutlines"] === "boolean" ? obj["debugOutlines"] : DEFAULT_OVERLAY_CONFIG.debugOutlines,

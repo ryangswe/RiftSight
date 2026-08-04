@@ -50,9 +50,13 @@ let sessionInput: HTMLInputElement | undefined;
 // This is a local CACHE of that persisted value, not its source of truth —
 // a content script can't share memory with the background worker directly
 // (separate JS contexts), so it's populated once at load via
-// initPublishingIntent() and kept in sync by every place THIS tab changes
-// it (setIntent, called only from the click handler) — never re-polled,
-// since nothing outside this tab's own clicks changes it while it's alive.
+// initPublishingIntent(), kept in sync immediately by this tab's own click
+// (setIntent), AND re-fetched every sendHeartbeat() tick below — the
+// toolbar popup (src/popup/main.ts) is a third, separate execution context
+// that can also flip this same persisted value via set-publishing-intent,
+// with no way to notify this tab directly, so the tick-based re-fetch is
+// what closes that gap (at a cost of up to HEARTBEAT_INTERVAL_MS latency
+// for a popup-driven start/stop to actually take effect on this tab).
 let cachedPublishingIntent = false;
 
 /** Fetches the persisted intent once at content-script load and syncs the panel to match. Safe to call before the panel exists — syncPublishToggleUI() itself no-ops if the panel isn't there yet, and the very next heartbeat tick (at most HEARTBEAT_INTERVAL_MS later) will pick up an intent that arrives just after ensurePanel() runs. */
@@ -64,7 +68,7 @@ async function initPublishingIntent(): Promise<void> {
   syncPublishToggleUI();
 }
 
-/** The only place cachedPublishingIntent is ever changed after initial load — always in response to the streamer's own click on THIS tab. */
+/** Changes cachedPublishingIntent immediately in response to the streamer's own click on THIS tab — for zero-latency feedback here specifically. Not the only writer of the underlying persisted value anymore (see cachedPublishingIntent's doc comment above); sendHeartbeat()'s tick is what reconciles this tab against changes made elsewhere. */
 async function setIntent(intent: boolean): Promise<void> {
   cachedPublishingIntent = intent;
   await chrome.runtime.sendMessage({ type: "set-publishing-intent", intent }).catch(() => {
@@ -477,7 +481,8 @@ function updateAccountSection(): void {
       const label = LINK_STATUS_LABEL[status];
       statusEl.textContent = status === "connected" && state?.displayName ? `${label} as ${state.displayName}` : label;
 
-      const showConnect = status === "not-connected" || status === "credential-expired" || status === "backend-unavailable";
+      const showConnect =
+        status === "not-connected" || status === "credential-expired" || status === "backend-unavailable" || status === "not-in-beta";
       connectButton.style.display = showConnect ? "inline-block" : "none";
       disconnectButton.style.display = status === "connected" ? "inline-block" : "none";
     })
@@ -682,13 +687,22 @@ function idlePublishingMessage(): string {
     : "Publishing enabled — waiting for an active RiftAtlas game";
 }
 
-function updatePublishStatus(): void {
-  const panel = ensurePanel();
+// DOM write only — split out of updatePublishStatus() below so the
+// reconnect-detection logic there (lastKnownConnectionStatus bookkeeping,
+// republishCurrentState()) keeps running even when no panel exists to
+// write into (closed-beta mode, streamer-facing UI lives in the toolbar
+// popup instead). Never calls ensurePanel() — a closed-beta build must
+// never spawn the debug panel just because this function ran.
+function renderPublishStatusText(text: string): void {
+  const panel = document.getElementById(PANEL_ID);
+  if (!panel) return;
   const statusEl = panel.querySelector<HTMLDivElement>(`#${PANEL_ID}-publish-status`);
-  if (!statusEl) return;
+  if (statusEl) statusEl.textContent = text;
+}
 
+function updatePublishStatus(): void {
   if (!isPublishing()) {
-    statusEl.textContent = cachedPublishingIntent ? idlePublishingMessage() : "Not publishing.";
+    renderPublishStatusText(cachedPublishingIntent ? idlePublishingMessage() : "Not publishing.");
     return;
   }
 
@@ -737,7 +751,7 @@ function updatePublishStatus(): void {
         : response?.status === "disconnected"
           ? describeStreamerError("relay-reconnecting")
           : `Relay: ${response?.status ?? "unknown"}`;
-      statusEl.textContent = ["Publishing.", relayLine, `Snapshots sent: ${publishedSnapshotCount()}`].join("\n");
+      renderPublishStatusText(["Publishing.", relayLine, `Snapshots sent: ${publishedSnapshotCount()}`].join("\n"));
     })
     .catch(() => {
       // A failed message (not a successful "disconnected" response, but
@@ -758,7 +772,7 @@ function updatePublishStatus(): void {
       // republish once it recovered, leaving viewers on a stale/cleared
       // overlay until the board happened to change on its own.
       lastKnownConnectionStatus = "disconnected";
-      statusEl.textContent = `Publishing.\n${describeStreamerError("backend-unreachable")}\nSnapshots sent: ${publishedSnapshotCount()}`;
+      renderPublishStatusText(`Publishing.\n${describeStreamerError("backend-unreachable")}\nSnapshots sent: ${publishedSnapshotCount()}`);
     });
 }
 
@@ -798,9 +812,11 @@ setInterval(updatePresenceSection, 2000);
 // after a reload, since cachedPublishingIntent is populated from persisted
 // state at load time — resume without requiring another click; if actively
 // publishing and the board just disappeared, stop (a match ending,
-// navigating away, etc.). Either way the streamer's intent itself is only
-// ever changed by an explicit click (setIntent) — never by this tick.
-function sendHeartbeat(): void {
+// navigating away, etc.). The streamer's intent is changed immediately by
+// an explicit click on this tab (setIntent) and, as of the popup's
+// existence, can also change from a different tick's own persisted-value
+// re-fetch below — see cachedPublishingIntent's doc comment for why.
+async function sendHeartbeat(): Promise<void> {
   const boardDetected = isGameBoardDetected();
   const publicCardCount = detectCards().filter((card) => card.visibility === "public").length;
 
@@ -808,17 +824,26 @@ function sendHeartbeat(): void {
     // Background worker may be waking from suspension; the next tick will retry.
   });
 
+  // Re-read intent from the persisted source of truth every tick, rather
+  // than trusting only this tab's own last-known cache — see
+  // cachedPublishingIntent's doc comment above for why this is required
+  // now that the toolbar popup can also flip it from a separate execution
+  // context this tab has no other way to learn about.
+  const intentResponse = (await chrome.runtime.sendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
+    | { intent?: boolean }
+    | undefined;
+  cachedPublishingIntent = Boolean(intentResponse?.intent);
+
   const action = nextPublishingAction({ intent: cachedPublishingIntent, boardDetected, isPublishing: isPublishing() });
   if (action === "start") {
     beginPublishing(currentSessionId());
-    syncPublishToggleUI();
   } else if (action === "stop") {
     stopPublishing();
-    syncPublishToggleUI();
   }
+  syncPublishToggleUI();
 }
 
-setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+setInterval(() => void sendHeartbeat(), HEARTBEAT_INTERVAL_MS);
 
 function updatePanel(result: ScanResult, counts: Record<Signal, number>): void {
   const panel = ensurePanel();
@@ -836,21 +861,29 @@ function updatePanel(result: ScanResult, counts: Record<Signal, number>): void {
   ].join("\n");
 }
 
-// Exposed as an ad-hoc debug command so it can be run from the DevTools
-// console too, not just the panel button — no formal Window typing needed
-// since this script is never imported as a module.
-(window as unknown as { __riftsightScan: () => void }).__riftsightScan = runScan;
+// Both of these bypass ensurePanel()'s own !isClosedBeta gating below by
+// calling runScan/runDetect/runDetectDelayed directly, which internally
+// call ensurePanel() to find their own status element — left ungated, a
+// keypress or a DevTools console call on the real closed-beta RiftAtlas
+// page would spawn the debug panel that closed-beta mode is meant to never
+// show (the toolbar popup is the sole streamer-facing UI there instead).
+if (!isClosedBeta) {
+  // Exposed as an ad-hoc debug command so it can be run from the DevTools
+  // console too, not just the panel button — no formal Window typing needed
+  // since this script is never imported as a module.
+  (window as unknown as { __riftsightScan: () => void }).__riftsightScan = runScan;
 
-// Alt+Shift+R triggers a heuristic scan, Alt+Shift+D the real detector,
-// Alt+Shift+H a delayed detector run — none require hunting for the panel
-// first.
-window.addEventListener("keydown", (event) => {
-  if (!event.altKey || !event.shiftKey) return;
-  const key = event.key.toLowerCase();
-  if (key === "r") runScan();
-  if (key === "d") runDetect();
-  if (key === "h") runDetectDelayed();
-});
+  // Alt+Shift+R triggers a heuristic scan, Alt+Shift+D the real detector,
+  // Alt+Shift+H a delayed detector run — none require hunting for the panel
+  // first.
+  window.addEventListener("keydown", (event) => {
+    if (!event.altKey || !event.shiftKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "r") runScan();
+    if (key === "d") runDetect();
+    if (key === "h") runDetectDelayed();
+  });
+}
 
 // Pushed by background.ts the instant its own relay WebSocket opens —
 // deliberately not something this content script has to poll for (see
@@ -867,5 +900,14 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-ensurePanel();
+// closed-beta mode shows zero injected UI on the RiftAtlas page itself —
+// the toolbar popup (src/popup/main.ts) is the sole streamer-facing
+// surface there. Development/twitch-local-test builds keep the full debug
+// panel exactly as before. initPublishingIntent() runs unconditionally in
+// both modes either way — it's panel-safe (syncPublishToggleUI() no-ops
+// without a panel) and heartbeat/detection/publishing all run headlessly
+// regardless of whether a panel exists.
+if (!isClosedBeta) {
+  ensurePanel();
+}
 void initPublishingIntent();

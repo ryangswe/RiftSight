@@ -146,7 +146,7 @@ describe("handleAuthCallback", () => {
     expect(all.rows.length).toBe(0);
   });
 
-  it("rejects an account not on the beta allowlist: 403, no broadcaster row created, no credential issued", async () => {
+  it("rejects an account not on the beta allowlist: 403, no broadcaster row created, no credential issued, handoff marked rejected", async () => {
     const state = stateStore.issue("ext-link-1");
     const req = { method: "GET", url: `/auth/twitch/callback?code=abc&state=${state}`, headers: {} };
 
@@ -154,7 +154,20 @@ describe("handleAuthCallback", () => {
 
     expect(response.status).toBe(403);
     expect(await getBroadcasterByTwitchUserId(db, "999999")).toBeNull();
-    expect(linkHandoff.status("ext-link-1")).toBe("not-found");
+    // Distinct from "not-found" — the extension can tell "you're not in the
+    // beta" apart from "the link attempt merely expired" and show a
+    // specific message instead of silently timing out after 5 minutes.
+    expect(linkHandoff.status("ext-link-1")).toBe("rejected");
+    expect(linkHandoff.redeem("ext-link-1")).toBeUndefined();
+  });
+
+  it("rejects an account not on the beta allowlist with no linkId: 403, no handoff entry touched at all", async () => {
+    const state = stateStore.issue(); // no linkId — manual/dev linking
+    const req = { method: "GET", url: `/auth/twitch/callback?code=abc&state=${state}`, headers: {} };
+
+    const response = await handleAuthCallback(req, { config, stateStore, linkHandoff, db, fetchFn: successfulFetch("999999", "not_approved") });
+
+    expect(response.status).toBe(403);
   });
 
   it("handles a denied authorization (Twitch's error param): 400", async () => {

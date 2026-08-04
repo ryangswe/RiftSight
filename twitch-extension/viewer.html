@@ -63,6 +63,16 @@
         display: block;
         border-radius: 6px;
         filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.6));
+        /* width/height (not just a max-*) are set inline by
+           viewer/main.ts's showTooltipFor, forcing every card to render at
+           the same intended box regardless of its own source image's
+           native resolution — RiftAtlas serves visibly lower-resolution
+           art for some zones (e.g. hand/trash thumbnails) than others, and
+           a bare max-width/max-height only caps growth, never upscales a
+           smaller source image to match. object-fit: contain keeps the
+           real aspect ratio inside that now-fixed box instead of
+           stretching it. */
+        object-fit: contain;
       }
       #tooltip .tooltip-fallback {
         max-width: 240px;

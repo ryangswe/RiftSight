@@ -73,12 +73,13 @@
         display: none;
         z-index: 1000;
       }
-      /* max-width/max-height are deliberately NOT set here — see
-         viewer.html's identical comment. Applied inline by
-         viewer/main.ts's showTooltipFor via computeTooltipMaxSize. */
+      /* width/height are deliberately NOT set here — see viewer.html's
+         identical comment. Applied inline by viewer/main.ts's
+         showTooltipFor via computeTooltipMaxSize. */
       #tooltip .tooltip-art {
         display: block;
         border-radius: 6px;
+        object-fit: contain;
         filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.6));
       }
       #tooltip .tooltip-fallback {

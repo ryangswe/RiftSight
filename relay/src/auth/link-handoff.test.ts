@@ -64,6 +64,34 @@ describe("createLinkHandoffStore", () => {
     expect(store.redeem("link-1")).toBeUndefined();
   });
 
+  it("markRejected, then status is rejected", () => {
+    const store = createLinkHandoffStore();
+    store.markPending("link-1");
+    store.markRejected("link-1");
+    expect(store.status("link-1")).toBe("rejected");
+  });
+
+  it("markRejected without a prior markPending still works", () => {
+    const store = createLinkHandoffStore();
+    store.markRejected("link-1");
+    expect(store.status("link-1")).toBe("rejected");
+  });
+
+  it("redeem returns undefined for a rejected entry and does not clear it", () => {
+    const store = createLinkHandoffStore();
+    store.markRejected("link-1");
+    expect(store.redeem("link-1")).toBeUndefined();
+    expect(store.status("link-1")).toBe("rejected");
+  });
+
+  it("status is not-found for a rejected entry after its TTL elapses (same as a ready one)", () => {
+    let currentTime = 1000;
+    const store = createLinkHandoffStore({ ttlMs: 5000, now: () => currentTime });
+    store.markRejected("link-1");
+    currentTime += 5001;
+    expect(store.status("link-1")).toBe("not-found");
+  });
+
   it("tracks multiple independent linkIds without interference", () => {
     const store = createLinkHandoffStore();
     store.markPending("link-a");

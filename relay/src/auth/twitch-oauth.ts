@@ -54,6 +54,7 @@ const defaultFetch: FetchLike = nodeFetch as unknown as FetchLike;
 const AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize";
 const TOKEN_URL = "https://id.twitch.tv/oauth2/token";
 const VALIDATE_URL = "https://id.twitch.tv/oauth2/validate";
+const USERS_URL = "https://api.twitch.tv/helix/users";
 
 export function buildAuthorizeUrl(config: TwitchOAuthConfig, state: string): string {
   const url = new URL(AUTHORIZE_URL);
@@ -136,4 +137,89 @@ export async function validateTwitchToken(
   }
 
   return { userId: data.user_id, login: data.login };
+}
+
+export interface AppAccessToken {
+  accessToken: string;
+}
+
+/**
+ * App access token via the client_credentials grant — a completely
+ * separate flow from the user-authorization one above (no user consent,
+ * just the app's own client id/secret), used only for server-to-server
+ * Helix API calls like resolveTwitchUserIdByLogin below. Not cached across
+ * calls: this only runs from the seed-allowlist CLI, an operator running a
+ * command by hand rather than a hot path, so a fresh token per invocation
+ * is simpler than adding expiry-tracking cache logic for a negligible
+ * cost.
+ */
+export async function getAppAccessToken(
+  config: Pick<TwitchOAuthConfig, "clientId" | "clientSecret">,
+  fetchFn: FetchLike = defaultFetch
+): Promise<AppAccessToken | { error: string }> {
+  const body = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    grant_type: "client_credentials",
+  });
+
+  let response: NodeFetchResponse;
+  try {
+    response = await fetchFn(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+  } catch (err) {
+    return { error: `app token request failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  if (!response.ok) {
+    return { error: `app token request failed with status ${response.status}` };
+  }
+
+  const data = (await response.json()) as { access_token?: string };
+  if (typeof data.access_token !== "string") {
+    return { error: "app token response missing access_token" };
+  }
+  return { accessToken: data.access_token };
+}
+
+export type ResolveTwitchLoginResult = { status: "found"; userId: string } | { status: "not-found" } | { status: "error"; message: string };
+
+/**
+ * Resolves a Twitch login (username) to its numeric, immutable user_id via
+ * Helix's GET /users?login=. Exists so the seed-allowlist CLI can accept a
+ * plain username instead of requiring an operator to already know a
+ * streamer's numeric ID — nothing in Twitch's own UI surfaces that ID
+ * directly, but every streamer already knows their own username.
+ * "not-found" (a login that simply doesn't exist) is deliberately distinct
+ * from "error" (the request itself failed) — different messages are
+ * warranted for each at the call site.
+ */
+export async function resolveTwitchUserIdByLogin(
+  config: Pick<TwitchOAuthConfig, "clientId" | "clientSecret">,
+  login: string,
+  fetchFn: FetchLike = defaultFetch
+): Promise<ResolveTwitchLoginResult> {
+  const token = await getAppAccessToken(config, fetchFn);
+  if ("error" in token) return { status: "error", message: token.error };
+
+  let response: NodeFetchResponse;
+  try {
+    response = await fetchFn(`${USERS_URL}?login=${encodeURIComponent(login)}`, {
+      headers: { Authorization: `Bearer ${token.accessToken}`, "Client-Id": config.clientId },
+    });
+  } catch (err) {
+    return { status: "error", message: `user lookup request failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  if (!response.ok) {
+    return { status: "error", message: `user lookup failed with status ${response.status}` };
+  }
+
+  const data = (await response.json()) as { data?: Array<{ id?: string }> };
+  const first = data.data?.[0];
+  if (!first || typeof first.id !== "string") return { status: "not-found" };
+  return { status: "found", userId: first.id };
 }

@@ -362,18 +362,22 @@ npm run start -w relay              # tsx src/index.ts — reads RIFTSIGHT_MODE 
 
 ### Streamer onboarding
 
-What a beta streamer actually does — no Twitch ID, no backend URL, no terminal, no tunnel:
+A non-technical, standalone walkthrough for an actual beta streamer lives at **[docs/streamer-guide.md](docs/streamer-guide.md)** — send them that, not this README. The equivalent for their viewers is **[docs/viewer-guide.md](docs/viewer-guide.md)**.
 
-1. Receive beta access (an operator adds your Twitch account via `seed-allowlist add`).
+What a beta streamer actually does, for reference — no Twitch ID, no backend URL, no terminal, no tunnel. In **closed-beta builds the streamer-facing UI is the toolbar popup** (`extension/popup.html`/`src/popup/main.ts`), not an injected page panel — the panel from earlier milestones still exists for `development`/`twitch-local-test` builds only (gated by `isClosedBeta` in `content/inventory.ts`), never shown to a real closed-beta streamer:
+
+1. Receive beta access — an operator adds your Twitch account via `seed-allowlist add` (gates the RiftSight backend itself), **and separately** adds it to the Twitch Developer Console's own Testing Account Allowlist under the extension's Access tab (gates seeing/installing the still-unreleased Twitch Extension at all — a Twitch platform restriction, not something this codebase controls). Both are required while the extension is in Local Test/Hosted Test/In Review; neither is needed once it's actually Released.
 2. Install the RiftSight browser extension: unzip the closed-beta build you were given, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped folder.
-3. Click **Connect Twitch** in the extension panel's Account section.
-4. Authorize RiftSight on Twitch's consent screen.
-5. Install/activate the RiftSight Twitch Extension on your channel (Twitch Developer Console or your Extensions dashboard, same as any Twitch Extension).
+3. Click the RiftSight icon in the Chrome toolbar to open the popup, then click **Connect Twitch**.
+4. Authorize RiftSight on Twitch's consent screen (opens in a new tab).
+5. Install/activate the RiftSight Twitch Extension on your channel (Twitch Developer Console or your Extensions dashboard, same as any Twitch Extension), as a **Video Overlay**.
 6. Open RiftAtlas.
-7. Confirm the Account section shows **Connected as `<your name>`**, then click **Start publishing**.
-8. Set your stream delay (in the Twitch Extension's own config page) to match your actual broadcast delay.
+7. Confirm the popup's Account section shows **Connected as `<your name>`**, and RiftAtlas shows **RiftAtlas detected**, then click **Start publishing**.
+8. Set your stream delay (in the Twitch Extension's own config page) to match your actual broadcast delay — capped at 5 minutes, with a live preview of the actual tooltip size at whatever scale you pick.
 9. Calibrate the source region (same config page) if RiftAtlas doesn't fill your entire stream canvas.
 10. Start streaming — then verify from a separate viewer account with no RiftSight extension installed that hovering over a card shows its art.
+
+The toolbar icon itself carries a small colored status dot (gray = not connected, yellow = connected but idle, green = publishing, red = connection trouble) — see `background.ts`'s `updateBadge()`/`composeIconWithDot()` if this ever needs adjusting.
 
 ### Streamer-facing error handling
 
@@ -460,6 +464,7 @@ npm run dev:twitch:relay    # start the relay (respects the same env vars as `np
 - **Single producer per session — behavior differs by mode.** In `development`/`twitch-local-test` (the unauthenticated bare-socket path), there's no arbitration at all: if two extension instances publish to the same session id, whichever sent most recently is silently treated as current. In `closed-beta` (the authenticated `/ws/producer` path), a second producer connecting for the same broadcaster explicitly **replaces** the first — the relay closes the old socket with a specific code (`server.ts`'s `CLOSE_CODE.PRODUCER_REPLACED`) rather than the two silently racing.
 - **No auth, no persistence, no database — `development`/`twitch-local-test` only.** In those two modes the relay keeps everything in memory for one process and accepts any producer/viewer, exactly as originally designed: not something to expose beyond `localhost` or a throwaway tunnel. `closed-beta` mode is different: Twitch OAuth account linking, an authenticated producer WebSocket, and persistent SQLite storage (broadcaster identity, allowlist, producer-credential validity) — see "Closed beta" below.
 - **Old bundled npm (8.1.2, from Node 16) has a workspace-linking bug** that can surface as a spurious registry 404 for `@riftsight/*` packages after adding/changing a dependency. If `npm install` fails that way, run `rm -rf node_modules package-lock.json && npm install` for a clean re-link.
+- **`npm test` builds real artifacts as a side effect — `extension/src/build-manifest.test.ts` and `twitch-extension/src/build-security.test.ts` both run the actual `build.mjs`/`package.mjs` against the same `manifest.json`/`dist`/`deploy` a real build or deploy uses, to prove their properties against a genuine build rather than a re-implementation.** Both now snapshot whatever was really on disk before the suite runs and restore those exact bytes afterward, so a `npm test` run can never silently leave a closed-beta build or a real deployable `deploy/` clobbered with test-only values — this was the root cause of two real incidents (a placeholder relay URL reaching production, and a closed-beta extension build reverting mid-live-test) before the snapshot/restore fix landed. Still worth knowing: this only protects whatever build already existed *before* `npm test` ran. If you need a specific build loaded for live testing, build it (or rebuild `twitch-extension/deploy` via `RIFTSIGHT_RELAY_URL=<your real backend> npm run package -w twitch-extension`) *after* your last `npm test` run, not before — and never run a bare `npm run build -w extension` (which defaults to development mode) after a closed-beta build you still need loaded, since nothing currently restores that automatically.
 - **`capturedAt` is single-machine wall-clock time, not synchronized:** it's `Date.now()` on whichever machine ran the extension, trusted as-is by the relay, delayed-live's buffer, and recording. That's fine here because every component in this prototype runs on the one machine — a real multi-machine deployment would need a synchronized or server-authoritative clock instead of raw `Date.now()` deltas. See the doc comment on `capturedAt` in `protocol/src/schema.ts`.
 - **Delayed-live's buffer is per-tab and in-memory, not the relay:** reloading the debug viewer resets its collected history (and briefly re-enters "waiting for history"), and two viewer tabs on the same session each keep their own independent buffer. The relay itself still only ever holds one latest state — it was deliberately not extended for this milestone (see `protocol/src/history.ts`'s header comment for why).
 - **Recording/video sync is manual, not automatic:** there's no attempt to detect or correct drift between the recorded state timeline and the video — you set `syncOffsetMs` by eye and it stays fixed. Frame-perfect or automatic audio/visual synchronization is out of scope for this milestone.

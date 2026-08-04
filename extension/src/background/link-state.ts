@@ -10,7 +10,8 @@ export type LinkStatus =
   | "waiting-for-authorization"
   | "connected"
   | "credential-expired"
-  | "backend-unavailable";
+  | "backend-unavailable"
+  | "not-in-beta";
 
 export interface LinkState {
   status: LinkStatus;
@@ -25,6 +26,7 @@ export type LinkEvent =
   | { type: "poll-pending" }
   | { type: "poll-ready"; displayName: string }
   | { type: "poll-not-found" }
+  | { type: "poll-rejected" }
   | { type: "poll-error" }
   | { type: "disconnect" }
   | { type: "credential-rejected" };
@@ -42,6 +44,13 @@ export function reduceLinkState(current: LinkState, event: LinkEvent): LinkState
       // the Twitch tab without authorizing) — back to square one, not an
       // error state, since nothing was ever connected.
       return { status: "not-connected", displayName: undefined };
+    case "poll-rejected":
+      // The backend explicitly determined this Twitch account isn't on the
+      // closed-beta allowlist (relay's auth-twitch.ts) — distinct from
+      // poll-not-found (link attempt merely expired/abandoned) so the UI
+      // can say exactly what happened instead of silently reverting to
+      // "not connected" after a multi-minute poll timeout.
+      return { status: "not-in-beta", displayName: undefined };
     case "poll-error":
       return { status: "backend-unavailable", displayName: current.displayName };
     case "disconnect":
@@ -64,4 +73,5 @@ export const LINK_STATUS_LABEL: Record<LinkStatus, string> = {
   connected: "Connected", // callers append "as <displayName>" themselves
   "credential-expired": "Producer credential expired — reconnect to Twitch",
   "backend-unavailable": "RiftSight backend unavailable — try again shortly",
+  "not-in-beta": "This Twitch account isn't part of the RiftSight closed beta yet.",
 };

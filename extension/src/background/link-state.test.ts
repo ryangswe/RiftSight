@@ -29,6 +29,11 @@ describe("reduceLinkState", () => {
     expect(reduceLinkState(state, { type: "poll-not-found" })).toEqual({ status: "not-connected", displayName: undefined });
   });
 
+  it("poll-rejected moves to not-in-beta (backend determined the account isn't allowlisted)", () => {
+    const state: LinkState = { status: "waiting-for-authorization", displayName: undefined };
+    expect(reduceLinkState(state, { type: "poll-rejected" })).toEqual({ status: "not-in-beta", displayName: undefined });
+  });
+
   it("poll-error moves to backend-unavailable, preserving a prior display name", () => {
     const state: LinkState = { status: "connected", displayName: "juicykaraage" };
     expect(reduceLinkState(state, { type: "poll-error" })).toEqual({ status: "backend-unavailable", displayName: "juicykaraage" });

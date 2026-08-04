@@ -78,6 +78,111 @@ const RECONNECT_CHECK_ALARM_PERIOD_MINUTES = 1;
 /** Must match relay/src/server.ts's CLOSE_CODE.PRODUCER_REPLACED — sent when a newer authenticated producer connection takes over this broadcaster's channel (Stage 7's replace-on-reconnect policy). Unlike a rejected credential (which the browser WebSocket API can't distinguish from a generic connection failure — see auth.ts's reportCredentialRejected doc comment), a close code on an already-open socket IS visible to client JS, so this one case can be surfaced with a specific, accurate message instead of a generic "disconnected." */
 const PRODUCER_REPLACED_CLOSE_CODE = 4409;
 
+// Toolbar-icon status indicator — a small always-visible status color, so
+// a streamer can tell at a glance whether RiftSight needs attention
+// without opening the popup. Deliberately derived from state this file
+// already tracks (relay connection `status`, plus link state/publishing
+// intent read through their own modules) rather than adding a new state
+// machine — this is a pure projection of existing truth, not a new source
+// of it.
+//
+// Drawn as a small circle composited onto the base icon via
+// OffscreenCanvas + chrome.action.setIcon, NOT chrome.action's own
+// setBadgeText/setBadgeBackgroundColor — that API only ever renders as a
+// fixed-size rounded-rectangle strip Chrome controls entirely, with no way
+// to make it smaller or circular. Compositing our own icon is the only way
+// to get a small, precise dot instead of a strip covering a large part of
+// the icon.
+type BadgeStatus = "not-connected" | "connected-idle" | "publishing" | "error";
+
+const BADGE_COLOR: Record<BadgeStatus, string> = {
+  "not-connected": "#9ca3af", // gray — no Twitch account linked yet
+  "connected-idle": "#facc15", // yellow — linked, but not publishing right now
+  publishing: "#22c55e", // green — actively publishing
+  error: "#ef4444", // red — linked, but the relay connection itself is down/retrying
+};
+
+const ICON_SIZES = [16, 48, 128] as const;
+
+// Loaded once per service-worker lifetime (module-level, so it survives
+// across updateBadge() calls but not a worker suspend/resume — reloaded
+// lazily on the next call in that case, same as everything else in this
+// file that can't persist across suspension).
+const baseIconBitmaps = new Map<number, ImageBitmap>();
+let iconsReadyPromise: Promise<void> | undefined;
+
+async function loadBaseIcons(): Promise<void> {
+  await Promise.all(
+    ICON_SIZES.map(async (size) => {
+      const response = await fetch(chrome.runtime.getURL(`icons/icon${size}.png`));
+      const blob = await response.blob();
+      baseIconBitmaps.set(size, await createImageBitmap(blob));
+    })
+  );
+}
+
+/** Base icon + a small colored circle in the bottom-right corner, sized as a fraction of the icon so it stays proportionally small (roughly a fifth of the icon's width) rather than obscuring it — with a thin white ring so the dot reads clearly against whatever the icon's own artwork looks like at that spot. */
+function composeIconWithDot(size: number, color: string): ImageData {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2d canvas context unavailable");
+
+  const bitmap = baseIconBitmaps.get(size);
+  if (bitmap) ctx.drawImage(bitmap, 0, 0, size, size);
+
+  const radius = size * 0.2;
+  const margin = size * 0.04;
+  const cx = size - radius - margin;
+  const cy = size - radius - margin;
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, size * 0.03);
+  ctx.strokeStyle = "#ffffff";
+  ctx.stroke();
+
+  return ctx.getImageData(0, 0, size, size);
+}
+
+/**
+ * Cheap and safe to call from anywhere, anytime — reads already-tracked
+ * state, never awaits anything expensive itself beyond the one-time base
+ * icon load (getLinkState/getPublishingIntent are both synchronous
+ * in-memory reads). "error" intentionally covers both "disconnected" and
+ * "connecting" — a streamer doesn't need to distinguish "down" from
+ * "currently retrying," both mean the same thing to them: not actually
+ * connected right now.
+ */
+function updateBadge(): void {
+  const linkStatus = getLinkState().status;
+  let badgeStatus: BadgeStatus;
+  if (linkStatus !== "connected") {
+    badgeStatus = "not-connected";
+  } else if (status !== "connected") {
+    badgeStatus = "error";
+  } else if (getPublishingIntent()) {
+    badgeStatus = "publishing";
+  } else {
+    badgeStatus = "connected-idle";
+  }
+
+  const color = BADGE_COLOR[badgeStatus];
+  if (!iconsReadyPromise) iconsReadyPromise = loadBaseIcons();
+  void iconsReadyPromise
+    .then(() => {
+      const imageData: Record<string, ImageData> = {};
+      for (const size of ICON_SIZES) {
+        imageData[String(size)] = composeIconWithDot(size, color);
+      }
+      return chrome.action.setIcon({ imageData });
+    })
+    .catch((err: unknown) => {
+      console.warn("[riftsight] failed to update toolbar status indicator:", err);
+    });
+}
+
 let socket: WebSocket | null = null;
 let status: ConnectionStatus = "disconnected";
 let backoffMs = INITIAL_BACKOFF_MS;
@@ -154,6 +259,7 @@ function scheduleReconnect(): void {
 function connect(): void {
   if (socket) return;
   status = "connecting";
+  updateBadge();
 
   // Fire-and-forget: connect() is called from setTimeout/module-load sites
   // that don't await it. getStoredCredential() reads chrome.storage.local,
@@ -217,6 +323,7 @@ function openSocket(url: string): void {
     consecutiveFailedAttempts = 0;
     statusCheckedThisStreak = false;
     backoffMs = INITIAL_BACKOFF_MS; // reset backoff on a successful connection
+    updateBadge();
 
     // Push, don't rely on the content script polling for this — see
     // lastKnownTabId's doc comment. A live incident showed the polling
@@ -253,6 +360,7 @@ function openSocket(url: string): void {
     socket = null;
     status = "disconnected";
     wasReplacedByAnotherProducer = event.code === PRODUCER_REPLACED_CLOSE_CODE;
+    updateBadge();
 
     // A "replaced" close is a real, already-known reason — never
     // ambiguous, so it never counts toward the failure streak. Everything
@@ -307,7 +415,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "set-publishing-intent") {
-    void setPublishingIntent(Boolean(message.intent)).then(() => sendResponse({ intent: getPublishingIntent() }));
+    void setPublishingIntent(Boolean(message.intent)).then(() => {
+      updateBadge();
+      sendResponse({ intent: getPublishingIntent() });
+    });
     return true; // sendResponse is called asynchronously
   }
 
@@ -317,20 +428,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "start-link") {
-    void startLink().then(() => sendResponse(getLinkState()));
+    void startLink().then(() => {
+      updateBadge();
+      sendResponse(getLinkState());
+    });
     return true; // sendResponse is called asynchronously
   }
 
   if (message?.type === "disconnect-link") {
-    void disconnect().then(() => sendResponse(getLinkState()));
+    void disconnect().then(() => {
+      updateBadge();
+      sendResponse(getLinkState());
+    });
     return true;
   }
 
   return false;
 });
 
-void loadPersistedLinkState();
-void loadPersistedPublishingIntent();
+void Promise.all([loadPersistedLinkState(), loadPersistedPublishingIntent()]).then(updateBadge);
+
+// Explicit calls above cover every transition this file directly drives
+// (relay open/close, connect() starting, and the immediate result of a
+// start-link/disconnect-link/set-publishing-intent message) — but
+// auth.ts's own multi-minute OAuth poll loop (waiting-for-authorization ->
+// connected/not-in-beta/etc.) advances entirely on its own timers deep
+// inside that module, with no explicit hook back into this file. This
+// periodic refresh is the resilient catch-all for those transitions,
+// matching the same 2s cadence content/inventory.ts already polls
+// get-link-state/get-status at for its own UI.
+setInterval(updateBadge, 2000);
 
 // Registered on every module load (fresh install, and every wake from
 // suspension) — chrome.alarms.create with an existing name simply

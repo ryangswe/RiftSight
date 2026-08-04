@@ -6,13 +6,27 @@
 // this repo's build scripts.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = path.join(packageDir, "manifest.json");
+// build.mjs bundles every entry point on every run, not just manifest.json
+// — a real backend URL lives baked into these as __RIFTSIGHT_BACKEND_URL__,
+// completely separate from anything manifest.json itself records. Missing
+// this the first time this suite got a snapshot/restore fix is exactly
+// what caused a real incident: manifest.json's host_permissions looked
+// correct (restored), but background.js still had an empty backend URL
+// baked in from whatever test ran last, and Connect Twitch silently opened
+// a broken URL — the JS is what actually matters, the manifest was only
+// ever a symptom-visible proxy for it.
+const bundlePaths = [
+  path.join(packageDir, "dist/content/inventory.js"),
+  path.join(packageDir, "dist/background/background.js"),
+  path.join(packageDir, "dist/popup/main.js"),
+];
 
 function readManifest(): { host_permissions: string[]; [key: string]: unknown } {
   return JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -32,13 +46,24 @@ function runBuild(env: Record<string, string | undefined>): void {
   execFileSync("node", ["build.mjs"], { cwd: packageDir, env: merged, stdio: "pipe" });
 }
 
-// Every test mutates the real manifest.json — restore it to the ordinary
-// development build afterward so the repo is left in a normal, loadable
-// state (matches what a plain `npm run build -w extension` produces) and
-// so test order/failures never leave a closed-beta manifest lying around
-// for someone to accidentally load unpacked.
+// Every test mutates the real manifest.json AND every bundled entry point
+// (see bundlePaths above) — snapshot whatever real build was already on
+// disk before this suite touches any of it, and restore those EXACT bytes
+// afterward, rather than resetting to a fixed development-mode baseline.
+// Falls back to a plain development build only if no manifest existed yet
+// at all (a fresh checkout that's never been built) — in that case there's
+// nothing meaningful to restore bundles to either, so a fresh build is the
+// correct fallback for all of it together.
+const manifestSnapshot = existsSync(manifestPath) ? readFileSync(manifestPath) : undefined;
+const bundleSnapshots = bundlePaths.map((p) => (existsSync(p) ? readFileSync(p) : undefined));
+
 afterEach(() => {
-  runBuild({});
+  if (manifestSnapshot && bundleSnapshots.every((snapshot) => snapshot !== undefined)) {
+    writeFileSync(manifestPath, manifestSnapshot);
+    bundlePaths.forEach((p, i) => writeFileSync(p, bundleSnapshots[i] as Buffer));
+  } else {
+    runBuild({});
+  }
 });
 
 describe("build.mjs manifest generation", () => {
@@ -96,5 +121,11 @@ describe("build.mjs manifest generation", () => {
     expect(manifest["content_scripts"]).toEqual([
       { matches: ["*://play.riftatlas.com/*"], js: ["dist/content/inventory.js"], run_at: "document_idle" },
     ]);
+  });
+
+  it("the generated manifest.json wires the toolbar popup, in every build mode", () => {
+    runBuild({ RIFTSIGHT_MODE: "development" });
+    const manifest = readManifest();
+    expect((manifest["action"] as { default_popup?: string })["default_popup"]).toBe("popup.html");
   });
 });

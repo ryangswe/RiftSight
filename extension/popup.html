@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RiftSight</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 320px;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b0f16;
+        color: #e6e6e6;
+        overflow-x: hidden;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 14px;
+        background: linear-gradient(135deg, #7c3aed, #4c1d95);
+      }
+      .header img {
+        width: 20px;
+        height: 20px;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: #fff;
+      }
+      .body {
+        padding: 4px 14px 14px;
+      }
+      .section-title {
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #a78bfa;
+        margin: 14px 0 6px;
+      }
+      .status-line {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        color: #c9c9d1;
+        margin-bottom: 8px;
+      }
+      .status-warning {
+        color: #fbbf24;
+      }
+      button {
+        cursor: pointer;
+        font: inherit;
+        border-radius: 4px;
+        padding: 6px 10px;
+        border: 1px solid #4c1d95;
+        background: #1c1730;
+        color: #e6e6e6;
+      }
+      button.primary {
+        background: linear-gradient(135deg, #7c3aed, #4c1d95);
+        border-color: transparent;
+        color: #fff;
+        width: 100%;
+      }
+      button + button {
+        margin-left: 6px;
+      }
+      hr {
+        border: none;
+        border-top: 1px solid #241d3a;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <img src="icons/icon48.png" alt="" />
+      <h1>RiftSight</h1>
+    </div>
+    <div class="body">
+      <div class="section-title">Account</div>
+      <div id="account-status" class="status-line">Not connected to Twitch</div>
+      <button id="connect-button">Connect Twitch</button>
+      <button id="disconnect-button" style="display: none">Disconnect</button>
+
+      <hr />
+      <div class="section-title">RiftAtlas</div>
+      <div id="presence-status" class="status-line">Open RiftAtlas to begin</div>
+
+      <hr />
+      <div class="section-title">Publishing</div>
+      <div id="publish-status" class="status-line">Not publishing.</div>
+      <button id="publish-toggle" class="primary">Start publishing</button>
+    </div>
+    <script src="dist/popup/main.js"></script>
+  </body>
+</html>

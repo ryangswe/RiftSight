@@ -70,7 +70,11 @@ function writeManifest() {
 }
 
 const options = {
-  entryPoints: [path.join(packageDir, "src/content/inventory.ts"), path.join(packageDir, "src/background/background.ts")],
+  entryPoints: [
+    path.join(packageDir, "src/content/inventory.ts"),
+    path.join(packageDir, "src/background/background.ts"),
+    path.join(packageDir, "src/popup/main.ts"),
+  ],
   bundle: true,
   outdir: path.join(packageDir, "dist"),
   outbase: path.join(packageDir, "src"),

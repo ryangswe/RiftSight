@@ -7,6 +7,7 @@ import {
   FULL_FRAME_SOURCE_REGION,
   SOURCE_REGION_PRESETS,
   computeHitboxStyle,
+  computeTooltipMaxSize,
   hitboxClassName,
   isValidSourceRegion,
   mapBoundsToSourceRegion,
@@ -17,7 +18,14 @@ import { MockOverlayStateSource } from "../platform/mock-state-source.js";
 import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";
 import { TwitchOverlayStateSource } from "../platform/twitch-state-source.js";
-import { DEFAULT_OVERLAY_CONFIG, OVERLAY_CONFIG_VERSION, parseOverlayConfig, serializeOverlayConfig, type OverlayConfig } from "./overlay-config.js";
+import {
+  DEFAULT_OVERLAY_CONFIG,
+  MAX_DELAY_MS,
+  OVERLAY_CONFIG_VERSION,
+  parseOverlayConfig,
+  serializeOverlayConfig,
+  type OverlayConfig,
+} from "./overlay-config.js";
 
 const isMock = window.__RIFTSIGHT_MOCK__ === true;
 const MOCK_STORAGE_KEY = "riftsight-mock-broadcaster-config";
@@ -67,6 +75,10 @@ const debugOutlinesInput = requireElement<HTMLInputElement>("debug-outlines-inpu
 const aspectRatioInput = requireElement<HTMLInputElement>("aspect-ratio-input");
 const tooltipScaleInput = requireElement<HTMLInputElement>("tooltip-scale-input");
 const tooltipScaleReadout = requireElement<HTMLElement>("tooltip-scale-readout");
+const tooltipPreviewPortraitBox = requireElement<HTMLElement>("tooltip-preview-portrait");
+const tooltipPreviewPortraitDims = requireElement<HTMLElement>("tooltip-preview-portrait-dims");
+const tooltipPreviewLandscapeBox = requireElement<HTMLElement>("tooltip-preview-landscape");
+const tooltipPreviewLandscapeDims = requireElement<HTMLElement>("tooltip-preview-landscape-dims");
 const regionXInput = requireElement<HTMLInputElement>("region-x-input");
 const regionYInput = requireElement<HTMLInputElement>("region-y-input");
 const regionWidthInput = requireElement<HTMLInputElement>("region-width-input");
@@ -217,6 +229,32 @@ function updateTooltipScaleReadout(): void {
   tooltipScaleReadout.textContent = `${Number.parseFloat(tooltipScaleInput.value).toFixed(1)}x`;
 }
 
+// A live preview of the real tooltip box size at the current slider value,
+// so a broadcaster can judge sizing without publishing, hovering a card on
+// their own stream, then coming back here to adjust and repeat. The
+// on-page box is shown at a fixed fraction of the true size (the real
+// tooltip can run up to 640x896px at max scale — far too large to render
+// 1:1 on this settings page) — the px readout underneath is the actual,
+// real dimension viewers will see, which is the number that matters here.
+// Uses the exact same computeTooltipMaxSize the real viewer calls (see
+// viewer/main.ts's showTooltipFor), so this can never silently drift from
+// what's actually shown on stream.
+const TOOLTIP_PREVIEW_DISPLAY_SCALE = 0.3;
+
+function updateTooltipSizePreview(): void {
+  const scale = Number.parseFloat(tooltipScaleInput.value) || DEFAULT_OVERLAY_CONFIG.tooltipScale;
+
+  const portrait = computeTooltipMaxSize(false, scale);
+  tooltipPreviewPortraitBox.style.width = `${portrait.maxWidthPx * TOOLTIP_PREVIEW_DISPLAY_SCALE}px`;
+  tooltipPreviewPortraitBox.style.height = `${portrait.maxHeightPx * TOOLTIP_PREVIEW_DISPLAY_SCALE}px`;
+  tooltipPreviewPortraitDims.textContent = `${Math.round(portrait.maxWidthPx)} × ${Math.round(portrait.maxHeightPx)}px`;
+
+  const landscape = computeTooltipMaxSize(true, scale);
+  tooltipPreviewLandscapeBox.style.width = `${landscape.maxWidthPx * TOOLTIP_PREVIEW_DISPLAY_SCALE}px`;
+  tooltipPreviewLandscapeBox.style.height = `${landscape.maxHeightPx * TOOLTIP_PREVIEW_DISPLAY_SCALE}px`;
+  tooltipPreviewLandscapeDims.textContent = `${Math.round(landscape.maxWidthPx)} × ${Math.round(landscape.maxHeightPx)}px`;
+}
+
 function applyToForm(config: OverlayConfig): void {
   overlayEnabledInput.checked = config.overlayEnabled;
   delayInput.value = String(config.delayMs);
@@ -224,6 +262,7 @@ function applyToForm(config: OverlayConfig): void {
   aspectRatioInput.value = config.sourceAspectRatio !== undefined ? String(config.sourceAspectRatio) : "";
   tooltipScaleInput.value = String(config.tooltipScale);
   updateTooltipScaleReadout();
+  updateTooltipSizePreview();
   currentSourceRegion = config.sourceRegion;
   applyRegionToInputs(config.sourceRegion);
   renderRegionBox(config.sourceRegion);
@@ -234,7 +273,14 @@ function readFromForm(): OverlayConfig {
   const parsedAspectRatio = Number.parseFloat(aspectRatioInput.value);
   return {
     overlayEnabled: overlayEnabledInput.checked,
-    delayMs: Math.max(0, Number.parseInt(delayInput.value, 10) || 0),
+    // Clamped at both ends: the HTML input's own min/max already stop
+    // normal browser interaction from producing an out-of-range value
+    // (matching the comment tooltipScaleInput's own read below relies on),
+    // but a free-text-adjacent numeric field can still be typed past its
+    // max in some browsers/inputs — clamping here is the actual
+    // enforcement, not just the HTML attribute's advisory one. See
+    // MAX_DELAY_MS's own doc comment for why this bound exists at all.
+    delayMs: Math.min(MAX_DELAY_MS, Math.max(0, Number.parseInt(delayInput.value, 10) || 0)),
     debugOutlines: debugOutlinesInput.checked,
     sourceAspectRatio: Number.isFinite(parsedAspectRatio) && parsedAspectRatio > 0 ? parsedAspectRatio : undefined,
     sourceRegion: currentSourceRegion,
@@ -245,7 +291,10 @@ function readFromForm(): OverlayConfig {
   };
 }
 
-tooltipScaleInput.addEventListener("input", updateTooltipScaleReadout);
+tooltipScaleInput.addEventListener("input", () => {
+  updateTooltipScaleReadout();
+  updateTooltipSizePreview();
+});
 
 Array.from(document.querySelectorAll<HTMLButtonElement>("[data-delay-preset]")).forEach((button) => {
   button.addEventListener("click", () => {

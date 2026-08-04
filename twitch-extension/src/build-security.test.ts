@@ -1,14 +1,54 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const viewerBundlePath = path.join(packageDir, "dist/viewer/main.js");
+const configBundlePath = path.join(packageDir, "dist/config/main.js");
 
 // Distinctive enough that any match is unambiguously this test's own
 // value, not a coincidental substring of something else in the bundle.
 const DUMMY_SECRET = "sk_test_dummy_secret_should_never_leak_into_frontend_bundle_zzz9x";
+
+// Every test in this file runs the REAL build.mjs/package.mjs against the
+// SAME dist/ and deploy/ directories a real deploy uses — deliberately,
+// with a placeholder RIFTSIGHT_RELAY_URL, to prove the security properties
+// below against a genuine build rather than a re-implementation.
+//
+// Snapshot whatever real bundles were already on disk before this suite
+// touches them, and restore those EXACT bytes afterward (regenerating
+// deploy/ from the restored dist/, since package.mjs is a pure copy step)
+// — rather than resetting to some fixed baseline. Two real incidents
+// happened before this existed: first, `npm test` silently left deploy/
+// built against "wss://example.trycloudflare.com" and a later `wrangler
+// pages deploy` shipped that placeholder to production; then the first fix
+// (reset to a fixed no-relay-URL baseline afterward, mirroring
+// extension/src/build-manifest.test.ts's OLD afterEach) had the identical
+// flaw one level up — it silently clobbered a real closed-beta build a
+// developer had just made for live testing, immediately after running
+// these tests. Restoring the exact prior bytes, not a fixed baseline, is
+// what actually closes this class of bug regardless of what mode was
+// really built before the suite ran.
+const viewerBundleSnapshot = existsSync(viewerBundlePath) ? readFileSync(viewerBundlePath) : undefined;
+const configBundleSnapshot = existsSync(configBundlePath) ? readFileSync(configBundlePath) : undefined;
+
+afterEach(() => {
+  if (viewerBundleSnapshot && configBundleSnapshot) {
+    writeFileSync(viewerBundlePath, viewerBundleSnapshot);
+    writeFileSync(configBundlePath, configBundleSnapshot);
+    // deploy/ is just a copy of dist/ (plus the static html/privacy
+    // files) — regenerating it from the now-restored dist/ keeps it
+    // consistent with whatever was really built before this suite ran,
+    // not this suite's own placeholder relay URL.
+    execFileSync("node", ["scripts/package.mjs"], { cwd: packageDir, stdio: "pipe" });
+  } else {
+    // No prior build existed at all (a fresh checkout that's never been
+    // built) — fall back to a plain build with no relay URL configured.
+    execFileSync("node", ["build.mjs"], { cwd: packageDir, env: { ...process.env, RIFTSIGHT_RELAY_URL: undefined }, stdio: "pipe" });
+  }
+});
 
 describe("twitch-extension build security", () => {
   it(
