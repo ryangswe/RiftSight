@@ -182,15 +182,21 @@ describe("resolveTwitchUserIdByLogin", () => {
       }
       usersUrl = url;
       usersHeaders = init?.headers as Record<string, string>;
-      return jsonResponse(200, { data: [{ id: "141981764", login: "juicykaraage" }] });
+      return jsonResponse(200, { data: [{ id: "141981764", login: "juicykaraage", display_name: "JuicyKaraage" }] });
     };
 
     const result = await resolveTwitchUserIdByLogin(config, "juicykaraage", fetchFn);
 
-    expect(result).toEqual({ status: "found", userId: "141981764" });
+    expect(result).toEqual({ status: "found", userId: "141981764", displayName: "JuicyKaraage" });
     expect(usersUrl).toBe("https://api.twitch.tv/helix/users?login=juicykaraage");
     expect(usersHeaders?.["Authorization"]).toBe("Bearer app-token-abc");
     expect(usersHeaders?.["Client-Id"]).toBe("test-client-id");
+  });
+
+  it("falls back to the numeric ID as displayName if the response is missing display_name", async () => {
+    const fetchFn = appTokenThenUsersFetch(() => jsonResponse(200, { data: [{ id: "141981764", login: "juicykaraage" }] }));
+    const result = await resolveTwitchUserIdByLogin(config, "juicykaraage", fetchFn);
+    expect(result).toEqual({ status: "found", userId: "141981764", displayName: "141981764" });
   });
 
   it("URL-encodes the login", async () => {

@@ -185,7 +185,10 @@ export async function getAppAccessToken(
   return { accessToken: data.access_token };
 }
 
-export type ResolveTwitchLoginResult = { status: "found"; userId: string } | { status: "not-found" } | { status: "error"; message: string };
+export type ResolveTwitchLoginResult =
+  | { status: "found"; userId: string; displayName: string }
+  | { status: "not-found" }
+  | { status: "error"; message: string };
 
 /**
  * Resolves a Twitch login (username) to its numeric, immutable user_id via
@@ -195,7 +198,12 @@ export type ResolveTwitchLoginResult = { status: "found"; userId: string } | { s
  * directly, but every streamer already knows their own username.
  * "not-found" (a login that simply doesn't exist) is deliberately distinct
  * from "error" (the request itself failed) — different messages are
- * warranted for each at the call site.
+ * warranted for each at the call site. displayName rides along on a
+ * successful match purely so the CLI can print something human-verifiable
+ * before committing an ID to the allowlist — a login string can be
+ * reassigned to a different account after the original owner renames away
+ * from it, so the numeric ID alone isn't something an operator can eyeball
+ * for "is this really who I meant."
  */
 export async function resolveTwitchUserIdByLogin(
   config: Pick<TwitchOAuthConfig, "clientId" | "clientSecret">,
@@ -218,8 +226,8 @@ export async function resolveTwitchUserIdByLogin(
     return { status: "error", message: `user lookup failed with status ${response.status}` };
   }
 
-  const data = (await response.json()) as { data?: Array<{ id?: string }> };
+  const data = (await response.json()) as { data?: Array<{ id?: string; display_name?: string }> };
   const first = data.data?.[0];
   if (!first || typeof first.id !== "string") return { status: "not-found" };
-  return { status: "found", userId: first.id };
+  return { status: "found", userId: first.id, displayName: typeof first.display_name === "string" ? first.display_name : first.id };
 }

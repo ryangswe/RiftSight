@@ -75,7 +75,7 @@ async function resolveUserId(rawIdOrLogin: string): Promise<string> {
     console.error(`[seed-allowlist] failed to resolve username "${login}": ${resolved.message}`);
     process.exit(1);
   }
-  console.log(`[seed-allowlist] resolved username "${login}" to Twitch user ID ${resolved.userId}`);
+  console.log(`[seed-allowlist] resolved username "${login}" to Twitch user ID ${resolved.userId} (display name: "${resolved.displayName}")`);
   return resolved.userId;
 }
 
