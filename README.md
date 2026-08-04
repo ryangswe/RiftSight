@@ -2,6 +2,108 @@
 
 RiftSight is a browser extension and Twitch overlay for [RiftAtlas](https://riftatlas.com) (a fan-made Riftbound TCG web client) which allows viewers to hover over cards during a RiftAtlas to see their details in real-time.
 
+## Architecture
+
+A streamer's browser extension reads card state directly off RiftAtlas's own page, relays it through RiftSight's backend, and a Twitch Extension iframe renders it as hover cards for every viewer — while card art itself is fetched by each viewer's browser straight from RiftAtlas's own CDN, never touching RiftSight's infrastructure at all.
+
+```mermaid
+flowchart LR
+    Streamer(["🧑‍💻 Streamer"])
+
+    subgraph RiftAtlas["🎮 RiftAtlas"]
+        DOM["Game Board DOM"]
+        AssetCDN["Asset CDN<br/>card art .webp"]
+    end
+
+    subgraph ExtBrowser["🖥️ Streamer's Browser<br/>RiftSight Extension"]
+        Content["Content Script<br/>detects cards"]
+        Background["Background Worker<br/>owns relay socket"]
+    end
+
+    subgraph Railway["☁️ RiftSight Relay — Railway"]
+        ProducerWS["WS /ws/producer<br/>authenticated"]
+        Sessions["Session<br/>latest state"]
+        ViewerWS["WS /ws<br/>JWT-verified"]
+    end
+
+    subgraph TwitchPlatform["🟣 Twitch"]
+        ExtHelper["Extensions Helper<br/>signs viewer JWT"]
+    end
+
+    CFPages["🌐 Cloudflare Pages<br/>viewer.html + main.js"]
+
+    subgraph ViewerBrowser["👁️ Viewer's Browser"]
+        ExtIframe["RiftSight Extension<br/>iframe"]
+        Player["Twitch Player"]
+    end
+
+    Viewer(["👤 Viewer"])
+
+    Streamer -->|plays| DOM
+    DOM -.->|observes| Content
+    Content -->|OverlayState| Background
+    Background ==>|wss| ProducerWS
+    ProducerWS --> Sessions
+    Sessions ==>|state| ViewerWS
+    ExtIframe <==>|subscribe w/ JWT ⇄ live state| ViewerWS
+    ExtHelper -->|signs JWT| ExtIframe
+    ExtIframe -.->|fetch art directly, bypasses relay| AssetCDN
+    ExtIframe -->|loads from| CFPages
+    Viewer -->|watches| Player
+    Viewer -->|hovers card| ExtIframe
+
+    subgraph VideoPath[" "]
+        direction LR
+        OBS["🎥 OBS"]
+        VideoCDN["Twitch Video CDN<br/>RTMP → HLS"]
+    end
+
+    Streamer -->|captures| OBS
+    OBS ==>|RTMP| VideoCDN
+    VideoCDN ==>|HLS| Player
+
+    classDef riftsight fill:#4c1d95,stroke:#a78bfa,color:#f5f3ff,stroke-width:1px
+    classDef external fill:#1e293b,stroke:#64748b,color:#e2e8f0,stroke-width:1px
+    classDef person fill:#78350f,stroke:#fbbf24,color:#fef3c7,stroke-width:1px
+    classDef store fill:#312e81,stroke:#a5b4fc,color:#eef2ff,stroke-width:1px
+    classDef invis fill:transparent,stroke:transparent
+
+    class Content,Background,ProducerWS,ViewerWS,CFPages riftsight
+    class DOM,AssetCDN,OBS,ExtHelper,VideoCDN,Player external
+    class Streamer,Viewer person
+    class Sessions store
+    class VideoPath invis
+```
+
+*Purple = RiftSight's own components. Slate = third-party platforms (Twitch, RiftAtlas). Amber = people. Indigo = the relay's in-memory session state. Dashed lines mark connections that intentionally bypass RiftSight's backend entirely — card art is served directly from RiftAtlas's CDN to every viewer's browser, so image bandwidth never touches RiftSight's own infrastructure at all, no matter how many viewers are watching.*
+
+The relay is deliberately a single Railway replica — its per-channel session state lives in memory, not a shared store, so a second replica would silently see a different, inconsistent world. SQLite (on a persistent volume) only holds what needs to survive a restart: linked broadcaster identities, the beta allowlist, and hashed producer credentials — never the live game state itself, which is republished fresh on every reconnect rather than persisted.
+
+**Account linking** ("Connect Twitch" in the toolbar popup) is a separate, one-time OAuth flow, independent of the real-time pipeline above:
+
+```mermaid
+sequenceDiagram
+    actor S as Streamer
+    participant P as Toolbar Popup
+    participant B as Background Worker
+    participant R as RiftSight Relay
+    participant T as Twitch OAuth
+
+    S->>P: Click "Connect Twitch"
+    P->>B: start-link
+    B->>R: GET /auth/twitch/start
+    R-->>S: redirect to Twitch consent (new tab)
+    S->>T: Authorize RiftSight
+    T-->>R: redirect + code (/auth/twitch/callback)
+    R->>T: exchange code for token
+    Note over R: check allowlist,<br/>issue hashed credential
+    loop poll every 2s, up to 5 min
+        B->>R: GET /api/link-status
+    end
+    R-->>B: credential ready
+    B-->>P: "Connected as juicykaraage"
+```
+
 ## Packages
 
 - `extension/` — MV3 Chromium extension. Content script detects cards on the RiftAtlas board (`src/content/card-detector.ts`) and, optionally, publishes sanitized state (`src/content/publisher.ts`); a background service worker (`src/background/background.ts`) owns the relay connection.
