@@ -56,6 +56,13 @@ export const OverlayCardSchema = z
     bounds: NormalizedBoundsSchema,
     rotation: z.number().finite(),
     zIndex: z.number().finite().optional(),
+    // The card's true unrotated size, normalized the same way bounds is
+    // (a fraction of sourceViewport). Paired with bounds' own center point
+    // and `rotation` so a consumer can render a hitbox matching the card's
+    // actual rotated shape instead of bounds' rotation-inflated AABB — see
+    // overlay-core's computeHitboxStyle.
+    localWidth: z.number().finite().nonnegative(),
+    localHeight: z.number().finite().nonnegative(),
     // Whether the card's own art/frame is landscape-format — true for
     // Battlefield-type cards (see extension's data-preview-landscape
     // capture), independent of which zone the card currently sits in (a

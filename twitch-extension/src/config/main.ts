@@ -11,6 +11,7 @@ import {
   hitboxClassName,
   isValidSourceRegion,
   mapBoundsToSourceRegion,
+  mapSizeToSourceRegion,
   type SourceRegion,
 } from "@riftsight/overlay-core";
 import type { OverlayCard } from "@riftsight/protocol";
@@ -51,6 +52,8 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     bounds: { x: 0.3, y: 0.35, width: 0.12, height: 0.18 },
     rotation: 0,
     landscape: false,
+    localWidth: 0.12,
+    localHeight: 0.18,
   },
   {
     instanceId: "preview-card-2",
@@ -60,6 +63,11 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     bounds: { x: 0.62, y: 0.15, width: 0.08, height: 0.12 },
     rotation: 20,
     landscape: false,
+    // Deliberately smaller than bounds — bounds is a rotated card's
+    // inflated AABB, so a real localWidth/localHeight is always ≤ it.
+    // Demonstrates the rotated-hitbox fix in this same preview.
+    localWidth: 0.07,
+    localHeight: 0.1,
   },
 ];
 
@@ -122,7 +130,8 @@ function renderPreviewHitboxes(): void {
   previewHitboxLayer.replaceChildren();
   for (const card of previewCards) {
     const mappedBounds = mapBoundsToSourceRegion(card.bounds, currentSourceRegion);
-    const style = computeHitboxStyle({ ...card, bounds: mappedBounds });
+    const mappedSize = mapSizeToSourceRegion({ width: card.localWidth, height: card.localHeight }, currentSourceRegion);
+    const style = computeHitboxStyle({ ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height });
     const box = document.createElement("div");
     box.className = `${hitboxClassName(card)} ${debugOutlinesInput.checked ? "debug-outline" : ""}`.trim();
     box.style.left = style.left;
@@ -130,6 +139,8 @@ function renderPreviewHitboxes(): void {
     box.style.width = style.width;
     box.style.height = style.height;
     box.style.zIndex = style.zIndex;
+    box.style.transform = style.transform ?? "";
+    box.style.transformOrigin = style.transformOrigin ?? "";
     previewHitboxLayer.appendChild(box);
   }
 }

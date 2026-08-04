@@ -54,6 +54,18 @@ export interface CardDetection {
   /** Computed z-index, when RiftAtlas sets one explicitly (not "auto"). Not identity-sensitive — present regardless of visibility. */
   zIndexHint: number | undefined;
   bounds: PixelBounds;
+  /**
+   * The anchor's own true unrotated size (offsetWidth/offsetHeight) —
+   * unlike bounds, this is unaffected by any CSS transform on the anchor
+   * itself or any ancestor, since transforms don't participate in layout.
+   * `bounds` is only the enclosing axis-aligned box of a rotated card (see
+   * protocol's coordinates.ts), inflated relative to the card's true shape;
+   * this pairs with rotationDeg and bounds' own center point to let a
+   * consumer render the hitbox as the card's actual rotated shape instead
+   * of the bloated AABB — see overlay-core's computeHitboxStyle.
+   */
+  localWidth: number;
+  localHeight: number;
   /** The anchor element this was built from. Not serializable — strip before logging/copying as JSON. */
   element: HTMLElement;
 }

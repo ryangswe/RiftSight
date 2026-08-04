@@ -48,7 +48,7 @@ import {
   startLink,
 } from "./auth.js";
 import { credentialNeedsReconnect, shouldCheckCredentialStatus } from "./connection-diagnostics.js";
-import { getCurrentPresenceStatus, recordHeartbeat } from "./presence-tracker.js";
+import { getCurrentPresenceStatus, isCurrentlyGoneForAutoStop, recordHeartbeat } from "./presence-tracker.js";
 import { getPublishingIntent, loadPersistedPublishingIntent, setPublishingIntent } from "./publishing-intent.js";
 import { resolveProducerWsUrl } from "./producer-url.js";
 
@@ -247,6 +247,51 @@ function send(state: OverlayState): void {
   }
 }
 
+/**
+ * The most recent real OverlayState this worker has forwarded from the
+ * content script — used only to synthesize an explicit clear (see
+ * maybeAutoStopOnGoneReceived below) when the content script itself is
+ * gone and can no longer send one via its own OverlayStatePublisher.
+ * `autoStoppedForCurrentGap` guards against re-sending that synthetic
+ * clear on every 2s tick once already sent, and resets the moment a real
+ * update arrives again — so a later reconnect/resume allows a future
+ * auto-stop to fire again if the streamer leaves a second time.
+ */
+let lastKnownState: OverlayState | undefined;
+let autoStoppedForCurrentGap = false;
+
+/**
+ * Proactively clears whatever a viewer is currently seeing once presence
+ * has concluded RiftAtlas is genuinely gone (see presence.ts's
+ * isPresenceGoneForAutoStop/AUTO_STOP_TIMEOUT_MS, and the onRemoved
+ * listener below for the immediate tab-closed case) — without this,
+ * the relay's own stale-state TTL sweep never fires on its own here,
+ * since it explicitly skips clearing while this worker's producer
+ * WebSocket is still open (relay/src/server.ts), which it stays
+ * regardless of whether any RiftAtlas tab still exists.
+ *
+ * The content script's own explicit-clear mechanism (publisher.ts's
+ * stopPublishing) can't be reused directly here — it needs the live
+ * OverlayStatePublisher instance's own sequence/dedup state, which only
+ * ever lives in the (now-gone) content script's module scope. Instead
+ * this mirrors the exact same synthesis relay/src/server.ts's own
+ * TTL-sweep clear already performs: reuse the last known state's
+ * protocolVersion/sessionId/sourceViewport, empty the cards, and bump
+ * sequence by one — not a new class of message the rest of the system
+ * has to learn to handle. A later fresh session (new content script,
+ * new OverlayStatePublisher starting its own sequence over from 1) is
+ * already a normal, already-tolerated event for this system — the same
+ * as after any TTL-sweep-driven clear today.
+ */
+function maybeAutoStopOnGoneReceived(): void {
+  if (autoStoppedForCurrentGap) return;
+  if (!lastKnownState || lastKnownState.cards.length === 0) return;
+  autoStoppedForCurrentGap = true;
+  const cleared: OverlayState = { ...lastKnownState, cards: [], sequence: lastKnownState.sequence + 1, capturedAt: Date.now() };
+  lastKnownState = cleared;
+  send(cleared);
+}
+
 function scheduleReconnect(): void {
   if (reconnectTimer !== undefined) return;
   reconnectTimer = setTimeout(() => {
@@ -386,7 +431,11 @@ function openSocket(url: string): void {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "overlay-state") {
     const parsed = ProducerMessageSchema.safeParse(message);
-    if (parsed.success) send(parsed.data.payload);
+    if (parsed.success) {
+      lastKnownState = parsed.data.payload;
+      autoStoppedForCurrentGap = false;
+      send(parsed.data.payload);
+    }
     return false;
   }
 
@@ -457,7 +506,25 @@ void Promise.all([loadPersistedLinkState(), loadPersistedPublishingIntent()]).th
 // periodic refresh is the resilient catch-all for those transitions,
 // matching the same 2s cadence content/inventory.ts already polls
 // get-link-state/get-status at for its own UI.
-setInterval(updateBadge, 2000);
+setInterval(() => {
+  updateBadge();
+  if (isCurrentlyGoneForAutoStop(Date.now())) maybeAutoStopOnGoneReceived();
+}, 2000);
+
+// Immediate, unambiguous signal that RiftAtlas is genuinely gone — doesn't
+// wait out AUTO_STOP_TIMEOUT_MS at all, unlike the sustained-stale check
+// above (which exists for the messier case: the tab stays open but
+// navigates away from play.riftatlas.com without ever closing). Reuses
+// getLastKnownTabId() (already storage-backed, survives worker
+// suspension — see its own doc comment) rather than a plain module
+// variable, and specifically checks that the *closed* tab is the one
+// most recently heard from, so closing an old, already-inactive RiftAtlas
+// tab doesn't spuriously clear a still-healthy publish from a different one.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void getLastKnownTabId().then((lastKnownTabId) => {
+    if (tabId === lastKnownTabId) maybeAutoStopOnGoneReceived();
+  });
+});
 
 // Registered on every module load (fresh install, and every wake from
 // suspension) — chrome.alarms.create with an existing name simply

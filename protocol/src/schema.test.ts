@@ -16,6 +16,8 @@ const validState = {
       bounds: { x: 0, y: 0, width: 0.1, height: 0.1 },
       rotation: 0,
       landscape: false,
+      localWidth: 0.1,
+      localHeight: 0.1,
     },
   ],
 };
@@ -102,6 +104,17 @@ describe("OverlayStateSchema", () => {
       cards: [{ ...validState.cards[0], visibility: "public", cardId: "OGN-089", name: "Adaptatron" }],
     };
     expect(OverlayStateSchema.safeParse(withIdentity).success).toBe(true);
+  });
+
+  it("rejects a card missing localWidth/localHeight", () => {
+    const { localWidth: _localWidth, ...cardWithoutLocalWidth } = validState.cards[0]!;
+    const malformed = { ...validState, cards: [cardWithoutLocalWidth] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects a negative localWidth/localHeight", () => {
+    const malformed = { ...validState, cards: [{ ...validState.cards[0], localWidth: -0.1 }] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
   });
 });
 

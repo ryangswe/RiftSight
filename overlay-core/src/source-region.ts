@@ -78,3 +78,23 @@ export function mapBoundsToSourceRegion(cardBounds: NormalizedBounds, sourceRegi
     height: cardBounds.height * sourceRegion.height,
   };
 }
+
+export interface NormalizedSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Same per-axis scaling mapBoundsToSourceRegion applies to bounds, for a
+ * plain size (no x/y — sizes don't get the sourceRegion.x/y translation).
+ * Used alongside mapBoundsToSourceRegion for a card's true unrotated
+ * size (see protocol's localWidth/localHeight), so the box a hitbox is
+ * rotated at goes through the same broadcaster-calibrated mapping bounds
+ * already do.
+ */
+export function mapSizeToSourceRegion(size: NormalizedSize, sourceRegion: SourceRegion): NormalizedSize {
+  return {
+    width: size.width * sourceRegion.width,
+    height: size.height * sourceRegion.height,
+  };
+}

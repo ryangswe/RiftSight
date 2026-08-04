@@ -32,6 +32,8 @@ function toDetectionInput(detection: ReturnType<typeof detectCards>[number]): De
     zIndexHint: detection.zIndexHint,
     bounds: detection.bounds,
     landscape: detection.landscape,
+    localWidth: detection.localWidth,
+    localHeight: detection.localHeight,
   };
 }
 

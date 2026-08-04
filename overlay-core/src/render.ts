@@ -6,26 +6,50 @@ export interface HitboxStyle {
   width: string;
   height: string;
   zIndex: string;
+  /** CSS `transform` value, e.g. "rotate(8deg)" — omitted (undefined) whenever rotation is 0, so callers can skip setting it. */
+  transform: string | undefined;
+  /** Always "center" when transform is set — a rotation only reproduces the card's true shape when it pivots around the same center point `left`/`top`/`width`/`height` were computed from below. */
+  transformOrigin: string | undefined;
 }
 
 /**
  * Pure geometry mapping — no DOM mutation here so it's directly testable.
- * `bounds` is already the card's post-transform axis-aligned bounding box
- * (see protocol's coordinates.ts doc comment — it comes straight from
- * getBoundingClientRect() on the rotated card), so it's rendered directly
- * with no further CSS rotation: applying `rotate()` on top of an
- * already-rotated AABB would rotate it a second time. `card.rotation` is
- * intentionally not read here — it's retained on OverlayCard as metadata
- * (e.g. for debug tooling) but must not affect hitbox geometry.
+ * `bounds` is the card's post-transform axis-aligned bounding box (see
+ * protocol's coordinates.ts) — inflated relative to the card's true shape
+ * whenever it's rotated, but its *center* still always coincides with the
+ * true card's own center (a rigid rotation of a rectangle about any pivot
+ * still individually rotates that rectangle by the same net angle about
+ * its own center — see this milestone's plan for the fuller argument).
+ * `card.localWidth`/`localHeight` (already region-mapped by the caller,
+ * same as `card.bounds`) are the card's true unrotated size. Combining the
+ * AABB's center with the true size and a single `rotate()` reproduces the
+ * card's actual rotated shape — rotating `bounds` itself here (its own
+ * width/height) would double up the inflation already baked into it,
+ * which is exactly the bug an earlier version of this function avoided by
+ * disabling rotation entirely. `localWidth`/`localHeight` fall back to
+ * `bounds.width`/`height` when absent (older callers/fixtures) — with
+ * rotation 0 that's already correct, and non-zero rotation without a real
+ * local size is not a case any real caller produces.
  */
 export function computeHitboxStyle(card: OverlayCard): HitboxStyle {
-  const percent = boundsToCssPercent(card.bounds);
+  const localWidth = card.localWidth ?? card.bounds.width;
+  const localHeight = card.localHeight ?? card.bounds.height;
+  const centerX = card.bounds.x + card.bounds.width / 2;
+  const centerY = card.bounds.y + card.bounds.height / 2;
+  const percent = boundsToCssPercent({
+    x: centerX - localWidth / 2,
+    y: centerY - localHeight / 2,
+    width: localWidth,
+    height: localHeight,
+  });
   return {
     left: percent.left,
     top: percent.top,
     width: percent.width,
     height: percent.height,
     zIndex: card.zIndex !== undefined ? String(card.zIndex) : "0",
+    transform: card.rotation ? `rotate(${card.rotation}deg)` : undefined,
+    transformOrigin: card.rotation ? "center" : undefined,
   };
 }
 

@@ -21,6 +21,8 @@ function state(overrides: Partial<OverlayState> = {}): OverlayState {
         bounds: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
         rotation: 0,
         landscape: false,
+        localWidth: 0.1,
+        localHeight: 0.1,
       },
     ],
     ...overrides,

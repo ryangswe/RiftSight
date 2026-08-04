@@ -16,6 +16,8 @@ function baseDetection(overrides: Partial<DetectionInput> = {}): DetectionInput 
     zIndexHint: undefined,
     bounds: { x: 100, y: 100, width: 100, height: 100 },
     landscape: false,
+    localWidth: 100,
+    localHeight: 100,
     ...overrides,
   };
 }
@@ -87,5 +89,11 @@ describe("toOverlayCard", () => {
   it("returns null when bounds cannot be normalized", () => {
     const card = toOverlayCard(baseDetection({ bounds: { x: 0, y: 0, width: 0, height: 0 } }), viewport);
     expect(card).toBeNull();
+  });
+
+  it("normalizes localWidth/localHeight as a fraction of the viewport, same convention as bounds", () => {
+    const card = toOverlayCard(baseDetection({ localWidth: 150, localHeight: 250 }), viewport);
+    expect(card!.localWidth).toBeCloseTo(150 / viewport.width);
+    expect(card!.localHeight).toBeCloseTo(250 / viewport.height);
   });
 });

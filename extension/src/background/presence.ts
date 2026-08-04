@@ -22,6 +22,40 @@ export const HEARTBEAT_INTERVAL_MS = 5_000;
 /** No heartbeat for longer than this and a previously-known tab is considered stale — roughly 3x HEARTBEAT_INTERVAL_MS, tolerating a couple of missed beats (a suspended/waking service worker, a slow tab) before concluding the content script is actually gone, not just running a little behind. */
 export const STALE_TIMEOUT_MS = 15_000;
 
+/**
+ * How long a heartbeat can go missing before the relay connection is
+ * proactively told to stop publishing to viewers (see background.ts's
+ * maybeAutoStopOnGoneReceived) — distinct from, and deliberately much
+ * longer than, STALE_TIMEOUT_MS above. STALE_TIMEOUT_MS only ever drives a
+ * cheap, local popup-UI label; a false trigger here is visible to every
+ * viewer of the stream (a flash of the overlay clearing then needing to
+ * recover), so this stays conservative — long enough to ride out a
+ * routine service-worker suspend/wake or a brief heartbeat hiccup, short
+ * enough that viewers aren't staring at a stale board for many minutes
+ * after the streamer actually left. The manual Stop-publishing path
+ * already covers "the streamer knows they're leaving" instantly; this is
+ * only a fallback for "forgot to stop" — see isCurrentlyGoneForAutoStop's
+ * onRemoved counterpart in background.ts for the tab-closed case, which
+ * doesn't wait out this timeout at all.
+ */
+export const AUTO_STOP_TIMEOUT_MS = 120_000;
+
+/**
+ * Distinct from checking `presenceStatus(record, now) === "stale"` at a
+ * longer threshold: `record` being `undefined` means "no record has ever
+ * been recorded, or the tracked tab was removed" — which can briefly and
+ * legitimately happen right after an MV3 service-worker wakes from
+ * suspension, before the very next heartbeat lands (usually within
+ * HEARTBEAT_INTERVAL_MS). Treating "no record" the same as "record aged
+ * past the timeout" would make a routine worker wake look identical to a
+ * genuinely-gone tab and risk a false auto-stop. This only ever fires for
+ * a record that actually exists and has visibly aged past the timeout.
+ */
+export function isPresenceGoneForAutoStop(record: PresenceRecord | undefined, now: number): boolean {
+  if (!record) return false;
+  return now - record.lastHeartbeatAt > AUTO_STOP_TIMEOUT_MS;
+}
+
 export interface PresenceRecord {
   boardDetected: boolean;
   publicCardCount: number;

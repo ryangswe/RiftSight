@@ -20,6 +20,8 @@ export interface DetectionInput {
   zIndexHint: number | undefined;
   bounds: PixelBounds;
   landscape: boolean;
+  localWidth: number;
+  localHeight: number;
 }
 
 /**
@@ -55,5 +57,9 @@ export function toOverlayCard(
     rotation: detection.rotationDeg,
     zIndex: detection.zIndexHint,
     landscape: detection.landscape,
+    // Normalized the same way bounds' own width/height already are —
+    // a fraction of the viewport, not of `bounds` itself.
+    localWidth: detection.localWidth / viewport.width,
+    localHeight: detection.localHeight / viewport.height,
   };
 }

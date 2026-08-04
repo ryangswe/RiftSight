@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
 import type { OverlayCard } from "@riftsight/protocol";
-import { mapBoundsToSourceRegion } from "./source-region.js";
+import { mapBoundsToSourceRegion, mapSizeToSourceRegion } from "./source-region.js";
 import { computeHitboxStyle, computeTooltipPosition, hitboxClassName, hitboxLabel } from "./render.js";
 
 function card(overrides: Partial<OverlayCard> = {}): OverlayCard {
+  const bounds = overrides.bounds ?? { x: 0.25, y: 0.5, width: 0.1, height: 0.2 };
   return {
     instanceId: "card_1",
     zone: "hand",
     owner: "self",
     visibility: "public",
-    bounds: { x: 0.25, y: 0.5, width: 0.1, height: 0.2 },
+    bounds,
     rotation: 0,
     landscape: false,
+    // Defaults to the AABB's own size — with rotation 0 this makes the
+    // center-based geometry below reduce to exactly the old bounds-only
+    // output, so most existing assertions don't need to change.
+    localWidth: bounds.width,
+    localHeight: bounds.height,
     ...overrides,
   };
 }
@@ -25,9 +31,17 @@ describe("computeHitboxStyle", () => {
     expect(style.height).toBe("20%");
   });
 
-  it("never emits a transform field, regardless of rotation", () => {
-    for (const rotation of [0, 90, -90, 180]) {
-      expect(computeHitboxStyle(card({ rotation }))).not.toHaveProperty("transform");
+  it("omits transform/transformOrigin when rotation is 0", () => {
+    const style = computeHitboxStyle(card({ rotation: 0 }));
+    expect(style.transform).toBeUndefined();
+    expect(style.transformOrigin).toBeUndefined();
+  });
+
+  it("emits a rotate() transform, centered, whenever rotation is non-zero", () => {
+    for (const rotation of [90, -90, 180, 8]) {
+      const style = computeHitboxStyle(card({ rotation }));
+      expect(style.transform).toBe(`rotate(${rotation}deg)`);
+      expect(style.transformOrigin).toBe("center");
     }
   });
 
@@ -40,13 +54,16 @@ describe("computeHitboxStyle", () => {
   });
 });
 
-// Regression coverage for the double-rotation bug: `bounds` is already the
-// post-transform axis-aligned bounding box (getBoundingClientRect() on the
-// rotated card), so computeHitboxStyle must place the hitbox exactly at
-// those bounds regardless of `rotation` — at every rotation angle a card
-// might report, and at every edge of the source viewport where a
-// mis-rotated hitbox would be most visibly offset.
-describe("computeHitboxStyle — rotation must not affect placement, at any viewport edge", () => {
+// Regression coverage for the double-rotation bug, and its actual fix: a
+// rotated card's `bounds` is only the enclosing axis-aligned box
+// (getBoundingClientRect()), inflated relative to the card's true shape —
+// rotating that inflated box a second time was the original bug. The fix
+// is to use the AABB only for its *center* (which always coincides with
+// the true card's own center, regardless of rotation) combined with the
+// card's true unrotated size (localWidth/localHeight) and a single
+// rotate(). At rotation 0 this must still degrade to exactly bounds, at
+// every edge of the source viewport.
+describe("computeHitboxStyle — rotated geometry", () => {
   const edgeBounds: Record<string, OverlayCard["bounds"]> = {
     "left edge": { x: 0, y: 0.4, width: 0.08, height: 0.18 },
     "right edge": { x: 0.9, y: 0.4, width: 0.08, height: 0.18 },
@@ -57,26 +74,52 @@ describe("computeHitboxStyle — rotation must not affect placement, at any view
 
   for (const [edgeName, bounds] of Object.entries(edgeBounds)) {
     for (const rotation of rotations) {
-      it(`${edgeName}, rotation ${rotation}deg: style matches bounds exactly`, () => {
-        const upright = computeHitboxStyle(card({ bounds, rotation: 0 }));
-        const rotated = computeHitboxStyle(card({ bounds, rotation }));
-        // Same bounds must produce the same style no matter what rotation
-        // the card reports — proves rotation is genuinely ignored, not
-        // just absent from the output shape.
-        expect(rotated).toEqual(upright);
-        expect(rotated.left).toBe(`${bounds.x * 100}%`);
-        expect(rotated.top).toBe(`${bounds.y * 100}%`);
-        expect(rotated.width).toBe(`${bounds.width * 100}%`);
-        expect(rotated.height).toBe(`${bounds.height * 100}%`);
+      it(`${edgeName}, rotation ${rotation}deg: same-size local box matches bounds exactly`, () => {
+        // localWidth/localHeight equal to bounds' own size (the common
+        // case for an unrotated card, and true by construction whenever
+        // the AABB isn't inflated) must reproduce bounds exactly,
+        // regardless of rotation angle — center-based placement with a
+        // matching size is a no-op shift.
+        const style = computeHitboxStyle(card({ bounds, rotation, localWidth: bounds.width, localHeight: bounds.height }));
+        expect(style.left).toBe(`${bounds.x * 100}%`);
+        expect(style.top).toBe(`${bounds.y * 100}%`);
+        expect(style.width).toBe(`${bounds.width * 100}%`);
+        expect(style.height).toBe(`${bounds.height * 100}%`);
       });
     }
   }
+
+  it("preserves the AABB's center when the true local size differs from bounds (the inflated-AABB case)", () => {
+    // A rotated card's AABB is bigger than its true shape — simulate that
+    // by giving a local size smaller than bounds. The rendered box must
+    // still be centered on the same point bounds itself is centered on.
+    const bounds = { x: 0.3, y: 0.4, width: 0.14, height: 0.24 };
+    const localWidth = 0.1;
+    const localHeight = 0.2;
+    const style = computeHitboxStyle(card({ bounds, rotation: 8, localWidth, localHeight }));
+
+    const boundsCenterX = bounds.x + bounds.width / 2;
+    const boundsCenterY = bounds.y + bounds.height / 2;
+    const styleLeft = Number.parseFloat(style.left) / 100;
+    const styleTop = Number.parseFloat(style.top) / 100;
+    const styleWidth = Number.parseFloat(style.width) / 100;
+    const styleHeight = Number.parseFloat(style.height) / 100;
+
+    expect(styleLeft + styleWidth / 2).toBeCloseTo(boundsCenterX);
+    expect(styleTop + styleHeight / 2).toBeCloseTo(boundsCenterY);
+    expect(styleWidth).toBeCloseTo(localWidth);
+    expect(styleHeight).toBeCloseTo(localHeight);
+    expect(style.transform).toBe("rotate(8deg)");
+  });
 
   it("composes correctly through a non-full-frame source region for an edge card", () => {
     const rightEdgeBounds = { x: 0.9, y: 0.4, width: 0.08, height: 0.18 };
     const sourceRegion = { x: 0.1, y: 0.1, width: 0.5, height: 0.5 };
     const mapped = mapBoundsToSourceRegion(rightEdgeBounds, sourceRegion);
-    const style = computeHitboxStyle(card({ bounds: mapped, rotation: 90 }));
+    const mappedSize = mapSizeToSourceRegion({ width: rightEdgeBounds.width, height: rightEdgeBounds.height }, sourceRegion);
+    const style = computeHitboxStyle(
+      card({ bounds: mapped, rotation: 90, localWidth: mappedSize.width, localHeight: mappedSize.height })
+    );
     expect(style.left).toBe(`${(sourceRegion.x + rightEdgeBounds.x * sourceRegion.width) * 100}%`);
     expect(style.top).toBe(`${(sourceRegion.y + rightEdgeBounds.y * sourceRegion.height) * 100}%`);
     expect(style.width).toBe(`${rightEdgeBounds.width * sourceRegion.width * 100}%`);

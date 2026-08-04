@@ -17,6 +17,7 @@ import {
   hitboxClassName,
   isWaitingForHistory,
   mapBoundsToSourceRegion,
+  mapSizeToSourceRegion,
   tooltipContentFor,
   type SourceRegion,
 } from "@riftsight/overlay-core";
@@ -253,12 +254,15 @@ function renderHitboxes(): void {
     // read bounds, so the original `card` is still correct for those and
     // for the hover/focus handlers below.
     const mappedBounds = mapBoundsToSourceRegion(card.bounds, sourceRegion);
-    const style = computeHitboxStyle({ ...card, bounds: mappedBounds });
+    const mappedSize = mapSizeToSourceRegion({ width: card.localWidth, height: card.localHeight }, sourceRegion);
+    const style = computeHitboxStyle({ ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height });
     box.style.left = style.left;
     box.style.top = style.top;
     box.style.width = style.width;
     box.style.height = style.height;
     box.style.zIndex = style.zIndex;
+    box.style.transform = style.transform ?? "";
+    box.style.transformOrigin = style.transformOrigin ?? "";
 
     box.addEventListener("mouseenter", () => showTooltipFor(card, box));
     box.addEventListener("mouseleave", scheduleHideTooltip);

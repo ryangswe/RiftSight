@@ -4,7 +4,13 @@
 // same established convention: chrome.*-touching glue in this codebase is
 // thin enough that the pure logic it calls is what's actually tested).
 
-import { mostRecentPresenceRecord, presenceStatus, type PresenceRecord, type PresenceStatus } from "./presence.js";
+import {
+  isPresenceGoneForAutoStop,
+  mostRecentPresenceRecord,
+  presenceStatus,
+  type PresenceRecord,
+  type PresenceStatus,
+} from "./presence.js";
 
 const recordsByTab = new Map<number, PresenceRecord>();
 
@@ -14,6 +20,11 @@ export function recordHeartbeat(tabId: number, boardDetected: boolean, publicCar
 
 export function getCurrentPresenceStatus(now: number): PresenceStatus {
   return presenceStatus(mostRecentPresenceRecord(recordsByTab), now);
+}
+
+/** See presence.ts's isPresenceGoneForAutoStop/AUTO_STOP_TIMEOUT_MS doc comments for why this is keyed off record age, not "no record". */
+export function isCurrentlyGoneForAutoStop(now: number): boolean {
+  return isPresenceGoneForAutoStop(mostRecentPresenceRecord(recordsByTab), now);
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {

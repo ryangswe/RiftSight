@@ -207,6 +207,11 @@ function buildDetection(anchor: HTMLElement): CardDetection {
     landscape: anchor.getAttribute("data-preview-landscape") === "true",
     zIndexHint: parseZIndexHint(anchor),
     bounds: toPixelBounds(anchor),
+    // offsetWidth/offsetHeight are layout-space (border-box) dimensions,
+    // unaffected by any CSS transform on the anchor or an ancestor — the
+    // card's true unrotated size, unlike bounds' rotation-inflated AABB.
+    localWidth: anchor.offsetWidth,
+    localHeight: anchor.offsetHeight,
     element: anchor,
   };
 }

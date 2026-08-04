@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { mostRecentPresenceRecord, presenceStatus, STALE_TIMEOUT_MS, type PresenceRecord } from "./presence.js";
+import {
+  AUTO_STOP_TIMEOUT_MS,
+  isPresenceGoneForAutoStop,
+  mostRecentPresenceRecord,
+  presenceStatus,
+  STALE_TIMEOUT_MS,
+  type PresenceRecord,
+} from "./presence.js";
 
 describe("presenceStatus", () => {
   it("is no-riftatlas when no record has ever been seen", () => {
@@ -31,6 +38,32 @@ describe("presenceStatus", () => {
   it("recovers from stale back to active/present-no-board once a fresh record replaces it", () => {
     const fresh: PresenceRecord = { boardDetected: true, publicCardCount: 2, lastHeartbeatAt: 50_000 };
     expect(presenceStatus(fresh, 50_000)).toBe("active");
+  });
+});
+
+describe("isPresenceGoneForAutoStop", () => {
+  it("is false when no record exists — must not look identical to a genuinely-gone tab right after a service-worker wake", () => {
+    expect(isPresenceGoneForAutoStop(undefined, 1_000)).toBe(false);
+  });
+
+  it("is false for a record aged exactly at the timeout (not yet gone)", () => {
+    const record: PresenceRecord = { boardDetected: true, publicCardCount: 1, lastHeartbeatAt: 1_000 };
+    expect(isPresenceGoneForAutoStop(record, 1_000 + AUTO_STOP_TIMEOUT_MS)).toBe(false);
+  });
+
+  it("is false for a record well within the timeout, regardless of board state", () => {
+    const record: PresenceRecord = { boardDetected: false, publicCardCount: 0, lastHeartbeatAt: 1_000 };
+    expect(isPresenceGoneForAutoStop(record, 1_000 + AUTO_STOP_TIMEOUT_MS - 1)).toBe(false);
+  });
+
+  it("is true the instant a record ages past the timeout", () => {
+    const record: PresenceRecord = { boardDetected: true, publicCardCount: 5, lastHeartbeatAt: 1_000 };
+    expect(isPresenceGoneForAutoStop(record, 1_000 + AUTO_STOP_TIMEOUT_MS + 1)).toBe(true);
+  });
+
+  it("uses a materially longer threshold than STALE_TIMEOUT_MS — a record that's merely 'stale' for the popup UI must not be 'gone' for auto-stop purposes", () => {
+    const record: PresenceRecord = { boardDetected: true, publicCardCount: 1, lastHeartbeatAt: 1_000 };
+    expect(isPresenceGoneForAutoStop(record, 1_000 + STALE_TIMEOUT_MS + 1)).toBe(false);
   });
 });
 

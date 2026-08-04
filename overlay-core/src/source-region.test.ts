@@ -4,6 +4,7 @@ import {
   SOURCE_REGION_PRESETS,
   isValidSourceRegion,
   mapBoundsToSourceRegion,
+  mapSizeToSourceRegion,
   parseSourceRegion,
   type SourceRegion,
 } from "./source-region.js";
@@ -93,6 +94,30 @@ describe("mapBoundsToSourceRegion", () => {
     mapBoundsToSourceRegion(bounds, region);
     expect(bounds).toEqual(boundsCopy);
     expect(region).toEqual(regionCopy);
+  });
+});
+
+describe("mapSizeToSourceRegion", () => {
+  it("is an identity mapping for the full-frame region", () => {
+    const size = { width: 0.1, height: 0.15 };
+    expect(mapSizeToSourceRegion(size, FULL_FRAME_SOURCE_REGION)).toEqual(size);
+  });
+
+  it("scales each axis independently, with no x/y translation applied (unlike bounds)", () => {
+    const size = { width: 0.2, height: 0.4 };
+    const region: SourceRegion = { x: 0.3, y: 0.1, width: 0.5, height: 0.25 };
+    expect(mapSizeToSourceRegion(size, region)).toEqual({
+      width: 0.2 * 0.5,
+      height: 0.4 * 0.25,
+    });
+  });
+
+  it("applies the same per-axis scale factors mapBoundsToSourceRegion uses for width/height", () => {
+    const bounds = { x: 0.4, y: 0.4, width: 0.2, height: 0.3 };
+    const region = SOURCE_REGION_PRESETS.leftHalf;
+    const mappedBounds = mapBoundsToSourceRegion(bounds, region);
+    const mappedSize = mapSizeToSourceRegion({ width: bounds.width, height: bounds.height }, region);
+    expect(mappedSize).toEqual({ width: mappedBounds.width, height: mappedBounds.height });
   });
 });
 
