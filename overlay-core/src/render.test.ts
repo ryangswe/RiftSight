@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { OverlayCard } from "@riftsight/protocol";
 import { mapBoundsToSourceRegion, mapSizeToSourceRegion } from "./source-region.js";
-import { computeHitboxStyle, computeTooltipPosition, hitboxClassName, hitboxLabel } from "./render.js";
+import {
+  computeHitboxBox,
+  computeHitboxStyle,
+  computeOcclusionClips,
+  computeTooltipPosition,
+  formatOcclusionClipPath,
+  hitboxClassName,
+  hitboxLabel,
+  type OcclusionBox,
+} from "./render.js";
 
 function card(overrides: Partial<OverlayCard> = {}): OverlayCard {
   const bounds = overrides.bounds ?? { x: 0.25, y: 0.5, width: 0.1, height: 0.2 };
@@ -124,6 +133,147 @@ describe("computeHitboxStyle — rotated geometry", () => {
     expect(style.top).toBe(`${(sourceRegion.y + rightEdgeBounds.y * sourceRegion.height) * 100}%`);
     expect(style.width).toBe(`${rightEdgeBounds.width * sourceRegion.width * 100}%`);
     expect(style.height).toBe(`${rightEdgeBounds.height * sourceRegion.height * 100}%`);
+  });
+});
+
+describe("computeHitboxBox", () => {
+  it("returns the same numeric geometry computeHitboxStyle formats into percent strings", () => {
+    const bounds = { x: 0.3, y: 0.4, width: 0.14, height: 0.24 };
+    const testCard = card({ bounds, rotation: 8, localWidth: 0.1, localHeight: 0.2 });
+    const box = computeHitboxBox(testCard);
+    const style = computeHitboxStyle(testCard);
+    expect(`${box.left * 100}%`).toBe(style.left);
+    expect(`${box.top * 100}%`).toBe(style.top);
+    expect(`${box.width * 100}%`).toBe(style.width);
+    expect(`${box.height * 100}%`).toBe(style.height);
+  });
+});
+
+function occlusionBox(overrides: Partial<OcclusionBox> = {}): OcclusionBox {
+  return { left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0, ...overrides };
+}
+
+describe("computeOcclusionClips", () => {
+  it("is all zero for a single box with nothing above it", () => {
+    expect(computeOcclusionClips([occlusionBox()])).toEqual([{ top: 0, right: 0, bottom: 0, left: 0 }]);
+  });
+
+  it("is all zero when a higher box exists but doesn't overlap at all", () => {
+    const box = occlusionBox({ zIndex: 0 });
+    const farAway = occlusionBox({ left: 0.9, top: 0.9, zIndex: 1 });
+    const [clip] = computeOcclusionClips([box, farAway]);
+    expect(clip).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+  });
+
+  it("clips only the right edge for pure rightward encroachment (the hand-fan case)", () => {
+    // box spans x:[0.3,0.5]; higher box's left edge (0.45) cuts into that from the right.
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const encroacher = occlusionBox({ left: 0.45, top: 0.3, width: 0.2, height: 0.2, zIndex: 1 });
+    const [clip] = computeOcclusionClips([box, encroacher]);
+    expect(clip!.right).toBeCloseTo(1 - (0.45 - 0.3) / 0.2); // 0.25
+    expect(clip!.top).toBe(0);
+    expect(clip!.bottom).toBe(0);
+    expect(clip!.left).toBe(0);
+  });
+
+  it("clips only the left edge for pure leftward encroachment", () => {
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const encroacher = occlusionBox({ left: 0.15, top: 0.3, width: 0.2, height: 0.2, zIndex: 1 });
+    const [clip] = computeOcclusionClips([box, encroacher]);
+    expect(clip!.left).toBeCloseTo((0.35 - 0.3) / 0.2); // 0.25
+    expect(clip!.top).toBe(0);
+    expect(clip!.right).toBe(0);
+    expect(clip!.bottom).toBe(0);
+  });
+
+  it("clips only the top edge for a box crowding from above (vertical stacking, not a fan)", () => {
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const encroacher = occlusionBox({ left: 0.3, top: 0.15, width: 0.2, height: 0.2, zIndex: 1 });
+    const [clip] = computeOcclusionClips([box, encroacher]);
+    expect(clip!.top).toBeCloseTo((0.35 - 0.3) / 0.2); // 0.25
+    expect(clip!.right).toBe(0);
+    expect(clip!.bottom).toBe(0);
+    expect(clip!.left).toBe(0);
+  });
+
+  it("clips only the bottom edge for a box crowding from below", () => {
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const encroacher = occlusionBox({ left: 0.3, top: 0.45, width: 0.2, height: 0.2, zIndex: 1 });
+    const [clip] = computeOcclusionClips([box, encroacher]);
+    expect(clip!.bottom).toBeCloseTo(1 - (0.45 - 0.3) / 0.2); // 0.25
+    expect(clip!.top).toBe(0);
+    expect(clip!.right).toBe(0);
+    expect(clip!.left).toBe(0);
+  });
+
+  it("clips two adjacent edges independently when crowded by two separate higher boxes (base/battlefield case, not just a hand fan)", () => {
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const rightEncroacher = occlusionBox({ left: 0.45, top: 0.3, width: 0.2, height: 0.2, zIndex: 1 });
+    const topEncroacher = occlusionBox({ left: 0.3, top: 0.15, width: 0.2, height: 0.2, zIndex: 1 });
+    const [clip] = computeOcclusionClips([box, rightEncroacher, topEncroacher]);
+    expect(clip!.right).toBeCloseTo(0.25);
+    expect(clip!.top).toBeCloseTo(0.25);
+    expect(clip!.bottom).toBe(0);
+    expect(clip!.left).toBe(0);
+  });
+
+  it("fully clips a box completely spanned by a single higher box on one axis (not just partial one-sided encroachment)", () => {
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    // Starts before box's left edge and ends after box's right edge — the
+    // one-sided "other.left > box.left" / "otherRight < box.right" checks
+    // alone would never fire for this; needs its own branch.
+    const fullSpan = occlusionBox({ left: 0.2, top: 0.3, width: 0.5, height: 0.2, zIndex: 1 });
+    const [clip] = computeOcclusionClips([box, fullSpan]);
+    expect(clip!.left + clip!.right).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses the most restrictive (smallest exposed range) boundary when multiple higher boxes encroach from the same side", () => {
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.3, height: 0.2, zIndex: 0 }); // x:[0.3,0.6]
+    const weaker = occlusionBox({ left: 0.5, top: 0.3, width: 0.2, height: 0.2, zIndex: 1 });
+    const stronger = occlusionBox({ left: 0.4, top: 0.3, width: 0.3, height: 0.2, zIndex: 2 });
+    const [clip] = computeOcclusionClips([box, weaker, stronger]);
+    expect(clip!.right).toBeCloseTo(1 - (0.4 - 0.3) / 0.3); // stronger (0.4), not weaker (0.5)
+  });
+
+  it("never clips against a lower-stacked overlapping box", () => {
+    const box = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 1 });
+    const lower = occlusionBox({ left: 0.35, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const [clip] = computeOcclusionClips([box, lower]);
+    expect(clip).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+  });
+
+  it("breaks equal zIndex ties by array index — later index is on top, matching DOM/paint order", () => {
+    const first = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const second = occlusionBox({ left: 0.4, top: 0.3, width: 0.2, height: 0.2, zIndex: 0 });
+    const [firstClip, secondClip] = computeOcclusionClips([first, second]);
+    expect(firstClip!.right).toBeGreaterThan(0); // clipped by the later (on-top) box
+    expect(secondClip!.left).toBe(0); // never clipped by the earlier (underneath) box
+  });
+
+  it("returns zero, not NaN, for a zero-width or zero-height box even with an encroaching higher box", () => {
+    const zeroWidth = occlusionBox({ width: 0, zIndex: 0 });
+    const zeroHeight = occlusionBox({ height: 0, zIndex: 0 });
+    const encroacher = occlusionBox({ left: 0.3, top: 0.3, width: 0.2, height: 0.2, zIndex: 1 });
+    const [widthClip] = computeOcclusionClips([zeroWidth, encroacher]);
+    const [heightClip] = computeOcclusionClips([zeroHeight, encroacher]);
+    expect(widthClip!.left).toBe(0);
+    expect(widthClip!.right).toBe(0);
+    expect(heightClip!.top).toBe(0);
+    expect(heightClip!.bottom).toBe(0);
+  });
+});
+
+describe("formatOcclusionClipPath", () => {
+  it("returns an empty string when all four clips are zero", () => {
+    expect(formatOcclusionClipPath({ top: 0, right: 0, bottom: 0, left: 0 })).toBe("");
+  });
+
+  it("formats a non-zero clip as an inset() value, top/right/bottom/left order, percent values", () => {
+    expect(formatOcclusionClipPath({ top: 0, right: 0.25, bottom: 0, left: 0 })).toBe("inset(0% 25% 0% 0%)");
+  });
+
+  it("formats all four edges when multiple are clipped", () => {
+    expect(formatOcclusionClipPath({ top: 0.1, right: 0.2, bottom: 0.3, left: 0.4 })).toBe("inset(10% 20% 30% 40%)");
   });
 });
 

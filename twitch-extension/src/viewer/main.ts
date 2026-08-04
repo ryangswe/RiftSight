@@ -10,10 +10,13 @@
 import {
   FULL_FRAME_SOURCE_REGION,
   cardPopupContentFor,
+  computeHitboxBox,
   computeHitboxStyle,
+  computeOcclusionClips,
   computeTooltipMaxSize,
   computeTooltipPosition,
   delayedLiveTarget,
+  formatOcclusionClipPath,
   hitboxClassName,
   isWaitingForHistory,
   mapBoundsToSourceRegion,
@@ -240,22 +243,37 @@ function renderHitboxes(): void {
   stage.replaceChildren();
   if (!overlayEnabled) return; // broadcaster kill-switch — no hitboxes, no tooltip, nothing rendered
 
-  for (const card of latestCards) {
+  // Map RiftAtlas-relative bounds/size into the broadcaster-calibrated
+  // source region before computing CSS position — fresh view-model cards
+  // (never mutating the originals, which came straight out of the
+  // buffered OverlayState). hitboxClassName/tooltipContentFor never read
+  // bounds, so the original `card` objects are still correct for those
+  // and for the hover/focus handlers below.
+  const mappedCards = latestCards.map((card) => {
+    const mappedBounds = mapBoundsToSourceRegion(card.bounds, sourceRegion);
+    const mappedSize = mapSizeToSourceRegion({ width: card.localWidth, height: card.localHeight }, sourceRegion);
+    return { ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height };
+  });
+
+  // Occlusion clipping needs every card's box up front (it compares each
+  // card against every other on-top card), so this is computed as one
+  // pass over the whole frame before any DOM elements are built — not
+  // per-card inside the loop below.
+  const occlusionBoxes = mappedCards.map((card) => ({
+    ...computeHitboxBox(card),
+    zIndex: card.zIndex ?? 0,
+  }));
+  const occlusionClips = computeOcclusionClips(occlusionBoxes);
+
+  mappedCards.forEach((mappedCard, i) => {
+    const card = latestCards[i]!;
     const box = document.createElement("div");
     box.className = `${hitboxClassName(card)} ${debugOutlines ? "debug-outline" : ""}`.trim();
     box.tabIndex = 0;
     box.setAttribute("role", "button");
     box.setAttribute("aria-label", tooltipContentFor(card).lines.join(", "));
 
-    // Map RiftAtlas-relative bounds into the broadcaster-calibrated
-    // source region before computing CSS position — a fresh view-model
-    // object (never mutating `card`, which came straight out of the
-    // buffered OverlayState). hitboxClassName/tooltipContentFor never
-    // read bounds, so the original `card` is still correct for those and
-    // for the hover/focus handlers below.
-    const mappedBounds = mapBoundsToSourceRegion(card.bounds, sourceRegion);
-    const mappedSize = mapSizeToSourceRegion({ width: card.localWidth, height: card.localHeight }, sourceRegion);
-    const style = computeHitboxStyle({ ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height });
+    const style = computeHitboxStyle(mappedCard);
     box.style.left = style.left;
     box.style.top = style.top;
     box.style.width = style.width;
@@ -263,6 +281,7 @@ function renderHitboxes(): void {
     box.style.zIndex = style.zIndex;
     box.style.transform = style.transform ?? "";
     box.style.transformOrigin = style.transformOrigin ?? "";
+    box.style.clipPath = formatOcclusionClipPath(occlusionClips[i]!);
 
     box.addEventListener("mouseenter", () => showTooltipFor(card, box));
     box.addEventListener("mouseleave", scheduleHideTooltip);
@@ -270,7 +289,7 @@ function renderHitboxes(): void {
     box.addEventListener("blur", scheduleHideTooltip);
 
     stage.appendChild(box);
-  }
+  });
 }
 
 // This milestone still uses direct rectangular mapping only (no

@@ -6,8 +6,11 @@
 import {
   FULL_FRAME_SOURCE_REGION,
   SOURCE_REGION_PRESETS,
+  computeHitboxBox,
   computeHitboxStyle,
+  computeOcclusionClips,
   computeTooltipMaxSize,
+  formatOcclusionClipPath,
   hitboxClassName,
   isValidSourceRegion,
   mapBoundsToSourceRegion,
@@ -128,10 +131,18 @@ function renderRegionBox(region: SourceRegion): void {
 // — not a separate, potentially-drifting reimplementation.
 function renderPreviewHitboxes(): void {
   previewHitboxLayer.replaceChildren();
-  for (const card of previewCards) {
+
+  const mappedCards = previewCards.map((card) => {
     const mappedBounds = mapBoundsToSourceRegion(card.bounds, currentSourceRegion);
     const mappedSize = mapSizeToSourceRegion({ width: card.localWidth, height: card.localHeight }, currentSourceRegion);
-    const style = computeHitboxStyle({ ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height });
+    return { ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height };
+  });
+  const occlusionBoxes = mappedCards.map((card) => ({ ...computeHitboxBox(card), zIndex: card.zIndex ?? 0 }));
+  const occlusionClips = computeOcclusionClips(occlusionBoxes);
+
+  mappedCards.forEach((mappedCard, i) => {
+    const card = previewCards[i]!;
+    const style = computeHitboxStyle(mappedCard);
     const box = document.createElement("div");
     box.className = `${hitboxClassName(card)} ${debugOutlinesInput.checked ? "debug-outline" : ""}`.trim();
     box.style.left = style.left;
@@ -141,8 +152,9 @@ function renderPreviewHitboxes(): void {
     box.style.zIndex = style.zIndex;
     box.style.transform = style.transform ?? "";
     box.style.transformOrigin = style.transformOrigin ?? "";
+    box.style.clipPath = formatOcclusionClipPath(occlusionClips[i]!);
     previewHitboxLayer.appendChild(box);
-  }
+  });
 }
 
 function setSourceRegion(region: SourceRegion): void {
