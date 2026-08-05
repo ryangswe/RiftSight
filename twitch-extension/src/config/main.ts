@@ -95,6 +95,9 @@ const regionResetButton = requireElement<HTMLButtonElement>("region-reset-button
 const saveButton = requireElement<HTMLButtonElement>("save-button");
 const statusText = requireElement<HTMLElement>("status-text");
 const previewContainer = requireElement<HTMLElement>("calibration-preview");
+const previewBgImage = requireElement<HTMLImageElement>("calibration-bg-image");
+const bgFileInput = requireElement<HTMLInputElement>("bg-file-input");
+const bgClearButton = requireElement<HTMLButtonElement>("bg-clear-button");
 const previewRegionBox = requireElement<HTMLElement>("calibration-region");
 const previewResizeHandle = requireElement<HTMLElement>("calibration-resize-handle");
 const previewHitboxLayer = requireElement<HTMLElement>("calibration-hitboxes");
@@ -226,6 +229,57 @@ window.addEventListener("mousemove", (event) => {
 window.addEventListener("mouseup", () => {
   moveState = null;
   resizeState = null;
+});
+
+// A reference screenshot for visually aligning the region against the
+// broadcaster's real stream composition — purely a local sighting aid, kept
+// in-memory for this page load only (never part of OverlayConfig, never
+// sent anywhere). URL.createObjectURL keeps the file entirely in this tab.
+let referenceImageObjectUrl: string | null = null;
+
+function loadReferenceImage(file: File): void {
+  if (referenceImageObjectUrl) URL.revokeObjectURL(referenceImageObjectUrl);
+  referenceImageObjectUrl = URL.createObjectURL(file);
+  previewBgImage.src = referenceImageObjectUrl;
+  previewBgImage.classList.add("loaded");
+}
+
+function clearReferenceImage(): void {
+  bgFileInput.value = "";
+  if (referenceImageObjectUrl) {
+    URL.revokeObjectURL(referenceImageObjectUrl);
+    referenceImageObjectUrl = null;
+  }
+  previewBgImage.removeAttribute("src");
+  previewBgImage.classList.remove("loaded");
+}
+
+bgFileInput.addEventListener("change", () => {
+  const file = bgFileInput.files?.[0];
+  if (file) loadReferenceImage(file);
+});
+bgClearButton.addEventListener("click", clearReferenceImage);
+
+previewContainer.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  previewContainer.classList.add("drag-over");
+});
+previewContainer.addEventListener("dragleave", () => {
+  previewContainer.classList.remove("drag-over");
+});
+previewContainer.addEventListener("drop", (event) => {
+  event.preventDefault();
+  previewContainer.classList.remove("drag-over");
+  const file = Array.from(event.dataTransfer?.files ?? []).find((f) => f.type.startsWith("image/"));
+  if (file) loadReferenceImage(file);
+});
+
+// Clipboard paste (e.g. a screenshot copied straight from an OS screenshot
+// tool) — global on the page since there's no rich-text field here for a
+// paste to conflict with; ignored entirely when the clipboard has no image.
+window.addEventListener("paste", (event) => {
+  const file = Array.from(event.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
+  if (file) loadReferenceImage(file);
 });
 
 debugOutlinesInput.addEventListener("change", renderPreviewHitboxes);

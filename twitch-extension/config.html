@@ -19,6 +19,20 @@
         overflow: hidden;
         margin: 8px 0;
       }
+      #calibration-bg-image {
+        display: none;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      #calibration-bg-image.loaded {
+        display: block;
+      }
+      #calibration-preview.drag-over {
+        border-color: #6cf;
+      }
       #calibration-hitboxes {
         position: absolute;
         inset: 0;
@@ -67,7 +81,7 @@
       <button type="button" data-delay-preset="5000">5s</button>
       <button type="button" data-delay-preset="10000">10s</button>
     </label>
-    <label><input id="debug-outlines-input" type="checkbox" /> Debug outlines enabled (visible to all viewers — use for your own testing only)</label>
+    <label><input id="debug-outlines-input" type="checkbox" /> Debug outlines enabled (visible to all viewers — for a final on-stream check, not required for calibration itself)</label>
     <label>
       Source aspect ratio (optional, e.g. 1.778 for 16:9 — leave blank to use each state's own reported viewport):
       <input id="aspect-ratio-input" type="text" size="8" />
@@ -91,8 +105,36 @@
 
     <h3>Source-region calibration</h3>
     <p style="max-width: 520px; color: #aab;">
-      Where RiftAtlas sits within your final stream canvas, as a rectangle normalized 0–1. Direct rectangular mapping only —
-      select the exact rectangle RiftAtlas is displayed in; no automatic cropping or stretching correction.
+      If RiftAtlas fills your entire stream canvas, leave this as <strong>Full frame</strong> — no calibration needed. If it
+      only occupies part of the frame, drop in a screenshot of your actual stream output below and drag the region onto
+      where RiftAtlas actually appears.
+    </p>
+    <label>
+      Presets:
+      <button type="button" data-region-preset="fullFrame">Full frame</button>
+      <button type="button" data-region-preset="leftHalf">Left half</button>
+      <button type="button" data-region-preset="rightHalf">Right half</button>
+      <button type="button" data-region-preset="centered">Centered</button>
+    </label>
+    <label>
+      Reference screenshot (stays in your browser only — never uploaded or saved):
+      <input id="bg-file-input" type="file" accept="image/*" />
+      <button id="bg-clear-button" type="button">Clear</button>
+      — or drag one onto the preview below, or paste from your clipboard.
+    </label>
+    <p style="max-width: 480px; color: #aab;">
+      Preview (16:9) — drag the region to move it, drag the corner handle to resize. Shows card hitboxes from the latest live
+      state when available, or example cards otherwise.
+    </p>
+    <div id="calibration-preview">
+      <img id="calibration-bg-image" alt="" />
+      <div id="calibration-hitboxes"></div>
+      <div id="calibration-region">
+        <div id="calibration-resize-handle"></div>
+      </div>
+    </div>
+    <p style="max-width: 480px; color: #888; font-size: 12px;">
+      Advanced — exact values (kept in sync with the drag/resize above):
     </p>
     <label>
       x: <input id="region-x-input" type="number" min="0" max="1" step="0.01" value="0" />
@@ -101,23 +143,6 @@
       height: <input id="region-height-input" type="number" min="0" max="1" step="0.01" value="1" />
       <button id="region-reset-button" type="button">Reset to full frame</button>
     </label>
-    <label>
-      Presets:
-      <button type="button" data-region-preset="fullFrame">Full frame</button>
-      <button type="button" data-region-preset="leftHalf">Left half</button>
-      <button type="button" data-region-preset="rightHalf">Right half</button>
-      <button type="button" data-region-preset="centered">Centered</button>
-    </label>
-    <p style="max-width: 480px; color: #aab;">
-      Preview (16:9) — drag the region to move it, drag the corner handle to resize. Shows card hitboxes from the latest live
-      state when available, or example cards otherwise.
-    </p>
-    <div id="calibration-preview">
-      <div id="calibration-hitboxes"></div>
-      <div id="calibration-region">
-        <div id="calibration-resize-handle"></div>
-      </div>
-    </div>
 
     <button id="save-button" type="button" disabled>Save</button>
     <span id="status-text"></span>

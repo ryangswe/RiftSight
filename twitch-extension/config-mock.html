@@ -24,6 +24,20 @@
         overflow: hidden;
         margin: 8px 0;
       }
+      #calibration-bg-image {
+        display: none;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      #calibration-bg-image.loaded {
+        display: block;
+      }
+      #calibration-preview.drag-over {
+        border-color: #6cf;
+      }
       #calibration-hitboxes {
         position: absolute;
         inset: 0;
@@ -77,15 +91,24 @@
       Source aspect ratio (optional, e.g. 1.778 for 16:9):
       <input id="aspect-ratio-input" type="text" size="8" />
     </label>
+    <label>
+      Card hover preview size: <input id="tooltip-scale-input" type="range" min="0.5" max="2" step="0.1" value="1" />
+      <span id="tooltip-scale-readout">1.0x</span>
+    </label>
+    <div style="display: flex; align-items: flex-end; gap: 16px; margin: 4px 0 10px;">
+      <div>
+        <div style="font-size: 11px; color: #999; margin-bottom: 2px;">Most cards</div>
+        <div id="tooltip-preview-portrait" style="background: #111; border: 1px solid #444; border-radius: 4px"></div>
+        <div id="tooltip-preview-portrait-dims" style="font-size: 11px; color: #9be89b; margin-top: 2px;"></div>
+      </div>
+      <div>
+        <div style="font-size: 11px; color: #999; margin-bottom: 2px;">Battlefield-type cards</div>
+        <div id="tooltip-preview-landscape" style="background: #111; border: 1px solid #444; border-radius: 4px"></div>
+        <div id="tooltip-preview-landscape-dims" style="font-size: 11px; color: #9be89b; margin-top: 2px;"></div>
+      </div>
+    </div>
 
     <h3>Source-region calibration</h3>
-    <label>
-      x: <input id="region-x-input" type="number" min="0" max="1" step="0.01" value="0" />
-      y: <input id="region-y-input" type="number" min="0" max="1" step="0.01" value="0" />
-      width: <input id="region-width-input" type="number" min="0" max="1" step="0.01" value="1" />
-      height: <input id="region-height-input" type="number" min="0" max="1" step="0.01" value="1" />
-      <button id="region-reset-button" type="button">Reset to full frame</button>
-    </label>
     <label>
       Presets:
       <button type="button" data-region-preset="fullFrame">Full frame</button>
@@ -93,12 +116,26 @@
       <button type="button" data-region-preset="rightHalf">Right half</button>
       <button type="button" data-region-preset="centered">Centered</button>
     </label>
+    <label>
+      Reference screenshot (stays in your browser only):
+      <input id="bg-file-input" type="file" accept="image/*" />
+      <button id="bg-clear-button" type="button">Clear</button>
+      — or drag one onto the preview, or paste from your clipboard.
+    </label>
     <div id="calibration-preview">
+      <img id="calibration-bg-image" alt="" />
       <div id="calibration-hitboxes"></div>
       <div id="calibration-region">
         <div id="calibration-resize-handle"></div>
       </div>
     </div>
+    <label>
+      x: <input id="region-x-input" type="number" min="0" max="1" step="0.01" value="0" />
+      y: <input id="region-y-input" type="number" min="0" max="1" step="0.01" value="0" />
+      width: <input id="region-width-input" type="number" min="0" max="1" step="0.01" value="1" />
+      height: <input id="region-height-input" type="number" min="0" max="1" step="0.01" value="1" />
+      <button id="region-reset-button" type="button">Reset to full frame</button>
+    </label>
 
     <button id="save-button" type="button">Save</button>
     <span id="status-text"></span>
