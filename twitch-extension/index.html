@@ -50,12 +50,14 @@
         inset: 0;
         pointer-events: none;
       }
+      /* Visualization only (debug-outline mode) — mirrors viewer.html's
+         identical comment: the stage-level pointer resolver is the sole
+         hover source now, these never receive pointer events. */
       .hitbox {
         position: absolute;
         box-sizing: border-box;
         border: 1px solid transparent;
-        pointer-events: auto;
-        cursor: pointer;
+        pointer-events: none;
       }
       .hitbox.debug-outline {
         border-color: rgba(102, 255, 102, 0.6);
@@ -98,6 +100,24 @@
         padding: 4px 8px;
         color: #9fdf9f;
         font-size: 11px;
+      }
+      /* Mirrors viewer.html's identical element — see its own comment. */
+      #pointer-diagnostics {
+        position: absolute;
+        bottom: 8px;
+        left: 8px;
+        z-index: 1000;
+        display: none;
+        background: rgba(17, 17, 17, 0.85);
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 4px 8px;
+        pointer-events: none;
+        max-width: 480px;
+        white-space: pre-line;
+        font-family: monospace;
+        font-size: 10px;
+        color: #9fdf9f;
       }
       #dev-panel {
         position: fixed;
@@ -168,6 +188,7 @@
     </div>
     <img id="mock-bg-image" alt="" />
     <video id="mock-bg-video" muted playsinline loop></video>
+    <div id="pointer-diagnostics"></div>
     <div id="overlay-stage"></div>
     <div id="tooltip"></div>
     <script src="dist/viewer/main.js"></script>

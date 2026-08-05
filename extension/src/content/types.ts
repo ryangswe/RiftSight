@@ -20,12 +20,14 @@ export type DropZone =
 export type Owner = "self" | "opponent" | "unknown";
 
 /**
- * "public" means we positively confirmed (via hit-testing, not just DOM
- * order) that a non-cardback face is the one actually rendered right now.
- * Anything else is "hidden" or "unknown" — and in both of those cases
- * cardId/imageUrl MUST be undefined. See card-detector.ts's module header:
- * every card slot renders both faces in the DOM regardless of which is
- * visible, so this classification is load-bearing, not cosmetic.
+ * "public" means we positively confirmed — by reading the card's own
+ * shared 3D-flip container's `transform` (see face-transform.ts), not
+ * just DOM order — that the front face is the one actually rendered
+ * right now. Anything else is "hidden" or "unknown" — and in both of
+ * those cases cardId/imageUrl MUST be undefined. See card-detector.ts's
+ * module header: every card slot renders both faces in the DOM
+ * regardless of which is visible, so this classification is
+ * load-bearing, not cosmetic.
  */
 export type Visibility = "public" | "hidden" | "unknown";
 
@@ -48,10 +50,22 @@ export interface CardDetection {
   visibility: Visibility;
   dropZone: DropZone;
   owner: Owner;
-  /** RiftAtlas's own rotation value (data-preview-rotation), in degrees. */
+  /**
+   * The card's net rotation, in degrees — resolved from the actual CSS
+   * transform on the anchor or a nearby ancestor (see rotation.ts), not
+   * from data-preview-rotation: that attribute was confirmed empirically
+   * to stay "0" even on visibly rotated cards, so it governs something
+   * else (likely the hover-preview panel's own orientation) rather than
+   * the card's live board transform.
+   */
   rotationDeg: number;
   landscape: boolean;
-  /** Computed z-index, when RiftAtlas sets one explicitly (not "auto"). Not identity-sensitive — present regardless of visibility. */
+  /**
+   * Real z-index, resolved from the anchor or a nearby ancestor (see
+   * card-detector.ts's resolveZIndex) — RiftAtlas sets this on the same
+   * ancestor rotationDeg comes from, not the anchor itself. Not
+   * identity-sensitive — present regardless of visibility.
+   */
   zIndexHint: number | undefined;
   bounds: PixelBounds;
   /**

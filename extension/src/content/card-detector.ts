@@ -29,11 +29,22 @@
 // project's "must not expose hidden card identities" requirement. That is
 // likely a latent data-exposure issue in RiftAtlas itself (worth reporting
 // upstream), but regardless, this module must fail closed: cardId/imageUrl
-// are only ever populated when resolveVisibleFace() has positively
-// confirmed — via real hit-testing, not DOM order — that a non-cardback
-// face is the one actually being rendered right now. See Visibility's doc
-// comment in types.ts.
+// are only ever populated when classifyCardVisibility() has positively
+// confirmed which face is actually rendered right now.
+//
+// ALSO CONFIRMED via live DevTools inspection: the two face images are each
+// wrapped in a `backface-visibility: hidden` element, and those two wrapper
+// siblings share one `transform-style: preserve-3d` parent. That shared
+// parent's own `transform` — toggled between an identity matrix and a
+// rotateY(180deg) matrix — is RiftAtlas's actual flip state (see
+// face-transform.ts for the matrix math). Reading that one CSS property is
+// a complete, occlusion-independent replacement for the pixel-sampling this
+// module used previously: it depends only on the card's own two children,
+// never on what a different, overlapping card is drawn on top of. Verified
+// live to agree with the old sampling approach on 14 real face-up cards and
+// one genuinely face-down card, with zero disagreements.
 
+import { classifyFaceFacing, type FaceFacing } from "./face-transform.js";
 import { resolveElementRotationDeg } from "./rotation.js";
 import type { CardDetection, DropZone, Owner, PixelBounds, Visibility } from "./types.js";
 
@@ -81,39 +92,6 @@ function toPixelBounds(el: Element): PixelBounds {
 
 function imageSrc(img: HTMLImageElement): string {
   return img.currentSrc || img.src;
-}
-
-/**
- * Determines which face — front art or cardback — is actually rendered
- * right now, by asking the browser what's really on screen at the card's
- * center point instead of guessing at whatever CSS flip mechanism RiftAtlas
- * uses. Returns undefined (unresolved) rather than guessing whenever we
- * can't be sure, e.g. the slot is scrolled off-screen.
- *
- * Also returns undefined whenever the card is currently under the mouse.
- * RiftAtlas appears to let the owning player hover a face-down card to peek
- * at it — a reasonable in-client convenience for them, but that reveal must
- * never leak into what we report as "public," regardless of whose card it
- * is: this data ultimately feeds a viewer/overlay a remote audience sees,
- * not just the local player. This is mechanism-agnostic (works no matter
- * how RiftAtlas implements the peek) at the cost of a harmless transient
- * "unknown" blip on already-public cards while they happen to be hovered —
- * the next debounced re-scan corrects it once the mouse moves on.
- */
-function resolveVisibleFace(anchor: Element, faces: HTMLImageElement[]): HTMLImageElement | undefined {
-  if (anchor.matches(":hover")) return undefined;
-  if (faces.length === 0) return undefined;
-  if (faces.length === 1) return faces[0];
-
-  const rect = anchor.getBoundingClientRect();
-  const cx = rect.x + rect.width / 2;
-  const cy = rect.y + rect.height / 2;
-  if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return undefined;
-
-  const hit = document.elementFromPoint(cx, cy);
-  if (!hit) return undefined;
-
-  return faces.find((img) => img === hit || img.contains(hit) || hit.contains(img));
 }
 
 function parseCardId(imageUrl: string): string | undefined {
@@ -166,33 +144,144 @@ function resolveRotation(anchor: Element): number {
   return 0;
 }
 
-// Not identity-sensitive (it's a rendering hint, not card data), so this is
-// read regardless of visibility — unlike cardId/name/imageUrl below.
-function parseZIndexHint(el: Element): number | undefined {
-  const raw = getComputedStyle(el).zIndex;
-  if (raw === "auto") return undefined;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isNaN(parsed) ? undefined : parsed;
+/**
+ * Searches outward from `anchor` — the anchor itself, then each ancestor in
+ * turn, up to the same bound as resolveRotation above — for the first
+ * element that actually carries a real (non-"auto") z-index. Not
+ * identity-sensitive (it's a rendering hint, not card data), so this is
+ * read regardless of visibility — unlike cardId/name/imageUrl below.
+ *
+ * CONFIRMED via live capture: RiftAtlas sets its real, meaningful z-index
+ * on an ancestor — the same "position-transition wrapper" where rotation
+ * itself is also found (both observed at the exact same depth: 1 for a
+ * hand-fan card, 2 for a base-zone unit) — never on the anchor itself,
+ * which always reports "auto". Reading only the anchor's own z-index (the
+ * old behavior) therefore always returned undefined for every hand/base
+ * card, silently forcing the viewer's stack-order comparison to fall back
+ * to array order for all of them. That fallback happened to coincide with
+ * reality for hand (real z-index there also increases left-to-right, so
+ * the rightmost card is genuinely on top) but was exactly inverted for
+ * base zone, where real z-index *decreases* left-to-right — the leftmost
+ * card is on top, the rightmost is on the bottom of the stack — which is
+ * why base-zone hover was so much more broken than hand's.
+ */
+function resolveZIndex(anchor: Element): number | undefined {
+  let current: Element | null = anchor;
+  let depth = 0;
+  while (current && depth <= MAX_ROTATION_SEARCH_DEPTH) {
+    const raw = getComputedStyle(current).zIndex;
+    if (raw !== "auto") {
+      const parsed = Number.parseInt(raw, 10);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+    current = current.parentElement;
+    depth++;
+  }
+  return undefined;
+}
+
+interface VisibilityClassification {
+  visibility: Visibility;
+  /** The specific front-face <img> to read cardId/name/imageUrl from — only set when visibility is "public". */
+  visibleFace: HTMLImageElement | undefined;
+}
+
+/**
+ * Walks upward from a face `<img>` to the nearest ancestor with computed
+ * `backface-visibility: hidden` — the per-face 3D-flip wrapper (see
+ * face-transform.ts's module header). Matched by the actual computed CSS
+ * property rather than a specific class name, since that property is
+ * what RiftAtlas's own flip effect structurally depends on to work at
+ * all, and so is far less likely to silently change than an internal
+ * utility-class name would be.
+ */
+function findBackfaceHiddenAncestor(el: Element, maxHops = 6): Element | undefined {
+  let current: Element | null = el;
+  for (let depth = 0; depth <= maxHops && current; depth++) {
+    if (getComputedStyle(current).backfaceVisibility === "hidden") return current;
+    current = current.parentElement;
+  }
+  return undefined;
+}
+
+/**
+ * Resolves which face is toward the camera by reading the shared
+ * preserve-3d parent's own `transform` — see this module's header and
+ * face-transform.ts. Returns "unsupported" (never guesses) whenever the
+ * expected structure isn't found: either wrapper missing, or the two
+ * wrappers don't share a single parent.
+ */
+function resolveFaceFacing(frontFace: HTMLImageElement, backFace: HTMLImageElement): FaceFacing {
+  const frontWrapper = findBackfaceHiddenAncestor(frontFace);
+  const backWrapper = findBackfaceHiddenAncestor(backFace);
+  if (!frontWrapper || !backWrapper) return "unsupported";
+
+  const parent = frontWrapper.parentElement;
+  if (!parent || parent !== backWrapper.parentElement) return "unsupported";
+
+  return classifyFaceFacing(getComputedStyle(parent).transform);
+}
+
+/**
+ * Determines which face — front art or cardback — is actually rendered
+ * right now, by reading the shared 3D-flip container's own `transform`
+ * (see face-transform.ts) rather than sampling pixels: this depends only
+ * on the card's own two children, never on what a different, overlapping
+ * card is drawn on top of, so a mostly-covered-but-genuinely-face-up card
+ * in a dense hand is no longer at risk of falling to "unknown" purely
+ * because a neighbor covers most of its area.
+ *
+ * Returns "unknown" (no visibleFace) whenever the evidence is anything
+ * other than a clean front/back verdict — a mid-flip-animation frame, a
+ * missing wrapper, or a structure this module doesn't recognize — never
+ * guesses "public".
+ *
+ * Also returns "unknown" whenever the card is currently under the mouse.
+ * RiftAtlas appears to let the owning player hover a face-down card to
+ * peek at it — a reasonable in-client convenience for them, but that
+ * reveal must never leak into what we report as "public," regardless of
+ * whose card it is: this data ultimately feeds a viewer/overlay a remote
+ * audience sees, not just the local player. This is mechanism-agnostic
+ * (works no matter how RiftAtlas implements the peek) at the cost of a
+ * harmless transient "unknown" blip on already-public cards while
+ * they're hovered — the next debounced re-scan corrects it once the
+ * mouse moves on.
+ */
+function classifyCardVisibility(anchor: HTMLElement, faces: HTMLImageElement[]): VisibilityClassification {
+  if (anchor.matches(":hover")) return { visibility: "unknown", visibleFace: undefined };
+  if (faces.length === 0) return { visibility: "unknown", visibleFace: undefined };
+
+  // Only one face element exists at all (no dual front/cardback flip
+  // structure for this card type) — nothing to disambiguate.
+  if (faces.length === 1) {
+    const only = faces[0]!;
+    const isCardback = CARDBACK_IMAGE_PATTERN.test(imageSrc(only));
+    return { visibility: isCardback ? "hidden" : "public", visibleFace: isCardback ? undefined : only };
+  }
+
+  const frontFace = faces.find((img) => !CARDBACK_IMAGE_PATTERN.test(imageSrc(img)));
+  const backFace = faces.find((img) => CARDBACK_IMAGE_PATTERN.test(imageSrc(img)));
+  if (!frontFace || !backFace) return { visibility: "unknown", visibleFace: undefined };
+
+  const facing = resolveFaceFacing(frontFace, backFace);
+  if (facing === "front") return { visibility: "public", visibleFace: frontFace };
+  if (facing === "back") return { visibility: "hidden", visibleFace: undefined };
+  return { visibility: "unknown", visibleFace: undefined }; // "intermediate" or "unsupported"
 }
 
 function buildDetection(anchor: HTMLElement): CardDetection {
   const faces = Array.from(anchor.querySelectorAll<HTMLImageElement>("img[src]"));
-  const visibleFace = resolveVisibleFace(anchor, faces);
+  const rotationDeg = resolveRotation(anchor);
+  const { visibility, visibleFace } = classifyCardVisibility(anchor, faces);
 
-  let visibility: Visibility = "unknown";
   let cardId: string | undefined;
   let name: string | undefined;
   let imageUrl: string | undefined;
-  if (visibleFace) {
+  if (visibility === "public" && visibleFace) {
     const src = imageSrc(visibleFace);
-    if (CARDBACK_IMAGE_PATTERN.test(src)) {
-      visibility = "hidden";
-    } else {
-      visibility = "public";
-      imageUrl = src;
-      cardId = parseCardId(src);
-      name = visibleFace.alt.trim() || undefined;
-    }
+    imageUrl = src;
+    cardId = parseCardId(src);
+    name = visibleFace.alt.trim() || undefined;
   }
 
   return {
@@ -203,9 +292,9 @@ function buildDetection(anchor: HTMLElement): CardDetection {
     visibility,
     dropZone: toDropZone(anchor.getAttribute("data-drop-zone")),
     owner: nearestOwner(anchor),
-    rotationDeg: resolveRotation(anchor),
+    rotationDeg,
     landscape: anchor.getAttribute("data-preview-landscape") === "true",
-    zIndexHint: parseZIndexHint(anchor),
+    zIndexHint: resolveZIndex(anchor),
     bounds: toPixelBounds(anchor),
     // offsetWidth/offsetHeight are layout-space (border-box) dimensions,
     // unaffected by any CSS transform on the anchor or an ancestor — the
