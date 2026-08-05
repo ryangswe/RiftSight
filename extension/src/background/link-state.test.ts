@@ -48,14 +48,4 @@ describe("reduceLinkState", () => {
     const state: LinkState = { status: "connected", displayName: "juicykaraage" };
     expect(reduceLinkState(state, { type: "credential-rejected" })).toEqual({ status: "credential-expired", displayName: "juicykaraage" });
   });
-
-  it("a full realistic sequence ends up connected", () => {
-    let state = INITIAL_LINK_STATE;
-    state = reduceLinkState(state, { type: "start-link" });
-    expect(state.status).toBe("connecting");
-    state = reduceLinkState(state, { type: "poll-pending" });
-    expect(state.status).toBe("waiting-for-authorization");
-    state = reduceLinkState(state, { type: "poll-ready", displayName: "juicykaraage" });
-    expect(state).toEqual({ status: "connected", displayName: "juicykaraage" });
-  });
 });

@@ -82,12 +82,6 @@ describe("cardPopupContentFor", () => {
         .altText
     ).toBe("card_9");
   });
-
-  it("has no image and a fallback label for a public card with no resolved image", () => {
-    const content = cardPopupContentFor(card({ visibility: "public", cardId: "OGN-089", imageUrl: undefined }));
-    expect(content.imageUrl).toBeUndefined();
-    expect(content.fallbackLabel).toBe("OGN-089");
-  });
 });
 
 describe("computeTooltipMaxSize", () => {

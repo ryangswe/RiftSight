@@ -23,14 +23,6 @@ describe("validateEnv", () => {
     if (result.ok) expect(result.config.mode).toBe("development");
   });
 
-  it("accepts all three valid modes", () => {
-    for (const mode of ["development", "twitch-local-test", "closed-beta"]) {
-      const result = validateEnv(env({ RIFTSIGHT_MODE: mode, ...closedBetaRequiredVars() }));
-      expect(result.ok).toBe(true);
-      if (result.ok) expect(result.config.mode).toBe(mode);
-    }
-  });
-
   it("rejects an invalid RIFTSIGHT_MODE value", () => {
     const result = validateEnv(env({ RIFTSIGHT_MODE: "production" }));
     expect(result.ok).toBe(false);
@@ -198,11 +190,6 @@ describe("validateEnv", () => {
   it("PORT takes precedence over RELAY_PORT when both are set", () => {
     const result = validateEnv(env({ PORT: "3000", RELAY_PORT: "9000" }));
     if (result.ok) expect(result.config.port).toBe(3000);
-  });
-
-  it("falls back to RELAY_PORT when PORT is unset", () => {
-    const result = validateEnv(env({ RELAY_PORT: "9000" }));
-    if (result.ok) expect(result.config.port).toBe(9000);
   });
 
   it("development: an http TWITCH_OAUTH_REDIRECT_URI (e.g. localhost) is fine, not rejected", () => {

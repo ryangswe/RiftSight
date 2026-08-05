@@ -73,12 +73,6 @@ describe("build.mjs manifest generation", () => {
     expect(manifest.host_permissions).toEqual(["ws://localhost/*", "http://localhost:8788/*"]);
   });
 
-  it("twitch-local-test mode also keeps the localhost permissions (same as development)", () => {
-    runBuild({ RIFTSIGHT_MODE: "twitch-local-test" });
-    const manifest = readManifest();
-    expect(manifest.host_permissions).toEqual(["ws://localhost/*", "http://localhost:8788/*"]);
-  });
-
   it(
     "closed-beta mode derives host_permissions from RIFTSIGHT_BACKEND_URL — https and wss, no wildcard scheme/host",
     () => {

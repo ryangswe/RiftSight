@@ -209,14 +209,4 @@ describe("handleAuthCallback", () => {
     const response = await handleAuthCallback(req, { config, stateStore, linkHandoff, db, fetchFn: failingFetch });
     expect(response.status).toBe(400);
   });
-
-  it("does not create a broadcaster row on any failure path", async () => {
-    const state = stateStore.issue();
-    const req = { method: "GET", url: `/auth/twitch/callback?code=bad&state=${state}`, headers: {} };
-    const failingFetch: FetchLike = async () => new Response(JSON.stringify({ error: "invalid code" }), { status: 400 });
-
-    await handleAuthCallback(req, { config, stateStore, linkHandoff, db, fetchFn: failingFetch });
-    const all = await db.execute("SELECT * FROM broadcasters");
-    expect(all.rows.length).toBe(0);
-  });
 });

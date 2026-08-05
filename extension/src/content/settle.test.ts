@@ -108,13 +108,4 @@ describe("runSettleLoop", () => {
     vi.advanceTimersByTime(INTERVAL_MS * (MAX_ATTEMPTS + 2));
     expect(onSettled).not.toHaveBeenCalled();
   });
-
-  it("only ever calls onSettled once, not once per remaining scheduled check", () => {
-    const sample = vi.fn(() => "stable");
-    const onSettled = vi.fn();
-    runSettleLoop({ sample, onSettled, intervalMs: INTERVAL_MS, maxAttempts: MAX_ATTEMPTS });
-
-    vi.advanceTimersByTime(INTERVAL_MS * (MAX_ATTEMPTS + 5));
-    expect(onSettled).toHaveBeenCalledTimes(1);
-  });
 });

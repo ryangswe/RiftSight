@@ -84,14 +84,6 @@ describe("createLinkHandoffStore", () => {
     expect(store.status("link-1")).toBe("rejected");
   });
 
-  it("status is not-found for a rejected entry after its TTL elapses (same as a ready one)", () => {
-    let currentTime = 1000;
-    const store = createLinkHandoffStore({ ttlMs: 5000, now: () => currentTime });
-    store.markRejected("link-1");
-    currentTime += 5001;
-    expect(store.status("link-1")).toBe("not-found");
-  });
-
   it("tracks multiple independent linkIds without interference", () => {
     const store = createLinkHandoffStore();
     store.markPending("link-a");

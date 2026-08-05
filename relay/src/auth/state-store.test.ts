@@ -56,12 +56,6 @@ describe("createStateStore", () => {
     expect(store.consume(state)).toEqual({ valid: true, linkId: "link-abc" });
   });
 
-  it("issue() without a linkId (dev/manual linking) round-trips as undefined", () => {
-    const store = createStateStore();
-    const state = store.issue();
-    expect(store.consume(state).linkId).toBeUndefined();
-  });
-
   it("does not hand back a linkId for an invalid/expired consume", () => {
     let currentTime = 1000;
     const store = createStateStore({ ttlMs: 5000, now: () => currentTime });

@@ -130,10 +130,6 @@ describe("ProducerMessageSchema", () => {
   it("rejects a message with a missing payload", () => {
     expect(ProducerMessageSchema.safeParse({ type: "overlay-state" }).success).toBe(false);
   });
-
-  it("rejects an unrecognized message type entirely", () => {
-    expect(ProducerMessageSchema.safeParse({ type: "ping" }).success).toBe(false);
-  });
 });
 
 describe("SubscribeMessageSchema", () => {

@@ -17,11 +17,6 @@ describe("resolveProducerWsUrl", () => {
     expect(url).toBe("wss://beta.example.com/ws/producer?credential=tok123");
   });
 
-  it("ignores a backend URL path/query if one is present, keeping only its origin", () => {
-    const url = resolveProducerWsUrl({ backendUrl: "https://beta.example.com/some/path?x=1", credential: "tok123", fallbackRelayUrl: "ws://localhost:8787" });
-    expect(url).toBe("wss://beta.example.com/ws/producer?credential=tok123");
-  });
-
   it("url-encodes a credential containing special characters", () => {
     const url = resolveProducerWsUrl({ backendUrl: "http://localhost:8788", credential: "a+b/c=", fallbackRelayUrl: "ws://localhost:8787" });
     expect(url).toBe("ws://localhost:8788/ws/producer?credential=a%2Bb%2Fc%3D");

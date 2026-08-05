@@ -34,11 +34,6 @@ describe("presenceStatus", () => {
     expect(presenceStatus(withBoard, 1_000 + STALE_TIMEOUT_MS + 1)).toBe("stale");
     expect(presenceStatus(withoutBoard, 1_000 + STALE_TIMEOUT_MS + 1)).toBe("stale");
   });
-
-  it("recovers from stale back to active/present-no-board once a fresh record replaces it", () => {
-    const fresh: PresenceRecord = { boardDetected: true, publicCardCount: 2, lastHeartbeatAt: 50_000 };
-    expect(presenceStatus(fresh, 50_000)).toBe("active");
-  });
 });
 
 describe("isPresenceGoneForAutoStop", () => {

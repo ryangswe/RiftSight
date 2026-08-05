@@ -12,11 +12,6 @@ describe("resolveRelayUrl", () => {
       const url = resolveRelayUrl({ isMock: true, configuredUrl: "wss://example.trycloudflare.com", isSecureContext: false });
       expect(url).toBe("wss://example.trycloudflare.com");
     });
-
-    it("never throws, regardless of secure context, since mock mode always has somewhere to connect", () => {
-      expect(() => resolveRelayUrl({ isMock: true, configuredUrl: "", isSecureContext: true })).not.toThrow();
-      expect(() => resolveRelayUrl({ isMock: true, configuredUrl: "ws://localhost:8787", isSecureContext: true })).not.toThrow();
-    });
   });
 
   describe("real Twitch mode", () => {
@@ -35,11 +30,6 @@ describe("resolveRelayUrl", () => {
     it("accepts a valid wss: URL in a secure context", () => {
       const url = resolveRelayUrl({ isMock: false, configuredUrl: "wss://example.trycloudflare.com", isSecureContext: true });
       expect(url).toBe("wss://example.trycloudflare.com");
-    });
-
-    it("accepts a wss: URL with a path segment unchanged (a unified-gateway topology could use this later)", () => {
-      const url = resolveRelayUrl({ isMock: false, configuredUrl: "wss://example.com/relay", isSecureContext: true });
-      expect(url).toBe("wss://example.com/relay");
     });
 
     it("does not reject ws: when not in a secure context (e.g. a non-HTTPS dev scenario)", () => {

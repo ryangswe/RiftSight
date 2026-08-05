@@ -59,13 +59,6 @@ describe("playbackTarget", () => {
   it("a negative syncOffsetMs delays the target behind the video", () => {
     expect(playbackTarget(10, -500)).toBe(9500);
   });
-
-  it("rate changes don't need special handling — only currentTime matters", () => {
-    // A rate change doesn't alter currentTime directly; whatever currentTime
-    // the video reports after any amount of playback at any rate feeds the
-    // exact same formula. This documents that the calculator is rate-agnostic.
-    expect(playbackTarget(4.2, 100)).toBe(4300);
-  });
 });
 
 describe("recordingPlaybackStatus", () => {

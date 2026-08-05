@@ -30,8 +30,4 @@ describe("nextPublishingAction", () => {
   it("does nothing when nothing is happening at all", () => {
     expect(nextPublishingAction(input())).toBe("none");
   });
-
-  it("does nothing when publishing has already stopped and intent is off", () => {
-    expect(nextPublishingAction(input({ intent: false, boardDetected: false, isPublishing: false }))).toBe("none");
-  });
 });

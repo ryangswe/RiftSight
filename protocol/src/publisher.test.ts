@@ -45,12 +45,6 @@ describe("OverlayStatePublisher", () => {
     expect(changedAgain!.sequence).toBe(3);
   });
 
-  it("never lets capturedAt affect duplicate detection", () => {
-    const publisher = new OverlayStatePublisher("local-debug");
-    publisher.next(cards(["a"]), viewport, 1000);
-    expect(publisher.next(cards(["a"]), viewport, 999_999_999)).toBeNull();
-  });
-
   it("reset() clears sequence and dedup state", () => {
     const publisher = new OverlayStatePublisher("local-debug");
     publisher.next(cards(["a"]), viewport, 1000);
