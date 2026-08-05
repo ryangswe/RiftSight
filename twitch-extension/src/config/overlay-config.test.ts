@@ -1,6 +1,13 @@
 import { FULL_FRAME_SOURCE_REGION, SOURCE_REGION_PRESETS } from "@riftsight/overlay-core";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_OVERLAY_CONFIG, MAX_DELAY_MS, parseOverlayConfig, serializeOverlayConfig } from "./overlay-config.js";
+import {
+  DEFAULT_OVERLAY_CONFIG,
+  MAX_DELAY_MS,
+  MAX_TOOLTIP_SCALE,
+  MIN_TOOLTIP_SCALE,
+  parseOverlayConfig,
+  serializeOverlayConfig,
+} from "./overlay-config.js";
 
 describe("parseOverlayConfig", () => {
   it("returns defaults for undefined content", () => {
@@ -28,7 +35,7 @@ describe("parseOverlayConfig", () => {
       debugOutlines: true,
       sourceAspectRatio: 1.778,
       sourceRegion: SOURCE_REGION_PRESETS.rightHalf,
-      tooltipScale: 1.5,
+      tooltipScale: 1.2,
     };
     expect(parseOverlayConfig(JSON.stringify(config))).toEqual(config);
   });
@@ -79,10 +86,10 @@ describe("parseOverlayConfig", () => {
     expect(parseOverlayConfig(JSON.stringify({ overlayEnabled: true, delayMs: 1000 })).tooltipScale).toBe(1);
   });
 
-  it("parses a valid custom tooltipScale within [0.5, 2]", () => {
-    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 1.5 })).tooltipScale).toBe(1.5);
-    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 0.5 })).tooltipScale).toBe(0.5);
-    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 2 })).tooltipScale).toBe(2);
+  it("parses a valid custom tooltipScale within [MIN_TOOLTIP_SCALE, MAX_TOOLTIP_SCALE]", () => {
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: 1.1 })).tooltipScale).toBe(1.1);
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: MIN_TOOLTIP_SCALE })).tooltipScale).toBe(MIN_TOOLTIP_SCALE);
+    expect(parseOverlayConfig(JSON.stringify({ tooltipScale: MAX_TOOLTIP_SCALE })).tooltipScale).toBe(MAX_TOOLTIP_SCALE);
   });
 
   it("rejects an out-of-range tooltipScale back to the default rather than clamping it", () => {

@@ -27,6 +27,15 @@ import {
   serializeOverlayConfig,
   type OverlayConfig,
 } from "./overlay-config.js";
+import {
+  applyEdgeDrag,
+  describeTooltipScale,
+  matchDelayPreset,
+  matchRegionPreset,
+  msToSeconds,
+  secondsToMs,
+  type RegionEdge,
+} from "./ui-helpers.js";
 
 const isMock = window.__RIFTSIGHT_MOCK__ === true;
 const MOCK_STORAGE_KEY = "riftsight-mock-broadcaster-config";
@@ -77,8 +86,10 @@ function requireElement<T extends Element>(id: string): T {
   return el as unknown as T;
 }
 
+const pageStatusText = requireElement<HTMLElement>("page-status");
+const debugWarningBanner = requireElement<HTMLElement>("debug-warning-banner");
+
 const overlayEnabledInput = requireElement<HTMLInputElement>("overlay-enabled-input");
-const delayInput = requireElement<HTMLInputElement>("delay-input");
 const debugOutlinesInput = requireElement<HTMLInputElement>("debug-outlines-input");
 const aspectRatioInput = requireElement<HTMLInputElement>("aspect-ratio-input");
 const tooltipScaleInput = requireElement<HTMLInputElement>("tooltip-scale-input");
@@ -87,29 +98,80 @@ const tooltipPreviewPortraitBox = requireElement<HTMLElement>("tooltip-preview-p
 const tooltipPreviewPortraitDims = requireElement<HTMLElement>("tooltip-preview-portrait-dims");
 const tooltipPreviewLandscapeBox = requireElement<HTMLElement>("tooltip-preview-landscape");
 const tooltipPreviewLandscapeDims = requireElement<HTMLElement>("tooltip-preview-landscape-dims");
+
+const delayPresetButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-delay-preset]"));
+const delayCustomRow = requireElement<HTMLElement>("delay-custom-row");
+const delayCustomInput = requireElement<HTMLInputElement>("delay-custom-input");
+
+const regionPresetButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-region-preset]"));
+const regionPresetStatus = requireElement<HTMLElement>("region-preset-status");
 const regionXInput = requireElement<HTMLInputElement>("region-x-input");
 const regionYInput = requireElement<HTMLInputElement>("region-y-input");
 const regionWidthInput = requireElement<HTMLInputElement>("region-width-input");
 const regionHeightInput = requireElement<HTMLInputElement>("region-height-input");
 const regionResetButton = requireElement<HTMLButtonElement>("region-reset-button");
-const saveButton = requireElement<HTMLButtonElement>("save-button");
-const statusText = requireElement<HTMLElement>("status-text");
+const regionStatusText = requireElement<HTMLElement>("region-status-text");
+
 const previewContainer = requireElement<HTMLElement>("calibration-preview");
 const previewBgImage = requireElement<HTMLImageElement>("calibration-bg-image");
+const dropzoneEl = requireElement<HTMLElement>("calibration-dropzone");
 const bgFileInput = requireElement<HTMLInputElement>("bg-file-input");
 const bgClearButton = requireElement<HTMLButtonElement>("bg-clear-button");
+const dropzoneFilenameChip = requireElement<HTMLElement>("dropzone-filename");
+const dropzoneFilenameText = requireElement<HTMLElement>("dropzone-filename-text");
 const previewRegionBox = requireElement<HTMLElement>("calibration-region");
-const previewResizeHandle = requireElement<HTMLElement>("calibration-resize-handle");
+const previewResizeHandles = Array.from(previewRegionBox.querySelectorAll<HTMLElement>(".resize-handle"));
 const previewHitboxLayer = requireElement<HTMLElement>("calibration-hitboxes");
 
-// The numeric x/y/width/height inputs are the authoritative source of
-// truth (the drag/resize preview below is layered on top of the same
-// underlying state, per the spec's "must remain usable without
-// drag/resize" requirement) — currentSourceRegion always holds the last
-// *valid* region; an invalid manual edit reverts the inputs to it rather
-// than saving something broken.
+const saveButton = requireElement<HTMLButtonElement>("save-button");
+const saveStatusEl = requireElement<HTMLElement>("save-status");
+const saveStatusText = requireElement<HTMLElement>("save-status-text");
+const saveTimestampEl = requireElement<HTMLElement>("save-timestamp");
+
+// The numeric x/y/width/height inputs (now under Advanced → Exact values)
+// are the authoritative source of truth — the drag/resize preview above is
+// layered on top of the same underlying state — currentSourceRegion always
+// holds the last *valid* region; an invalid manual edit reverts the inputs
+// to it rather than saving something broken.
 let currentSourceRegion: SourceRegion = FULL_FRAME_SOURCE_REGION;
+let currentDelayMs = DEFAULT_OVERLAY_CONFIG.delayMs;
 let previewCards: OverlayCard[] = MOCK_PREVIEW_CARDS;
+
+// Set true only while applyToForm is populating the page from a loaded
+// config — every setter below also gets called from real user interaction,
+// and only the latter should mark the form dirty.
+let suppressDirtyTracking = true;
+let isDirty = false;
+let isReadyToSave = false; // authorized (real mode) or mock mode, independent of isDirty
+
+function setSaveStatus(state: "clean" | "dirty" | "saving" | "saved" | "error"): void {
+  saveStatusEl.className = state === "clean" ? "save-status" : `save-status ${state}`;
+  saveStatusText.textContent = {
+    clean: "No changes to save",
+    dirty: "Unsaved changes",
+    saving: "Saving…",
+    saved: "Saved",
+    error: "Could not save",
+  }[state];
+}
+
+function updateSaveButtonState(): void {
+  saveButton.disabled = !isReadyToSave || !isDirty;
+}
+
+function markDirty(): void {
+  if (suppressDirtyTracking) return;
+  isDirty = true;
+  setSaveStatus("dirty");
+  updateSaveButtonState();
+}
+
+function markClean(savedAt: Date): void {
+  isDirty = false;
+  setSaveStatus("saved");
+  saveTimestampEl.textContent = `Saved · ${savedAt.toLocaleTimeString()}`;
+  updateSaveButtonState();
+}
 
 function applyRegionToInputs(region: SourceRegion): void {
   regionXInput.value = region.x.toFixed(3);
@@ -125,10 +187,22 @@ function renderRegionBox(region: SourceRegion): void {
   previewRegionBox.style.height = `${region.height * 100}%`;
 }
 
+function updateRegionPresetState(region: SourceRegion): void {
+  const match = matchRegionPreset(region, SOURCE_REGION_PRESETS);
+  for (const button of regionPresetButtons) {
+    button.setAttribute("aria-pressed", String(button.dataset["regionPreset"] === match));
+  }
+  regionPresetStatus.textContent = match === "custom" ? "Custom" : "";
+}
+
 // Mirrors the real viewer's renderHitboxes() exactly (map bounds into the
 // region, then the same computeHitboxStyle/hitboxClassName calls) so the
-// preview is an honest representation of what viewers will actually see
-// — not a separate, potentially-drifting reimplementation.
+// preview is an honest representation of what viewers will actually see —
+// not a separate, potentially-drifting reimplementation. Unlike the real
+// overlay, this preview always renders hitboxes visibly regardless of the
+// "Show hitbox outlines to viewers" setting — that checkbox controls only
+// what real viewers see after Save; a broadcaster calibrating here (with
+// that setting correctly left off) still needs to see where cards land.
 function renderPreviewHitboxes(): void {
   previewHitboxLayer.replaceChildren();
 
@@ -139,7 +213,7 @@ function renderPreviewHitboxes(): void {
 
     const style = computeHitboxStyle(mappedCard);
     const box = document.createElement("div");
-    box.className = `${hitboxClassName(card)} ${debugOutlinesInput.checked ? "debug-outline" : ""}`.trim();
+    box.className = hitboxClassName(card);
     box.style.left = style.left;
     box.style.top = style.top;
     box.style.width = style.width;
@@ -153,14 +227,17 @@ function renderPreviewHitboxes(): void {
 
 function setSourceRegion(region: SourceRegion): void {
   if (!isValidSourceRegion(region)) {
-    statusText.textContent = "Invalid source region (must stay within the frame) — reverted to the last valid value.";
+    regionStatusText.textContent = "That region doesn't fit within the frame — reverted to the last valid value.";
     applyRegionToInputs(currentSourceRegion);
     return;
   }
+  regionStatusText.textContent = "";
   currentSourceRegion = region;
   applyRegionToInputs(region);
   renderRegionBox(region);
+  updateRegionPresetState(region);
   renderPreviewHitboxes();
+  markDirty();
 }
 
 // Dragging/resizing produces a continuous stream of candidate regions as
@@ -182,19 +259,29 @@ interface DragState {
   startClientY: number;
   startRegion: SourceRegion;
 }
+interface ResizeDragState extends DragState {
+  edges: readonly RegionEdge[];
+}
 let moveState: DragState | null = null;
-let resizeState: DragState | null = null;
+let resizeState: ResizeDragState | null = null;
 
 previewRegionBox.addEventListener("mousedown", (event) => {
-  if (event.target === previewResizeHandle) return; // the resize handler owns this
+  if ((event.target as HTMLElement).closest(".resize-handle")) return; // a resize handle owns this instead
   event.preventDefault();
   moveState = { startClientX: event.clientX, startClientY: event.clientY, startRegion: currentSourceRegion };
 });
 
-previewResizeHandle.addEventListener("mousedown", (event) => {
-  event.preventDefault();
-  event.stopPropagation();
-  resizeState = { startClientX: event.clientX, startClientY: event.clientY, startRegion: currentSourceRegion };
+// One shared handler for all 8 handles (4 corners + 4 mid-edges) — which
+// edge(s) of the region each one drags comes from its own data-edges
+// attribute (e.g. "left top" for the top-left corner, "right" for the
+// right mid-edge handle), read once at drag-start time.
+previewResizeHandles.forEach((handle) => {
+  const edges = (handle.dataset["edges"] ?? "").split(" ").filter((edge): edge is RegionEdge => edge.length > 0);
+  handle.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    resizeState = { startClientX: event.clientX, startClientY: event.clientY, startRegion: currentSourceRegion, edges };
+  });
 });
 
 window.addEventListener("mousemove", (event) => {
@@ -215,14 +302,7 @@ window.addEventListener("mousemove", (event) => {
   } else if (resizeState) {
     const dx = (event.clientX - resizeState.startClientX) / rect.width;
     const dy = (event.clientY - resizeState.startClientY) / rect.height;
-    setSourceRegion(
-      clampSourceRegion({
-        x: resizeState.startRegion.x,
-        y: resizeState.startRegion.y,
-        width: resizeState.startRegion.width + dx,
-        height: resizeState.startRegion.height + dy,
-      })
-    );
+    setSourceRegion(applyEdgeDrag(resizeState.startRegion, resizeState.edges, dx, dy));
   }
 });
 
@@ -242,6 +322,8 @@ function loadReferenceImage(file: File): void {
   referenceImageObjectUrl = URL.createObjectURL(file);
   previewBgImage.src = referenceImageObjectUrl;
   previewBgImage.classList.add("loaded");
+  dropzoneFilenameText.textContent = file.name;
+  dropzoneFilenameChip.classList.add("visible");
 }
 
 function clearReferenceImage(): void {
@@ -252,6 +334,8 @@ function clearReferenceImage(): void {
   }
   previewBgImage.removeAttribute("src");
   previewBgImage.classList.remove("loaded");
+  dropzoneFilenameChip.classList.remove("visible");
+  dropzoneFilenameText.textContent = "";
 }
 
 bgFileInput.addEventListener("change", () => {
@@ -260,16 +344,16 @@ bgFileInput.addEventListener("change", () => {
 });
 bgClearButton.addEventListener("click", clearReferenceImage);
 
-previewContainer.addEventListener("dragover", (event) => {
+dropzoneEl.addEventListener("dragover", (event) => {
   event.preventDefault();
-  previewContainer.classList.add("drag-over");
+  dropzoneEl.classList.add("drag-over");
 });
-previewContainer.addEventListener("dragleave", () => {
-  previewContainer.classList.remove("drag-over");
+dropzoneEl.addEventListener("dragleave", () => {
+  dropzoneEl.classList.remove("drag-over");
 });
-previewContainer.addEventListener("drop", (event) => {
+dropzoneEl.addEventListener("drop", (event) => {
   event.preventDefault();
-  previewContainer.classList.remove("drag-over");
+  dropzoneEl.classList.remove("drag-over");
   const file = Array.from(event.dataTransfer?.files ?? []).find((f) => f.type.startsWith("image/"));
   if (file) loadReferenceImage(file);
 });
@@ -282,8 +366,6 @@ window.addEventListener("paste", (event) => {
   if (file) loadReferenceImage(file);
 });
 
-debugOutlinesInput.addEventListener("change", renderPreviewHitboxes);
-
 function readSourceRegionFromInputs(): SourceRegion {
   return {
     x: Number.parseFloat(regionXInput.value),
@@ -294,7 +376,10 @@ function readSourceRegionFromInputs(): SourceRegion {
 }
 
 function updateTooltipScaleReadout(): void {
-  tooltipScaleReadout.textContent = `${Number.parseFloat(tooltipScaleInput.value).toFixed(1)}x`;
+  const scale = Number.parseFloat(tooltipScaleInput.value);
+  const label = describeTooltipScale(scale);
+  tooltipScaleReadout.textContent = `${scale.toFixed(1)}x`;
+  tooltipScaleInput.setAttribute("aria-valuetext", `${scale.toFixed(1)}x, ${label}`);
 }
 
 // A live preview of the real tooltip box size at the current slider value,
@@ -306,7 +391,10 @@ function updateTooltipScaleReadout(): void {
 // real dimension viewers will see, which is the number that matters here.
 // Uses the exact same computeTooltipMaxSize the real viewer calls (see
 // viewer/main.ts's showTooltipFor), so this can never silently drift from
-// what's actually shown on stream.
+// what's actually shown on stream. Both portrait and landscape base sizes
+// are shown — they're genuinely different aspect ratios (320x448 vs
+// 400x500), not a scaled duplicate of each other, so a broadcaster with
+// battlefield-type cards in play needs to see both, not just one.
 const TOOLTIP_PREVIEW_DISPLAY_SCALE = 0.3;
 
 function updateTooltipSizePreview(): void {
@@ -323,32 +411,96 @@ function updateTooltipSizePreview(): void {
   tooltipPreviewLandscapeDims.textContent = `${Math.round(landscape.maxWidthPx)} × ${Math.round(landscape.maxHeightPx)}px`;
 }
 
+// Preview's aspect ratio follows the broadcaster's own aspect-ratio
+// override when set, so the calibration rectangle is drawn against the
+// same proportions the real overlay will actually use — falls back to
+// 16:9 (this page's long-standing default) when the override is empty.
+function updatePreviewAspectRatio(): void {
+  const parsed = Number.parseFloat(aspectRatioInput.value);
+  previewContainer.style.aspectRatio = Number.isFinite(parsed) && parsed > 0 ? String(parsed) : "16 / 9";
+}
+
+function updateDebugWarningBanner(): void {
+  debugWarningBanner.classList.toggle("visible", debugOutlinesInput.checked);
+}
+
+// Keeps the delay pills' aria-pressed state and the custom-seconds row's
+// visibility in sync with currentDelayMs — split out from setDelayMs so
+// the custom seconds field's own input handler can call this without
+// setDelayMs's usual "also overwrite the custom field's displayed value"
+// behavior, which would otherwise stomp on what the broadcaster is
+// actively typing.
+function syncDelayPillState(ms: number): void {
+  const match = matchDelayPreset(ms);
+  for (const button of delayPresetButtons) {
+    const presetAttr = button.dataset["delayPreset"] ?? "";
+    const pressed = presetAttr === "custom" ? match === "custom" : Number(presetAttr) === match;
+    button.setAttribute("aria-pressed", String(pressed));
+  }
+  delayCustomRow.style.display = match === "custom" ? "" : "none";
+}
+
+// Called from preset-pill clicks and from applyToForm — safe to overwrite
+// the custom field's displayed value, since the change didn't originate
+// from the user actively typing into it.
+function setDelayMs(ms: number): void {
+  currentDelayMs = Math.min(MAX_DELAY_MS, Math.max(0, ms));
+  syncDelayPillState(currentDelayMs);
+  delayCustomInput.value = String(msToSeconds(currentDelayMs));
+  markDirty();
+}
+
+delayPresetButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const presetAttr = button.dataset["delayPreset"] ?? "";
+    if (presetAttr === "custom") {
+      // Forces the custom row open and that pill pressed regardless of
+      // whether currentDelayMs happens to already match a fixed preset —
+      // the broadcaster explicitly asked to enter a custom value.
+      for (const b of delayPresetButtons) b.setAttribute("aria-pressed", String(b === button));
+      delayCustomRow.style.display = "";
+      delayCustomInput.value = String(msToSeconds(currentDelayMs));
+      delayCustomInput.focus();
+    } else {
+      setDelayMs(Number(presetAttr));
+    }
+  });
+});
+
+delayCustomInput.addEventListener("input", () => {
+  const seconds = Number.parseFloat(delayCustomInput.value);
+  if (!Number.isFinite(seconds) || seconds < 0) return;
+  currentDelayMs = Math.min(MAX_DELAY_MS, secondsToMs(seconds));
+  syncDelayPillState(currentDelayMs);
+  markDirty();
+});
+
 function applyToForm(config: OverlayConfig): void {
+  suppressDirtyTracking = true;
   overlayEnabledInput.checked = config.overlayEnabled;
-  delayInput.value = String(config.delayMs);
+  setDelayMs(config.delayMs);
   debugOutlinesInput.checked = config.debugOutlines;
+  updateDebugWarningBanner();
   aspectRatioInput.value = config.sourceAspectRatio !== undefined ? String(config.sourceAspectRatio) : "";
+  updatePreviewAspectRatio();
   tooltipScaleInput.value = String(config.tooltipScale);
   updateTooltipScaleReadout();
   updateTooltipSizePreview();
-  currentSourceRegion = config.sourceRegion;
-  applyRegionToInputs(config.sourceRegion);
-  renderRegionBox(config.sourceRegion);
-  renderPreviewHitboxes();
+  setSourceRegion(config.sourceRegion);
+  suppressDirtyTracking = false;
+  setSaveStatus("clean");
+  updateSaveButtonState();
 }
 
 function readFromForm(): OverlayConfig {
   const parsedAspectRatio = Number.parseFloat(aspectRatioInput.value);
   return {
     overlayEnabled: overlayEnabledInput.checked,
-    // Clamped at both ends: the HTML input's own min/max already stop
-    // normal browser interaction from producing an out-of-range value
-    // (matching the comment tooltipScaleInput's own read below relies on),
-    // but a free-text-adjacent numeric field can still be typed past its
-    // max in some browsers/inputs — clamping here is the actual
-    // enforcement, not just the HTML attribute's advisory one. See
-    // MAX_DELAY_MS's own doc comment for why this bound exists at all.
-    delayMs: Math.min(MAX_DELAY_MS, Math.max(0, Number.parseInt(delayInput.value, 10) || 0)),
+    // Clamped at both ends: currentDelayMs is already kept within
+    // [0, MAX_DELAY_MS] by setDelayMs/the custom-input handler above, but
+    // clamping again here is the actual enforcement, not just an advisory
+    // one. See MAX_DELAY_MS's own doc comment for why this bound exists.
+    delayMs: Math.min(MAX_DELAY_MS, Math.max(0, currentDelayMs)),
     debugOutlines: debugOutlinesInput.checked,
     sourceAspectRatio: Number.isFinite(parsedAspectRatio) && parsedAspectRatio > 0 ? parsedAspectRatio : undefined,
     sourceRegion: currentSourceRegion,
@@ -359,15 +511,22 @@ function readFromForm(): OverlayConfig {
   };
 }
 
+overlayEnabledInput.addEventListener("change", markDirty);
+
+debugOutlinesInput.addEventListener("change", () => {
+  updateDebugWarningBanner();
+  markDirty();
+});
+
+aspectRatioInput.addEventListener("input", () => {
+  updatePreviewAspectRatio();
+  markDirty();
+});
+
 tooltipScaleInput.addEventListener("input", () => {
   updateTooltipScaleReadout();
   updateTooltipSizePreview();
-});
-
-Array.from(document.querySelectorAll<HTMLButtonElement>("[data-delay-preset]")).forEach((button) => {
-  button.addEventListener("click", () => {
-    delayInput.value = button.dataset["delayPreset"] ?? "0";
-  });
+  markDirty();
 });
 
 [regionXInput, regionYInput, regionWidthInput, regionHeightInput].forEach((input) => {
@@ -376,7 +535,7 @@ Array.from(document.querySelectorAll<HTMLButtonElement>("[data-delay-preset]")).
 
 regionResetButton.addEventListener("click", () => setSourceRegion(FULL_FRAME_SOURCE_REGION));
 
-Array.from(document.querySelectorAll<HTMLButtonElement>("[data-region-preset]")).forEach((button) => {
+regionPresetButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const key = button.dataset["regionPreset"] as keyof typeof SOURCE_REGION_PRESETS | undefined;
     if (key && key in SOURCE_REGION_PRESETS) setSourceRegion(SOURCE_REGION_PRESETS[key]);
@@ -386,11 +545,16 @@ Array.from(document.querySelectorAll<HTMLButtonElement>("[data-region-preset]"))
 if (isMock) {
   const stored = localStorage.getItem(MOCK_STORAGE_KEY) ?? undefined;
   applyToForm(parseOverlayConfig(stored));
-  statusText.textContent = "mock mode — saved to localStorage, not Twitch";
+  pageStatusText.textContent = "Mock mode — Save writes to localStorage, not Twitch.";
+  isReadyToSave = true;
+  updateSaveButtonState();
 
   saveButton.addEventListener("click", () => {
-    localStorage.setItem(MOCK_STORAGE_KEY, serializeOverlayConfig(readFromForm()));
-    statusText.textContent = `saved to localStorage at ${new Date().toLocaleTimeString()}`;
+    setSaveStatus("saving");
+    window.setTimeout(() => {
+      localStorage.setItem(MOCK_STORAGE_KEY, serializeOverlayConfig(readFromForm()));
+      markClean(new Date());
+    }, 150);
   });
 
   // Read-only: this source only ever feeds the calibration preview, it
@@ -404,11 +568,11 @@ if (isMock) {
   previewSource.connect({ channelId: MOCK_PREVIEW_CHANNEL_ID, authToken: "mock-token", mode: "config" });
 } else {
   applyToForm(DEFAULT_OVERLAY_CONFIG);
-  statusText.textContent = "Waiting for Twitch authorization…";
-  saveButton.disabled = true;
+  pageStatusText.textContent = "Waiting for Twitch authorization…";
 
   if (!window.Twitch?.ext) {
-    statusText.textContent = "Twitch Extension Helper not found — this page must be loaded inside a Twitch extension iframe.";
+    pageStatusText.textContent = "Twitch Extension Helper not found — this page must be loaded inside a Twitch extension iframe.";
+    pageStatusText.classList.add("error");
   } else {
     const twitch = window.Twitch.ext;
 
@@ -438,9 +602,10 @@ if (isMock) {
     // opening a second, orphaned connection on every refresh.
     let authorized = false;
     twitch.onAuthorized((auth) => {
-      saveButton.disabled = false;
+      isReadyToSave = true;
       applyToForm(parseOverlayConfig(twitch.configuration.broadcaster?.content));
-      statusText.textContent = "Ready.";
+      pageStatusText.textContent = "";
+      pageStatusText.classList.remove("error");
       if (!authorized) {
         authorized = true;
         previewSource?.connect(buildPlatformContext(auth, "config"));
@@ -449,14 +614,37 @@ if (isMock) {
       }
     });
 
+    // The Twitch Extension Helper's onError has exactly one active
+    // listener for the whole page (not a stack), so this single
+    // registration does double duty: it's both the original
+    // auth-failure reporter AND the signal the save flow below polls —
+    // configuration.set() itself has no success/failure callback in the
+    // Helper API, so "did a save just fail" can only be inferred
+    // heuristically from whether *any* Twitch error arrived shortly
+    // after clicking Save. This can miss a real failure (if onError is
+    // slow to arrive) or rarely misattribute an unrelated error — it's a
+    // best-effort signal, not a guarantee.
+    let lastTwitchErrorAt = 0;
     twitch.onError((error) => {
       console.warn("[twitch-extension] Twitch Helper reported an error", error);
-      statusText.textContent = "Twitch authorization failed — see console for details.";
+      lastTwitchErrorAt = Date.now();
+      pageStatusText.textContent = "Twitch authorization failed — see console for details.";
+      pageStatusText.classList.add("error");
     });
 
+    const SAVE_ERROR_CHECK_DELAY_MS = 1500;
     saveButton.addEventListener("click", () => {
+      setSaveStatus("saving");
+      const clickedAt = Date.now();
       twitch.configuration.set("broadcaster", OVERLAY_CONFIG_VERSION, serializeOverlayConfig(readFromForm()));
-      statusText.textContent = `saved at ${new Date().toLocaleTimeString()}`;
+      window.setTimeout(() => {
+        if (lastTwitchErrorAt > clickedAt) {
+          setSaveStatus("error");
+          updateSaveButtonState();
+        } else {
+          markClean(new Date());
+        }
+      }, SAVE_ERROR_CHECK_DELAY_MS);
     });
   }
 }

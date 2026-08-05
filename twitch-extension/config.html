@@ -4,148 +4,415 @@
     <meta charset="utf-8" />
     <title>RiftSight Overlay — Broadcaster Configuration</title>
     <style>
-      html, body { margin: 0; font: 13px/1.5 sans-serif; background: #0b0f16; color: #e6e6e6; padding: 16px; }
-      label { display: block; margin-bottom: 10px; }
-      input[type="number"], input[type="text"] { background: #000; color: #eee; border: 1px solid #444; padding: 3px 6px; }
-      button { cursor: pointer; }
-      #status-text { display: block; margin-top: 10px; color: #9be89b; }
-      #calibration-preview {
-        position: relative;
-        width: 100%;
-        max-width: 480px;
-        aspect-ratio: 16 / 9;
-        background: #111;
-        border: 1px solid #444;
-        overflow: hidden;
-        margin: 8px 0;
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f16;
+        --panel-bg: #141a24;
+        --panel-bg-raised: #1a212e;
+        --border: #262e3d;
+        --border-strong: #37425a;
+        --text: #e8eaf0;
+        --text-muted: #98a2b8;
+        --text-dim: #6b7488;
+        --accent: #6cf;
+        --accent-bg: rgba(102, 204, 255, 0.14);
+        --accent-bg-strong: rgba(102, 204, 255, 0.24);
+        --success: #7be08a;
+        --warning: #ffc94d;
+        --warning-bg: rgba(255, 201, 77, 0.14);
+        --danger: #ff7a7a;
+        --radius-lg: 14px;
+        --radius-md: 8px;
+        --radius-sm: 6px;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --space-5: 24px;
+        --space-6: 32px;
+        --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
       }
-      #calibration-bg-image {
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 var(--font-ui);
+      }
+
+      body { padding: var(--space-5); max-width: 720px; margin: 0 auto; }
+
+      h2 { font-weight: 600; margin: 0; }
+
+      header.page-header { margin-bottom: var(--space-5); }
+      header.page-header .wordmark { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+      header.page-header p { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: 13px; max-width: 56ch; }
+      #page-status { font-size: 12px; color: var(--text-dim); margin-top: var(--space-2); }
+      #page-status.error { color: var(--danger); }
+
+      .banner {
         display: none;
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
+        align-items: center;
+        gap: var(--space-2);
+        padding: var(--space-3) var(--space-4);
+        border-radius: var(--radius-md);
+        background: var(--warning-bg);
+        border: 1px solid var(--warning);
+        color: var(--warning);
+        font-weight: 600;
+        font-size: 13px;
+        margin-bottom: var(--space-4);
       }
-      #calibration-bg-image.loaded {
-        display: block;
+      .banner.visible { display: flex; }
+      .banner .banner-icon { font-size: 16px; line-height: 1; }
+
+      section.step {
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: var(--space-5);
+        margin-bottom: var(--space-4);
       }
-      #calibration-preview.drag-over {
-        border-color: #6cf;
+
+      .step-heading { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
+      .step-number {
+        display: flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px; border-radius: 50%;
+        background: var(--accent-bg-strong); color: var(--accent);
+        font-size: 13px; font-weight: 700; flex-shrink: 0;
       }
-      #calibration-hitboxes {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
+      .step-heading h2 { font-size: 16px; }
+      .step-help { color: var(--text-muted); font-size: 13px; margin: 0 0 var(--space-4); max-width: 56ch; }
+
+      .pill-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); }
+      .pill {
+        appearance: none; border: 1px solid var(--border-strong); background: var(--panel-bg-raised);
+        color: var(--text); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-family: inherit;
+        cursor: pointer; transition: background 120ms, border-color 120ms, color 120ms;
       }
+      .pill:hover { border-color: var(--accent); }
+      .pill[aria-pressed="true"] { background: var(--accent-bg-strong); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+      .pill-status { color: var(--text-dim); font-size: 12px; }
+
+      .dropzone {
+        position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: var(--space-2); text-align: center; border: 1.5px dashed var(--border-strong);
+        border-radius: var(--radius-md); padding: var(--space-4); margin-bottom: var(--space-3);
+        color: var(--text-muted); transition: border-color 120ms, background 120ms;
+      }
+      .dropzone.drag-over { border-color: var(--accent); background: var(--accent-bg); color: var(--text); }
+      .dropzone svg { width: 22px; height: 22px; color: var(--text-dim); }
+      .dropzone .dropzone-title { color: var(--text); font-size: 13px; font-weight: 600; }
+      .dropzone .dropzone-sub { font-size: 12px; }
+      .dropzone .dropzone-action { color: var(--accent); text-decoration: underline; }
+      .dropzone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+      .dropzone input[type="file"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+      .dropzone-filename {
+        display: none; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3);
+        font-size: 12px; color: var(--text-muted); background: var(--panel-bg-raised);
+        border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px;
+      }
+      .dropzone-filename.visible { display: flex; }
+      .dropzone-filename button {
+        margin-left: auto; background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px; padding: 0 2px;
+      }
+      .dropzone-filename button:hover { color: var(--danger); }
+      .privacy-note { font-size: 11.5px; color: var(--text-dim); margin: 0 0 var(--space-4); }
+
+      #calibration-preview {
+        position: relative; width: 100%; aspect-ratio: 16 / 9;
+        background: #0a0d13; border: 1px solid var(--border-strong); border-radius: var(--radius-md); overflow: hidden;
+      }
+      #calibration-bg-image { display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+      #calibration-bg-image.loaded { display: block; }
+      #calibration-hitboxes { position: absolute; inset: 0; pointer-events: none; }
       #calibration-hitboxes .hitbox {
-        position: absolute;
-        box-sizing: border-box;
-        border: 1px solid transparent;
+        position: absolute; box-sizing: border-box; border-radius: 3px;
+        border: 1.5px solid rgba(126, 224, 138, 0.75); background: rgba(126, 224, 138, 0.1);
       }
-      #calibration-hitboxes .hitbox.debug-outline {
-        border-color: rgba(102, 255, 102, 0.6);
-        background: rgba(102, 255, 102, 0.05);
-      }
-      #calibration-hitboxes .hitbox.debug-outline.hidden-card {
-        border-color: rgba(255, 102, 102, 0.6);
-        background: rgba(255, 102, 102, 0.05);
-      }
+      #calibration-hitboxes .hitbox.hidden-card { border-color: rgba(255, 122, 122, 0.85); background: rgba(255, 122, 122, 0.1); }
+      #calibration-hitboxes .hitbox.unknown-card { border-color: rgba(255, 201, 77, 0.85); background: rgba(255, 201, 77, 0.1); }
       #calibration-region {
-        position: absolute;
-        border: 2px dashed #6cf;
-        background: rgba(102, 204, 255, 0.12);
-        cursor: move;
-        box-sizing: border-box;
+        position: absolute; border: 2px solid var(--accent); background: rgba(102, 204, 255, 0.14);
+        cursor: move; box-sizing: border-box; border-radius: 2px;
       }
-      #calibration-resize-handle {
-        position: absolute;
-        right: -6px;
-        bottom: -6px;
-        width: 12px;
-        height: 12px;
-        background: #6cf;
-        border-radius: 2px;
-        cursor: nwse-resize;
+      #calibration-region .region-label {
+        position: absolute; top: 0; left: 0; transform: translateY(-100%);
+        background: var(--accent); color: #06131c; font-size: 11px; font-weight: 700;
+        padding: 2px 7px; border-radius: 4px 4px 0 0; white-space: nowrap;
+      }
+      .resize-handle {
+        position: absolute; width: 14px; height: 14px;
+        background: var(--accent); border: 2px solid #06131c; border-radius: 4px;
+      }
+      .resize-handle.corner-tl { top: 0; left: 0; transform: translate(-50%, -50%); cursor: nwse-resize; }
+      .resize-handle.edge-t { top: 0; left: 50%; transform: translate(-50%, -50%); cursor: ns-resize; }
+      .resize-handle.corner-tr { top: 0; left: 100%; transform: translate(-50%, -50%); cursor: nesw-resize; }
+      .resize-handle.edge-r { top: 50%; left: 100%; transform: translate(-50%, -50%); cursor: ew-resize; }
+      .resize-handle.corner-br { top: 100%; left: 100%; transform: translate(-50%, -50%); cursor: nwse-resize; }
+      .resize-handle.edge-b { top: 100%; left: 50%; transform: translate(-50%, -50%); cursor: ns-resize; }
+      .resize-handle.corner-bl { top: 100%; left: 0; transform: translate(-50%, -50%); cursor: nesw-resize; }
+      .resize-handle.edge-l { top: 50%; left: 0; transform: translate(-50%, -50%); cursor: ew-resize; }
+      #region-status-text { min-height: 1em; margin: var(--space-2) 0 0; font-size: 12px; color: var(--warning); }
+
+      details.advanced {
+        background: var(--panel-bg); border: 1px solid var(--border); border-radius: var(--radius-lg);
+        padding: 0 var(--space-5); margin-bottom: var(--space-4);
+      }
+      details.advanced > summary {
+        cursor: pointer; list-style: none; padding: var(--space-3) 0; font-weight: 600; font-size: 14px;
+        color: var(--text); display: flex; align-items: center; gap: var(--space-2);
+      }
+      details.advanced > summary::-webkit-details-marker { display: none; }
+      details.advanced > summary::before { content: "▸"; color: var(--text-dim); display: inline-block; transition: transform 120ms; }
+      details.advanced[open] > summary::before { transform: rotate(90deg); }
+      .advanced-body { padding-bottom: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+
+      details.nested { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0 var(--space-3); background: var(--panel-bg-raised); }
+      details.nested > summary {
+        cursor: pointer; list-style: none; padding: var(--space-2) 0; font-size: 13px; font-weight: 600;
+        color: var(--text-muted); display: flex; align-items: center; gap: var(--space-2);
+      }
+      details.nested > summary::-webkit-details-marker { display: none; }
+      details.nested > summary::before { content: "▸"; display: inline-block; transition: transform 120ms; }
+      details.nested[open] > summary::before { transform: rotate(90deg); }
+      .nested-body { padding: 0 0 var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+
+      .field-row { display: flex; flex-direction: column; gap: var(--space-1); }
+      .field-label { font-size: 13px; font-weight: 600; color: var(--text); }
+      .field-help { font-size: 12px; color: var(--text-muted); margin: 0; max-width: 56ch; }
+      .field-row.checkbox { flex-direction: row; align-items: center; gap: var(--space-2); }
+
+      input[type="text"], input[type="number"] {
+        background: #0a0d13; color: var(--text); border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm); padding: 6px 9px; font: 13px/1.4 var(--font-mono);
+      }
+      input[type="text"]:focus-visible, input[type="number"]:focus-visible, .pill:focus-visible,
+      button:focus-visible, input[type="checkbox"]:focus-visible, input[type="range"]:focus-visible {
+        outline: 2px solid var(--accent); outline-offset: 2px;
+      }
+      input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+
+      .exact-values-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: var(--space-2) var(--space-3); }
+      .exact-values-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-muted); }
+
+      button.btn-secondary {
+        background: var(--panel-bg-raised); color: var(--text); border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm); padding: 6px 12px; font: 13px/1.4 var(--font-ui); cursor: pointer; align-self: flex-start;
+      }
+      button.btn-secondary:hover { border-color: var(--accent); }
+
+      .slider-row { display: flex; flex-direction: column; gap: var(--space-2); }
+      input[type="range"] { width: 100%; accent-color: var(--accent); display: block; }
+      .slider-ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); }
+      .popup-preview-panel {
+        display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: flex-end; padding: var(--space-4);
+        background: var(--panel-bg-raised); border: 1px solid var(--border); border-radius: var(--radius-md); margin-top: var(--space-3);
+      }
+      .popup-preview-card { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); }
+      .popup-preview-card .swatch { background: #0a0d13; border: 1px solid var(--border-strong); border-radius: 6px; }
+      .popup-preview-card .swatch-label { font-size: 11px; color: var(--text-dim); }
+      .popup-preview-card .swatch-dims { font-size: 11px; color: var(--success); font-family: var(--font-mono); }
+      #tooltip-scale-readout { margin-left: auto; font-size: 11px; color: var(--text-dim); align-self: flex-start; }
+      .preview-scale-note { font-size: 11px; color: var(--text-dim); margin: var(--space-1) 0 0; }
+
+      .save-bar {
+        position: sticky; bottom: var(--space-4); margin-top: var(--space-5); z-index: 5;
+        display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+        padding: var(--space-4); background: rgba(20, 26, 36, 0.95); backdrop-filter: blur(6px);
+        border: 1px solid var(--border); border-radius: var(--radius-lg);
+      }
+      .save-status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+      .save-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+      .save-status.dirty { color: var(--warning); }
+      .save-status.dirty .dot { background: var(--warning); }
+      .save-status.saving { color: var(--text-muted); }
+      .save-status.saved { color: var(--success); }
+      .save-status.saved .dot { background: var(--success); }
+      .save-status.error { color: var(--danger); }
+      .save-status.error .dot { background: var(--danger); }
+      .save-timestamp { color: var(--text-dim); font-size: 11.5px; }
+      button#save-button {
+        margin-left: auto; background: var(--accent); color: #06131c; border: none; font-weight: 700;
+        padding: 9px 22px; border-radius: var(--radius-sm); font-size: 14px; cursor: pointer; transition: opacity 120ms;
+      }
+      button#save-button:disabled { opacity: 0.4; cursor: default; }
+
+      @media (max-width: 520px) {
+        body { padding: var(--space-4); }
+        section.step, details.advanced { padding: var(--space-4); }
+        .save-bar { bottom: var(--space-2); padding: var(--space-3); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * { transition: none !important; }
       }
     </style>
   </head>
   <body>
-    <h3>RiftSight Overlay Settings</h3>
-    <label><input id="overlay-enabled-input" type="checkbox" /> Overlay enabled</label>
-    <label>
-      Delay:
-      <input id="delay-input" type="number" min="0" max="300000" step="100" value="0" /> ms (max 5 minutes — the viewer can't show a delay longer than it keeps history for)
-      <button type="button" data-delay-preset="0">0s</button>
-      <button type="button" data-delay-preset="2000">2s</button>
-      <button type="button" data-delay-preset="5000">5s</button>
-      <button type="button" data-delay-preset="10000">10s</button>
-    </label>
-    <label><input id="debug-outlines-input" type="checkbox" /> Debug outlines enabled (visible to all viewers — for a final on-stream check, not required for calibration itself)</label>
-    <label>
-      Source aspect ratio (optional, e.g. 1.778 for 16:9 — leave blank to use each state's own reported viewport):
-      <input id="aspect-ratio-input" type="text" size="8" />
-    </label>
-    <label>
-      Card hover preview size: <input id="tooltip-scale-input" type="range" min="0.5" max="2" step="0.1" value="1" />
-      <span id="tooltip-scale-readout">1.0x</span>
-    </label>
-    <div style="display: flex; align-items: flex-end; gap: 16px; margin: 4px 0 10px;">
-      <div>
-        <div style="font-size: 11px; color: #999; margin-bottom: 2px;">Most cards</div>
-        <div id="tooltip-preview-portrait" style="background: #111; border: 1px solid #444; border-radius: 4px"></div>
-        <div id="tooltip-preview-portrait-dims" style="font-size: 11px; color: #9be89b; margin-top: 2px;"></div>
-      </div>
-      <div>
-        <div style="font-size: 11px; color: #999; margin-bottom: 2px;">Battlefield-type cards</div>
-        <div id="tooltip-preview-landscape" style="background: #111; border: 1px solid #444; border-radius: 4px"></div>
-        <div id="tooltip-preview-landscape-dims" style="font-size: 11px; color: #9be89b; margin-top: 2px;"></div>
-      </div>
+    <header class="page-header">
+      <div class="wordmark">RiftSight</div>
+      <p>Set up RiftSight before going live so card hover overlays line up with your stream.</p>
+      <p id="page-status"></p>
+    </header>
+
+    <div id="debug-warning-banner" class="banner" role="status" aria-live="polite">
+      <span class="banner-icon" aria-hidden="true">⚠</span>
+      <span>Debug outlines are currently visible to all viewers.</span>
     </div>
 
-    <h3>Source-region calibration</h3>
-    <p style="max-width: 520px; color: #aab;">
-      If RiftAtlas fills your entire stream canvas, leave this as <strong>Full frame</strong> — no calibration needed. If it
-      only occupies part of the frame, drop in a screenshot of your actual stream output below and drag the region onto
-      where RiftAtlas actually appears.
-    </p>
-    <label>
-      Presets:
-      <button type="button" data-region-preset="fullFrame">Full frame</button>
-      <button type="button" data-region-preset="leftHalf">Left half</button>
-      <button type="button" data-region-preset="rightHalf">Right half</button>
-      <button type="button" data-region-preset="centered">Centered</button>
-    </label>
-    <label>
-      Reference screenshot (stays in your browser only — never uploaded or saved):
-      <input id="bg-file-input" type="file" accept="image/*" />
-      <button id="bg-clear-button" type="button">Clear</button>
-      — or drag one onto the preview below, or paste from your clipboard.
-    </label>
-    <p style="max-width: 480px; color: #aab;">
-      Preview (16:9) — drag the region to move it, drag the corner handle to resize. Shows card hitboxes from the latest live
-      state when available, or example cards otherwise.
-    </p>
-    <div id="calibration-preview">
-      <img id="calibration-bg-image" alt="" />
-      <div id="calibration-hitboxes"></div>
-      <div id="calibration-region">
-        <div id="calibration-resize-handle"></div>
+    <section class="step" aria-labelledby="step1-heading">
+      <div class="step-heading">
+        <span class="step-number" aria-hidden="true">1</span>
+        <h2 id="step1-heading">Where does RiftAtlas appear on your stream?</h2>
       </div>
-    </div>
-    <p style="max-width: 480px; color: #888; font-size: 12px;">
-      Advanced — exact values (kept in sync with the drag/resize above):
-    </p>
-    <label>
-      x: <input id="region-x-input" type="number" min="0" max="1" step="0.01" value="0" />
-      y: <input id="region-y-input" type="number" min="0" max="1" step="0.01" value="0" />
-      width: <input id="region-width-input" type="number" min="0" max="1" step="0.01" value="1" />
-      height: <input id="region-height-input" type="number" min="0" max="1" step="0.01" value="1" />
-      <button id="region-reset-button" type="button">Reset to full frame</button>
-    </label>
+      <p class="step-help">
+        Choose Full screen if RiftAtlas fills the whole video. Otherwise, upload a screenshot from OBS and draw a box
+        around the RiftAtlas area.
+      </p>
 
-    <button id="save-button" type="button" disabled>Save</button>
-    <span id="status-text"></span>
+      <div class="pill-group" role="group" aria-label="Stream layout preset">
+        <button type="button" class="pill" data-region-preset="fullFrame">Full screen</button>
+        <button type="button" class="pill" data-region-preset="leftHalf">Left side</button>
+        <button type="button" class="pill" data-region-preset="rightHalf">Right side</button>
+        <button type="button" class="pill" data-region-preset="centered">Centered</button>
+        <span id="region-preset-status" class="pill-status"></span>
+      </div>
+
+      <div class="dropzone" id="calibration-dropzone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <path d="M12 15V4M12 4l-4 4M12 4l4 4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div class="dropzone-title">Drop an OBS screenshot here</div>
+        <div class="dropzone-sub">or <span class="dropzone-action">choose a file</span> · paste from clipboard</div>
+        <input id="bg-file-input" type="file" accept="image/*" aria-label="Upload a reference screenshot" />
+      </div>
+      <div id="dropzone-filename" class="dropzone-filename">
+        <span id="dropzone-filename-text"></span>
+        <button type="button" id="bg-clear-button" aria-label="Remove screenshot">✕</button>
+      </div>
+      <p class="privacy-note">The screenshot stays in your browser and is never uploaded or saved.</p>
+
+      <div id="calibration-preview">
+        <img id="calibration-bg-image" alt="" />
+        <div id="calibration-hitboxes"></div>
+        <div id="calibration-region">
+          <span class="region-label">Overlay area</span>
+          <div class="resize-handle corner-tl" data-edges="left top" aria-hidden="true"></div>
+          <div class="resize-handle edge-t" data-edges="top" aria-hidden="true"></div>
+          <div class="resize-handle corner-tr" data-edges="right top" aria-hidden="true"></div>
+          <div class="resize-handle edge-r" data-edges="right" aria-hidden="true"></div>
+          <div class="resize-handle corner-br" data-edges="right bottom" aria-hidden="true"></div>
+          <div class="resize-handle edge-b" data-edges="bottom" aria-hidden="true"></div>
+          <div class="resize-handle corner-bl" data-edges="left bottom" aria-hidden="true"></div>
+          <div class="resize-handle edge-l" data-edges="left" aria-hidden="true"></div>
+        </div>
+      </div>
+      <p id="region-status-text" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="step" aria-labelledby="step2-heading">
+      <div class="step-heading">
+        <span class="step-number" aria-hidden="true">2</span>
+        <h2 id="step2-heading">Match your stream delay</h2>
+      </div>
+      <p class="step-help">Set this to your Twitch broadcast delay so card positions stay synchronized.</p>
+      <div class="pill-group" role="group" aria-label="Stream delay">
+        <button type="button" class="pill" data-delay-preset="0">None</button>
+        <button type="button" class="pill" data-delay-preset="2000">2s</button>
+        <button type="button" class="pill" data-delay-preset="5000">5s</button>
+        <button type="button" class="pill" data-delay-preset="10000">10s</button>
+        <button type="button" class="pill" data-delay-preset="custom">Custom</button>
+      </div>
+      <div id="delay-custom-row" class="field-row" style="display: none">
+        <label for="delay-custom-input" class="field-label">Delay (seconds)</label>
+        <input id="delay-custom-input" type="number" min="0" max="300" step="0.1" style="max-width: 120px" />
+        <p class="field-help">Up to 300 seconds (5 minutes).</p>
+      </div>
+    </section>
+
+    <section class="step" aria-labelledby="step3-heading">
+      <div class="step-heading">
+        <span class="step-number" aria-hidden="true">3</span>
+        <h2 id="step3-heading">Choose card popup size</h2>
+      </div>
+      <p class="step-help">How big a card's full image appears when a viewer hovers it.</p>
+      <div class="slider-row">
+        <input id="tooltip-scale-input" type="range" min="0.7" max="1.3" step="0.1" value="1" aria-label="Card popup size" />
+        <div class="slider-ticks" aria-hidden="true">
+          <span>Smaller</span>
+          <span>Default</span>
+          <span>Larger</span>
+        </div>
+      </div>
+      <div class="popup-preview-panel">
+        <div class="popup-preview-card">
+          <div id="tooltip-preview-portrait" class="swatch"></div>
+          <div class="swatch-label">Card</div>
+          <div id="tooltip-preview-portrait-dims" class="swatch-dims"></div>
+        </div>
+        <div class="popup-preview-card">
+          <div id="tooltip-preview-landscape" class="swatch"></div>
+          <div class="swatch-label">Battlefield card</div>
+          <div id="tooltip-preview-landscape-dims" class="swatch-dims"></div>
+        </div>
+        <span id="tooltip-scale-readout"></span>
+      </div>
+      <p class="preview-scale-note">Shown scaled down to fit — the dimensions above are the exact size viewers see on hover.</p>
+    </section>
+
+    <details class="advanced">
+      <summary>Advanced settings</summary>
+      <div class="advanced-body">
+        <div class="field-row checkbox">
+          <input id="overlay-enabled-input" type="checkbox" />
+          <label for="overlay-enabled-input" class="field-label">Overlay enabled</label>
+        </div>
+
+        <div class="field-row">
+          <div class="field-row checkbox" style="margin-bottom: 2px">
+            <input id="debug-outlines-input" type="checkbox" />
+            <label for="debug-outlines-input" class="field-label">Show hitbox outlines to viewers</label>
+          </div>
+          <p class="field-help">Use this only for a final alignment check. Everyone watching the stream will see the outlines.</p>
+        </div>
+
+        <div class="field-row">
+          <label for="aspect-ratio-input" class="field-label">RiftAtlas window aspect ratio override</label>
+          <input id="aspect-ratio-input" type="text" size="8" style="max-width: 120px" />
+          <p class="field-help">Usually left empty. Use it only if alignment changes when the RiftAtlas window is resized.</p>
+        </div>
+
+        <details class="nested">
+          <summary>Exact values</summary>
+          <div class="nested-body">
+            <p class="field-help">Advanced: use these only when you need precise manual adjustments.</p>
+            <div class="exact-values-grid">
+              <label>x<input id="region-x-input" type="number" min="0" max="1" step="0.01" value="0" /></label>
+              <label>y<input id="region-y-input" type="number" min="0" max="1" step="0.01" value="0" /></label>
+              <label>width<input id="region-width-input" type="number" min="0" max="1" step="0.01" value="1" /></label>
+              <label>height<input id="region-height-input" type="number" min="0" max="1" step="0.01" value="1" /></label>
+            </div>
+            <button id="region-reset-button" type="button" class="btn-secondary">Reset to full screen</button>
+          </div>
+        </details>
+      </div>
+    </details>
+
+    <div class="save-bar">
+      <div id="save-status" class="save-status" role="status" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="save-status-text">No changes to save</span>
+      </div>
+      <span id="save-timestamp" class="save-timestamp"></span>
+      <button id="save-button" type="button" disabled>Save</button>
+    </div>
+
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
     <script src="dist/config/main.js"></script>
   </body>

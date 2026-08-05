@@ -32,9 +32,15 @@ export interface OverlayConfig {
   tooltipScale: number;
 }
 
-/** Inclusive bounds a saved tooltipScale must fall within, or it's rejected back to the default — small enough to stay legible, large enough to be a meaningfully bigger popup without dwarfing the stream. */
-export const MIN_TOOLTIP_SCALE = 0.5;
-export const MAX_TOOLTIP_SCALE = 2;
+/**
+ * Inclusive bounds a saved tooltipScale must fall within, or it's rejected
+ * back to the default. Matches RiftAtlas's own card-scale setting, which
+ * uses the same 70%-130% range — keeping the two consistent means 100%
+ * (the default, 1) is the true center of the range here too, not an
+ * arbitrary point off to one side.
+ */
+export const MIN_TOOLTIP_SCALE = 0.7;
+export const MAX_TOOLTIP_SCALE = 1.3;
 
 /**
  * Upper bound a saved delayMs must fall within, or it's rejected back to
