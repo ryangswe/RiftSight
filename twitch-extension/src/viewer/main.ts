@@ -19,12 +19,10 @@ import {
   isWaitingForHistory,
   mapBoundsToSourceRegion,
   mapSizeToSourceRegion,
-  pointInConvexQuad,
   resolveHoveredCard,
   tooltipContentFor,
   type CardQuad,
   type HoverCandidate,
-  type Point,
   type Rect,
   type SourceRegion,
 } from "@riftsight/overlay-core";
@@ -45,7 +43,6 @@ function requireElement<T extends Element>(id: string): T {
 
 const stage = requireElement<HTMLElement>("overlay-stage");
 const tooltip = requireElement<HTMLElement>("tooltip");
-const pointerDiagnostics = requireElement<HTMLElement>("pointer-diagnostics");
 
 // Every incoming state is buffered regardless of delay (a delay of 0ms is
 // just "no meaningful lag" through the same pipeline, not a separate
@@ -133,9 +130,6 @@ function createFallbackLabel(label: string): HTMLElement {
 // Normal viewers see the card's art and nothing else — see cardPopupContentFor.
 // The fuller zone/owner/instanceId text (tooltipContentFor) only ever
 // appears here when debugOutlines is on, for calibration/QA purposes.
-// Diagnostic-only — read by the pointer diagnostic below to compare
-// "what's actually displayed right now" against what point-in-quad
-// hit-testing would independently resolve for the same pointer position.
 let currentlyShownInstanceId: string | undefined;
 
 function showTooltipFor(card: OverlayCard, targetRect: Rect): void {
@@ -258,11 +252,6 @@ function renderHitboxes(): void {
 
     const box = document.createElement("div");
     box.className = `${hitboxClassName(card)} ${debugOutlines ? "debug-outline" : ""}`.trim();
-    // Diagnostic-only — lets the elementsFromPoint line in the pointer
-    // diagnostic below correlate a raw hit-test result back to a card id;
-    // mainly useful now as a regression check that hitboxes are truly
-    // non-interactive (elementsFromPoint should always skip past them).
-    box.dataset["instanceId"] = card.instanceId;
 
     const style = computeHitboxStyle(mappedCard);
     box.style.left = style.left;
@@ -277,7 +266,7 @@ function renderHitboxes(): void {
   }
 }
 
-/** Region-mapped hover candidates (card + true rotated quad + effective stack rank) for the current frame's cards — shared by the real resolver and the diagnostic panel below so they can never disagree about input data. */
+/** Region-mapped hover candidates (card + true rotated quad + effective stack rank) for the current frame's cards. */
 function computeHoverCandidates(stageSize: { width: number; height: number }): HoverCandidate[] {
   return latestCards.map((card) => {
     const mappedBounds = mapBoundsToSourceRegion(card.bounds, sourceRegion);
@@ -311,51 +300,6 @@ function getHoverCandidates(stageSize: { width: number; height: number }): Hover
   return cachedCandidates;
 }
 
-function formatElementsFromPointLabel(el: Element): string {
-  const instanceId = (el as HTMLElement).dataset?.["instanceId"];
-  if (instanceId) return `hitbox(${instanceId})`;
-  return el.id ? `#${el.id}` : el.tagName.toLowerCase();
-}
-
-let lastLoggedResolvedInstanceId: string | null | undefined; // undefined = never logged yet
-
-function updatePointerDiagnosticsPanel(
-  clientX: number,
-  clientY: number,
-  pixelPoint: Point,
-  candidates: readonly HoverCandidate[],
-  resolved: OverlayCard | null
-): void {
-  const normalizedPoint = { x: pixelPoint.x / stage.clientWidth, y: pixelPoint.y / stage.clientHeight };
-  const domStack = Array.from(document.elementsFromPoint(clientX, clientY)).slice(0, 5).map(formatElementsFromPointLabel);
-  const containing = candidates.filter((candidate) => pointInConvexQuad(pixelPoint, candidate.quad));
-
-  pointerDiagnostics.style.display = "block";
-  pointerDiagnostics.textContent = [
-    `pointer: client(${clientX.toFixed(0)},${clientY.toFixed(0)}) stage-norm(${normalizedPoint.x.toFixed(3)},${normalizedPoint.y.toFixed(3)})`,
-    // Hitboxes are pointer-events: none now, so this should always skip
-    // past them to whatever's underneath — a quick live regression check
-    // that they're truly non-interactive, not a leftover hover source.
-    `elementsFromPoint: ${domStack.join(" > ") || "(none)"}`,
-    `containing cards (${containing.length}): ${containing.map((c) => `${c.card.instanceId}[z${c.zIndex}][${c.card.visibility}]`).join(", ") || "none"}`,
-    `resolveHoveredCard picked: ${resolved ? `${resolved.instanceId} visibility=${resolved.visibility} identity=${resolved.cardId ? "yes" : "no"}` : "none"}`,
-    `tooltip actually displaying: ${currentlyShownInstanceId ?? "none"}`,
-  ].join("\n");
-
-  const resolvedId = resolved?.instanceId ?? null;
-  if (resolvedId !== lastLoggedResolvedInstanceId) {
-    lastLoggedResolvedInstanceId = resolvedId;
-    console.log("[riftsight] pointer diagnostic — resolved card changed", {
-      pointer: normalizedPoint,
-      containingCards: containing.map((c) => ({ instanceId: c.card.instanceId, zIndex: c.zIndex, visibility: c.card.visibility })),
-      resolveHoveredCardPick: resolvedId,
-      resolveHoveredCardVisibility: resolved?.visibility ?? null,
-      resolveHoveredCardHasCardId: resolved ? Boolean(resolved.cardId) : null,
-      actuallyShown: currentlyShownInstanceId ?? null,
-    });
-  }
-}
-
 // The single source of hover state. Converts the pointer into
 // stage-relative pixel coordinates, tests it against every card's true
 // rotated quad, and shows/hides the tooltip for whichever card — if any
@@ -372,7 +316,6 @@ function handlePointerMove(clientX: number, clientY: number): void {
   if (!overlayEnabled || !withinStage || stageRect.width === 0 || stageRect.height === 0) {
     hideTooltip();
     document.body.style.cursor = "";
-    pointerDiagnostics.style.display = "none";
     return;
   }
 
@@ -392,16 +335,12 @@ function handlePointerMove(clientX: number, clientY: number): void {
     }
   }
   document.body.style.cursor = resolved ? "pointer" : "";
-
-  if (debugOutlines) updatePointerDiagnosticsPanel(clientX, clientY, pixelPoint, candidates, resolved);
-  else pointerDiagnostics.style.display = "none";
 }
 
 document.addEventListener("mousemove", (event) => handlePointerMove(event.clientX, event.clientY));
 document.addEventListener("mouseleave", () => {
   hideTooltip();
   document.body.style.cursor = "";
-  pointerDiagnostics.style.display = "none";
 });
 
 // This milestone still uses direct rectangular mapping only (no

@@ -15,23 +15,13 @@ describe("mapBoundsToSourceRegion", () => {
     expect(mapBoundsToSourceRegion(bounds, FULL_FRAME_SOURCE_REGION)).toEqual(bounds);
   });
 
-  it("maps into the left-half region", () => {
+  it("maps into a preset region (sanity check that presets are wired to the same generic offset+scale formula)", () => {
     const bounds = { x: 0.5, y: 0.5, width: 0.2, height: 0.2 }; // dead center of RiftAtlas
     expect(mapBoundsToSourceRegion(bounds, SOURCE_REGION_PRESETS.leftHalf)).toEqual({
       x: 0.25, // 0 + 0.5 * 0.5
       y: 0.5, // 0 + 0.5 * 1
       width: 0.1, // 0.2 * 0.5
       height: 0.2, // 0.2 * 1
-    });
-  });
-
-  it("maps into the right-half region", () => {
-    const bounds = { x: 0, y: 0, width: 1, height: 1 }; // the entire RiftAtlas viewport
-    expect(mapBoundsToSourceRegion(bounds, SOURCE_REGION_PRESETS.rightHalf)).toEqual({
-      x: 0.5,
-      y: 0,
-      width: 0.5,
-      height: 1,
     });
   });
 

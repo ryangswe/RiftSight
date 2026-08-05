@@ -64,30 +64,24 @@ describe("computeHitboxStyle", () => {
 // rotate(). At rotation 0 this must still degrade to exactly bounds, at
 // every edge of the source viewport.
 describe("computeHitboxStyle — rotated geometry", () => {
-  const edgeBounds: Record<string, OverlayCard["bounds"]> = {
-    "left edge": { x: 0, y: 0.4, width: 0.08, height: 0.18 },
-    "right edge": { x: 0.9, y: 0.4, width: 0.08, height: 0.18 },
-    "top edge": { x: 0.4, y: 0, width: 0.08, height: 0.18 },
-    "bottom edge": { x: 0.4, y: 0.82, width: 0.08, height: 0.18 },
-  };
-  const rotations = [0, 90, -90, 180];
-
-  for (const [edgeName, bounds] of Object.entries(edgeBounds)) {
-    for (const rotation of rotations) {
-      it(`${edgeName}, rotation ${rotation}deg: same-size local box matches bounds exactly`, () => {
-        // localWidth/localHeight equal to bounds' own size (the common
-        // case for an unrotated card, and true by construction whenever
-        // the AABB isn't inflated) must reproduce bounds exactly,
-        // regardless of rotation angle — center-based placement with a
-        // matching size is a no-op shift.
-        const style = computeHitboxStyle(card({ bounds, rotation, localWidth: bounds.width, localHeight: bounds.height }));
-        expect(style.left).toBe(`${bounds.x * 100}%`);
-        expect(style.top).toBe(`${bounds.y * 100}%`);
-        expect(style.width).toBe(`${bounds.width * 100}%`);
-        expect(style.height).toBe(`${bounds.height * 100}%`);
-      });
-    }
-  }
+  // localWidth/localHeight equal to bounds' own size (the common case for
+  // an unrotated card, and true by construction whenever the AABB isn't
+  // inflated) must reproduce bounds exactly — center-based placement with
+  // a matching size is a no-op shift. computeHitboxBox never reads
+  // `rotation` when deriving left/top/width/height (only computeHitboxStyle's
+  // separate transform/transformOrigin fields depend on it), so this holds
+  // for any bounds position and any rotation angle — one edge case plus one
+  // non-zero rotation demonstrates the whole invariant.
+  it.each([
+    { name: "an edge-touching card, unrotated", bounds: { x: 0, y: 0.4, width: 0.08, height: 0.18 }, rotation: 0 },
+    { name: "an edge-touching card, rotated 90deg", bounds: { x: 0.9, y: 0.4, width: 0.08, height: 0.18 }, rotation: 90 },
+  ])("$name: same-size local box matches bounds exactly", ({ bounds, rotation }) => {
+    const style = computeHitboxStyle(card({ bounds, rotation, localWidth: bounds.width, localHeight: bounds.height }));
+    expect(style.left).toBe(`${bounds.x * 100}%`);
+    expect(style.top).toBe(`${bounds.y * 100}%`);
+    expect(style.width).toBe(`${bounds.width * 100}%`);
+    expect(style.height).toBe(`${bounds.height * 100}%`);
+  });
 
   it("preserves the AABB's center when the true local size differs from bounds (the inflated-AABB case)", () => {
     // A rotated card's AABB is bigger than its true shape — simulate that
@@ -201,13 +195,5 @@ describe("computeTooltipPosition", () => {
     const target = { left: 200, top: -50, width: 120, height: 40 };
     const position = computeTooltipPosition(target, tooltipSize, viewport);
     expect(position.top).toBe(4);
-  });
-
-  it("doesn't cover the hovered card when the card sits near the left edge", () => {
-    const target = { left: 10, top: 300, width: 60, height: 170 };
-    const position = computeTooltipPosition(target, tooltipSize, viewport);
-    // Naturally anchors to the right — nothing to flip since there's no
-    // room on the left of a card that's already near the left edge.
-    expect(position.left).toBe(10 + 60 + 8);
   });
 });

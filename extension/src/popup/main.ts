@@ -22,7 +22,7 @@
 //    change made from here (see that function's doc comment).
 
 import { LINK_STATUS_LABEL, type LinkState, type LinkStatus } from "../background/link-state.js";
-import { PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
+import { idlePublishingMessage, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
 import { describeStreamerError } from "../background/error-messages.js";
 
 function requireElement<T extends Element>(id: string): T {
@@ -79,12 +79,6 @@ function updatePresenceSection(): void {
     });
 }
 
-function idlePublishingMessage(): string {
-  return lastKnownPresenceStatus === "no-riftatlas"
-    ? "Publishing enabled — open RiftAtlas to continue"
-    : "Publishing enabled — waiting for an active RiftAtlas game";
-}
-
 function syncPublishToggleUI(): void {
   publishToggleButton.textContent = cachedPublishingIntent ? "Stop publishing" : "Start publishing";
 }
@@ -102,7 +96,7 @@ function updatePublishStatus(): void {
     return;
   }
   if (lastKnownPresenceStatus !== "active") {
-    publishStatusEl.textContent = idlePublishingMessage();
+    publishStatusEl.textContent = idlePublishingMessage(lastKnownPresenceStatus);
     return;
   }
 
@@ -115,7 +109,7 @@ function updatePublishStatus(): void {
           ? "Publishing. Relay: connected"
           : response?.status === "disconnected"
             ? describeStreamerError("relay-reconnecting")
-            : idlePublishingMessage();
+            : idlePublishingMessage(lastKnownPresenceStatus);
     })
     .catch(() => {
       publishStatusEl.textContent = describeStreamerError("backend-unreachable");

@@ -15,7 +15,7 @@ import { nextPublishingAction } from "./publishing-lifecycle.js";
 import { isPublishing, publishedSnapshotCount, republishCurrentState, startPublishing, stopPublishing } from "./publisher.js";
 import type { CardDetection } from "./types.js";
 import { LINK_STATUS_LABEL, type LinkState } from "../background/link-state.js";
-import { HEARTBEAT_INTERVAL_MS, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
+import { HEARTBEAT_INTERVAL_MS, idlePublishingMessage, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
 import { describeStreamerError } from "../background/error-messages.js";
 
 // closed-beta hides the manual session-ID field and the account section
@@ -681,12 +681,6 @@ function syncPublishToggleUI(): void {
 // but nothing is actually running yet.
 let lastKnownPresenceStatus: PresenceStatus = "no-riftatlas";
 
-function idlePublishingMessage(): string {
-  return lastKnownPresenceStatus === "no-riftatlas"
-    ? "Publishing enabled — open RiftAtlas to continue"
-    : "Publishing enabled — waiting for an active RiftAtlas game";
-}
-
 // DOM write only — split out of updatePublishStatus() below so the
 // reconnect-detection logic there (lastKnownConnectionStatus bookkeeping,
 // republishCurrentState()) keeps running even when no panel exists to
@@ -702,7 +696,7 @@ function renderPublishStatusText(text: string): void {
 
 function updatePublishStatus(): void {
   if (!isPublishing()) {
-    renderPublishStatusText(cachedPublishingIntent ? idlePublishingMessage() : "Not publishing.");
+    renderPublishStatusText(cachedPublishingIntent ? idlePublishingMessage(lastKnownPresenceStatus) : "Not publishing.");
     return;
   }
 

@@ -84,3 +84,10 @@ export const PRESENCE_STATUS_LABEL: Record<PresenceStatus, string> = {
   active: "RiftAtlas detected",
   stale: "Lost contact with RiftAtlas — reconnecting",
 };
+
+/** What to show when the streamer's publishing intent is on but nothing is actually running yet — picks between the two reasons based on the most recently observed presence status. Shared by the popup and the content-script debug panel, which each track their own presence poll independently. */
+export function idlePublishingMessage(status: PresenceStatus): string {
+  return status === "no-riftatlas"
+    ? "Publishing enabled — open RiftAtlas to continue"
+    : "Publishing enabled — waiting for an active RiftAtlas game";
+}

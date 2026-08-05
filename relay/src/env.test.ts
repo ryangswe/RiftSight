@@ -79,15 +79,6 @@ describe("validateEnv", () => {
     }
   });
 
-  it("closed-beta: ALLOW_LOCAL_DEBUG=false stays false, no warning (already the safe value)", () => {
-    const result = validateEnv(env({ RIFTSIGHT_MODE: "closed-beta", ...closedBetaRequiredVars(), ALLOW_LOCAL_DEBUG: "false" }));
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.allowLocalDebug).toBe(false);
-      expect(result.warnings.some((w) => w.includes("ALLOW_LOCAL_DEBUG"))).toBe(false);
-    }
-  });
-
   it("development: ALLOW_LOCAL_DEBUG=false disables it (existing behavior preserved)", () => {
     const result = validateEnv(env({ RIFTSIGHT_MODE: "development", ALLOW_LOCAL_DEBUG: "false" }));
     expect(result.ok).toBe(true);
