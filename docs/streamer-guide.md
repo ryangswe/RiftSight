@@ -8,6 +8,8 @@ RiftSight lets your viewers hover over cards visible on your stream to see the f
 
 Someone on the RiftSight team needs to have already added your Twitch account to the beta. If you haven't heard back that you're in, check with whoever invited you before continuing.
 
+You'll also need **Chrome (or another Chromium-based browser, like Edge or Brave)** to install the extension in Step 1 — this only applies to you as the streamer. Your viewers can watch and hover over cards in any browser; see [the viewer guide](viewer-guide.md).
+
 ## Step 1 — Install the RiftSight browser extension
 
 1. Download and unzip the `riftsight-extension-closed-beta.zip` file you were given.
@@ -32,7 +34,7 @@ If it instead says your account isn't part of the beta yet, you weren't added in
 
 1. Open RiftAtlas in a browser tab, like you normally would.
 2. Click the RiftSight icon again. Under "RiftAtlas," it should say **RiftAtlas detected** once you're in an active game.
-3. Click **Start publishing**. You should be a green indicator in the bottom right of the RiftSight extension icon that confirms you're successfully publishing.
+3. Click **Start publishing**. You should see a green indicator in the bottom-right corner of the RiftSight extension icon, confirming you're successfully publishing.
 
 That's it — RiftSight is now watching your game and will send card info to your viewers automatically. You don't need to keep the panel open; it'll keep working in the background as long as RiftAtlas stays open.
 
@@ -46,14 +48,51 @@ This is a separate, one-time setup step on Twitch's own side:
 
 ## Step 5 — A couple of quick settings
 
-Twitch gives every extension its own settings page. Open RiftSight's settings from your dashboard (same Extensions area as step 4) and set two things:
+Twitch gives every extension its own settings page. From the same Extensions area as step 4, look for a **Configure** link or gear icon next to RiftSight and open it. It's a short, 3-step setup:
 
-- **Delay**: set this to match whatever stream delay you use in OBS/your broadcast software. If you're not sure, leave it at 0 — you can adjust it later.
-- **Source-region calibration**: if RiftAtlas fills your entire stream (no webcam overlay, no other panels around it), you don't need to touch this. If RiftAtlas only takes up part of your screen, drag the box in the preview to match where RiftAtlas actually appears on your stream. Note: It can be helpful to enable Debug outlines to see the exact card hover hitbox positions in the current overlay.
+### Where does RiftAtlas appear on your stream?
+
+If RiftAtlas fills your whole stream (no webcam, no other panels around it), just pick **Full screen** and skip ahead to matching your stream delay below:
+
+![Step 1 with Full screen selected — layout presets, the screenshot dropzone, and the calibration preview box](images/config-step1-region.png)
+
+Otherwise, pick whichever preset is closest (**Left side** / **Right side** / **Centered**), or drag and resize the box yourself until it matches where RiftAtlas actually shows up. To make that easier, drop in a screenshot of your real stream output — the box then overlays on top of your actual layout so you can line it up by eye instead of guessing blind:
+
+![Step 1 with Left side selected — the box now only covers the left half of the preview, with Unsaved changes showing in the save bar](images/config-step1-preset-selected.png)
+
+*Tip: in OBS, right-click inside the Preview canvas and choose **Save Preview Screenshot** (not "Save Source Screenshot" — that one only grabs the RiftAtlas capture by itself and skips any webcam, chat box, or overlays you have layered around it). This saves a PNG of your full composited canvas, exactly like a normal OS screenshot tool would, but guaranteed to match your actual stream output pixel-for-pixel.*
+
+![OBS with a source selected in the Preview canvas, right-click menu open, Save Preview Screenshot highlighted](images/save-preview-screenshot.jpg)
+
+Nothing you drop in gets uploaded or saved anywhere — it's only there to help you align, and it disappears the next time you reload the page.
+
+Here's what it looks like once a screenshot is dropped in and the box is matched up — every green outline lines up with an actual card, hand to base to runes:
+
+![The calibration preview with a real OBS screenshot loaded and the box matched to the RiftAtlas window — green hitbox outlines line up exactly with every card on the board](images/matching-screenshot.jpg)
+
+Those green outlines are part of the calibration preview itself, so you'll always see them here while lining things up — they're separate from **Show hitbox outlines to viewers** in Advanced settings below, which controls whether your actual viewers see them on the live stream.
+
+### Match your stream delay
+
+Pick **None** / **2s** / **5s** / **10s**, or enter a custom value, to match whatever delay you use in OBS/your broadcast software. Not sure? Start with **None** — you can always come back and increase it later if the card overlay seems to lag behind the video.
+
+![Step 2 with the 5s delay preset selected](images/config-step2-delay.png)
+
+### Choose card popup size
+
+Pick **Smaller** / **Default** / **Larger** for how big the card art appears when a viewer hovers, with a live preview of the exact pixel size for both card types.
+
+![Step 3 showing the popup-size slider and a live preview of the portrait and battlefield card sizes](images/config-step3-popup-size.png)
+
+### Advanced settings
+
+Collapsed by default — most streamers never need to open this. It has things like a **Show hitbox outlines** option, which shows a visible box around every hoverable card and is handy if you want to double-check your calibration looks right before going live.
+
+![The Advanced settings section expanded, showing Overlay enabled, Show hitbox outlines to viewers, and the aspect-ratio override](images/config-advanced-settings.png)
 
 ## Step 6 — Go live and check it's working
 
-Start your stream as normal. Then, from a **separate device or account** (not your own streamer account), open your channel and hover over a visible card. You should see its full art pop up. Note: RiftSight is currently only supported on Chromium browsers.
+Start your stream as normal. Then, from a **separate device or account** (not your own streamer account), open your channel and hover over a visible card. You should see its full art pop up.
 
 ## Understanding the RiftSight icon
 
@@ -79,3 +118,6 @@ Reach out to whoever invited you to the beta with as much detail as you can — 
 
 **Do I need to keep any terminal window or program running?**
 No — just your browser, with RiftAtlas open and the RiftSight extension installed.
+
+**What browsers does this work on?**
+For you as the streamer: Chrome or another Chromium-based browser (Edge, Brave), since the extension you install in Step 1 only comes in that format. For your viewers: any browser Twitch itself supports — they're just watching a normal Twitch extension, no install required.
