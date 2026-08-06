@@ -45,7 +45,7 @@
 // one genuinely face-down card, with zero disagreements.
 
 import { classifyFaceFacing, type FaceFacing } from "./face-transform.js";
-import { resolveElementRotationDeg } from "./rotation.js";
+import { composeRotations, resolveElementRotationDeg } from "./rotation.js";
 import type { CardDetection, DropZone, Owner, PixelBounds, Visibility } from "./types.js";
 
 const CARD_IMAGE_URL_PATTERN = /\/cards\/(?:original|small-v2)\/([A-Z0-9]+-\d+)\.webp/;
@@ -113,71 +113,76 @@ function nearestOwner(el: Element): Owner {
   return "unknown";
 }
 
-// How many ancestors outward from the anchor to check for a rotation
-// transform before giving up (0 = anchor only). See rotation.ts's module
-// header for the DOM assumption this exists to accommodate — different
-// zones have been observed carrying rotation at different hop counts (0
-// for a hand-fan tilt, 3 for a tapped battlefield unit), so this is
-// deliberately generous rather than hardcoded to one exact depth.
-const MAX_ROTATION_SEARCH_DEPTH = 6;
+// How many ancestors outward from the anchor to check before giving up (0 =
+// anchor only). Shared by resolveAncestorTraits' rotation and z-index
+// lookups below — different zones have been observed carrying each at
+// different hop counts (0 for a hand-fan tilt's rotation, 3 for a tapped
+// battlefield unit's), so this is deliberately generous rather than
+// hardcoded to one exact depth.
+const MAX_ANCESTOR_SEARCH_DEPTH = 6;
+
+interface AncestorTraits {
+  rotationDeg: number;
+  zIndexHint: number | undefined;
+}
 
 /**
- * Searches outward from `anchor` — the anchor itself, then each ancestor in
- * turn — for the first element that actually carries a rotation-relevant
- * transform. Stops at the first one found; never composes/accumulates
- * transforms across multiple ancestors.
+ * Rotation and z-index both need to inspect the same walk outward from
+ * `anchor` — the anchor itself, then each ancestor in turn, up to
+ * MAX_ANCESTOR_SEARCH_DEPTH — so this does that walk once and extracts both
+ * from the same per-level getComputedStyle() call, rather than what used to
+ * be two independent functions each separately calling getComputedStyle()
+ * on every one of the same ancestors. Each trait keeps its own original,
+ * independent logic; only the walk itself is shared:
+ *
+ * - Rotation collects every ancestor's own contribution and composes them
+ *   (composeRotations) rather than stopping at the first — multiple
+ *   ancestors *can* each carry a real rotation at once, confirmed via a
+ *   live capture of an opponent-side landscape card, whose zone wrapper
+ *   carries its own standalone `rotate: 180deg` (a perspective correction)
+ *   one level nearer the anchor than the card's own `rotate(90deg)`; see
+ *   rotation.ts's module header for the full story.
+ *
+ * - Z-index stops at the first real (non-"auto") value found and keeps it —
+ *   unlike rotation, this one is *not* meant to compose. CONFIRMED via live
+ *   capture: RiftAtlas sets its real, meaningful z-index on an ancestor —
+ *   the same "position-transition wrapper" where a card's own rotation is
+ *   also found — never on the anchor itself, which always reports "auto".
+ *   Reading only the anchor's own z-index (the old behavior, before this
+ *   walk existed at all) therefore always returned undefined for every
+ *   hand/base card, silently forcing the viewer's stack-order comparison to
+ *   fall back to array order for all of them — coincidentally correct for
+ *   hand (real z-index there also increases left-to-right) but exactly
+ *   inverted for base zone (real z-index *decreases* left-to-right, leftmost
+ *   on top), which is why base-zone hover was so much more broken than
+ *   hand's before that fix.
  */
-function resolveRotation(anchor: Element): number {
+function resolveAncestorTraits(anchor: Element): AncestorTraits {
   let current: Element | null = anchor;
   let depth = 0;
-  while (current && depth <= MAX_ROTATION_SEARCH_DEPTH) {
+  const rotationContributions: number[] = [];
+  let zIndexHint: number | undefined;
+
+  while (current && depth <= MAX_ANCESTOR_SEARCH_DEPTH) {
     const style = getComputedStyle(current);
+
     const rotation = resolveElementRotationDeg({
       computedRotate: style.rotate || "none",
       inlineTransform: (current as HTMLElement).style?.transform || "",
       computedTransform: style.transform,
     });
-    if (rotation !== undefined) return rotation;
-    current = current.parentElement;
-    depth++;
-  }
-  return 0;
-}
+    if (rotation !== undefined) rotationContributions.push(rotation);
 
-/**
- * Searches outward from `anchor` — the anchor itself, then each ancestor in
- * turn, up to the same bound as resolveRotation above — for the first
- * element that actually carries a real (non-"auto") z-index. Not
- * identity-sensitive (it's a rendering hint, not card data), so this is
- * read regardless of visibility — unlike cardId/name/imageUrl below.
- *
- * CONFIRMED via live capture: RiftAtlas sets its real, meaningful z-index
- * on an ancestor — the same "position-transition wrapper" where rotation
- * itself is also found (both observed at the exact same depth: 1 for a
- * hand-fan card, 2 for a base-zone unit) — never on the anchor itself,
- * which always reports "auto". Reading only the anchor's own z-index (the
- * old behavior) therefore always returned undefined for every hand/base
- * card, silently forcing the viewer's stack-order comparison to fall back
- * to array order for all of them. That fallback happened to coincide with
- * reality for hand (real z-index there also increases left-to-right, so
- * the rightmost card is genuinely on top) but was exactly inverted for
- * base zone, where real z-index *decreases* left-to-right — the leftmost
- * card is on top, the rightmost is on the bottom of the stack — which is
- * why base-zone hover was so much more broken than hand's.
- */
-function resolveZIndex(anchor: Element): number | undefined {
-  let current: Element | null = anchor;
-  let depth = 0;
-  while (current && depth <= MAX_ROTATION_SEARCH_DEPTH) {
-    const raw = getComputedStyle(current).zIndex;
-    if (raw !== "auto") {
-      const parsed = Number.parseInt(raw, 10);
-      if (!Number.isNaN(parsed)) return parsed;
+    if (zIndexHint === undefined && style.zIndex !== "auto") {
+      const parsed = Number.parseInt(style.zIndex, 10);
+      if (!Number.isNaN(parsed)) zIndexHint = parsed;
     }
+
     current = current.parentElement;
     depth++;
   }
-  return undefined;
+
+  return { rotationDeg: composeRotations(rotationContributions), zIndexHint };
 }
 
 interface VisibilityClassification {
@@ -271,7 +276,7 @@ function classifyCardVisibility(anchor: HTMLElement, faces: HTMLImageElement[]):
 
 function buildDetection(anchor: HTMLElement): CardDetection {
   const faces = Array.from(anchor.querySelectorAll<HTMLImageElement>("img[src]"));
-  const rotationDeg = resolveRotation(anchor);
+  const { rotationDeg, zIndexHint } = resolveAncestorTraits(anchor);
   const { visibility, visibleFace } = classifyCardVisibility(anchor, faces);
 
   let cardId: string | undefined;
@@ -294,7 +299,7 @@ function buildDetection(anchor: HTMLElement): CardDetection {
     owner: nearestOwner(anchor),
     rotationDeg,
     landscape: anchor.getAttribute("data-preview-landscape") === "true",
-    zIndexHint: resolveZIndex(anchor),
+    zIndexHint,
     bounds: toPixelBounds(anchor),
     // offsetWidth/offsetHeight are layout-space (border-box) dimensions,
     // unaffected by any CSS transform on the anchor or an ancestor — the

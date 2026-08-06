@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  composeRotations,
   normalizeDegrees,
   parseRotateFunction,
   parseStandaloneRotate,
@@ -119,5 +120,35 @@ describe("resolveElementRotationDeg", () => {
         computedTransform: "matrix(0, 1, -1, 0, 0, 0)",
       })
     ).toBe(90);
+  });
+});
+
+describe("composeRotations", () => {
+  it("returns 0 when no ancestor contributed a rotation at all", () => {
+    expect(composeRotations([])).toBe(0);
+  });
+
+  it("returns a single contribution unchanged — the player's-own-side case, where only one ancestor ever carries a rotation", () => {
+    expect(composeRotations([90])).toBe(90);
+  });
+
+  it("reproduces the live-captured opponent base-zone case: a 90deg landscape card inside RiftAtlas's 180deg opponent-perspective-correction wrapper composes to -90, not 180", () => {
+    // Real captured ancestor chain, nearest-to-anchor first: the zone
+    // wrapper's own standalone rotate:180deg is found one level nearer the
+    // anchor than the card's own rotate(90deg) wrapper further out.
+    // Stopping at the first contribution alone (the original bug) returns
+    // 180 — and a rectangle rotated 180deg is visually indistinguishable
+    // from one not rotated at all, which is exactly why the opponent's
+    // landscape hitboxes looked "vertical" instead of "horizontal."
+    expect(composeRotations([180, 90])).toBe(-90);
+  });
+
+  it("composition is order-independent", () => {
+    expect(composeRotations([90, 180])).toBe(-90);
+  });
+
+  it("wraps a summed total back into (-180, 180]", () => {
+    expect(composeRotations([90, 90])).toBe(180);
+    expect(composeRotations([170, 170])).toBe(-20); // 340 -> -20
   });
 });

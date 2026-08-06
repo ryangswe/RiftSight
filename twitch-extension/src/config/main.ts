@@ -173,6 +173,22 @@ function markClean(savedAt: Date): void {
   updateSaveButtonState();
 }
 
+// Best-effort protection against losing unsaved changes: reliably works for
+// an actual browser tab close or top-level navigation, since that's a real
+// unload of this document's own window. What it can't guarantee is Twitch's
+// own in-dashboard dismissal of the config iframe — browsers are known to
+// suppress the confirmation dialog (though not the event itself) for a
+// subframe being removed/navigated by its parent, as opposed to a real
+// tab-close, and there's no Twitch-specific documentation either way. The
+// sticky save bar's persistent "Unsaved changes" text is the fallback that
+// still works regardless: it's visible for as long as this iframe stays
+// alive, dialog or not.
+window.addEventListener("beforeunload", (event) => {
+  if (!isDirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
 function applyRegionToInputs(region: SourceRegion): void {
   regionXInput.value = region.x.toFixed(3);
   regionYInput.value = region.y.toFixed(3);

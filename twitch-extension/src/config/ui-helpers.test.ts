@@ -51,6 +51,14 @@ describe("matchRegionPreset", () => {
   it("returns 'custom' for a dragged/resized region that matches no preset", () => {
     expect(matchRegionPreset({ x: 0.12, y: 0.07, width: 0.6, height: 0.6 }, SOURCE_REGION_PRESETS)).toBe("custom");
   });
+
+  it("returns to a preset's name once a custom region is dragged back to exactly match it", () => {
+    // Simulates the real UI flow: drag to custom, then drag back until it
+    // lands exactly on "centered" again — the preset pill should reactivate.
+    const custom = { x: 0.12, y: 0.07, width: 0.6, height: 0.6 };
+    expect(matchRegionPreset(custom, SOURCE_REGION_PRESETS)).toBe("custom");
+    expect(matchRegionPreset(SOURCE_REGION_PRESETS.centered, SOURCE_REGION_PRESETS)).toBe("centered");
+  });
 });
 
 describe("describeTooltipScale", () => {

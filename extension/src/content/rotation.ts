@@ -12,9 +12,24 @@
 // `transform: rotate(90deg)`. There's no single fixed hop count that works
 // for every zone, so resolveRotation() (in card-detector.ts) searches
 // outward from the anchor — checking the anchor first, then each ancestor
-// in turn, up to a bounded depth — and takes the FIRST element that
-// actually carries a transform. It never composes/accumulates transforms
-// across multiple ancestors.
+// in turn, up to a bounded depth.
+//
+// It used to stop at the first ancestor that carried any rotation at all,
+// on the assumption that only one ancestor in the chain would ever have
+// one. A live capture of the OPPONENT's board disproved that: RiftAtlas
+// wraps every opponent zone in an ancestor one level *nearer* the anchor
+// than a landscape card's own rotate(90deg) wrapper, carrying a standalone
+// `rotate: 180deg` (Tailwind's `rotate-180` utility) — a perspective
+// correction, presumably because the opponent's cards are logically laid
+// out mirrored/upside-down (as if viewed from across the table) and this
+// flips them back upright for the local viewer. Stopping at the first
+// contribution found 180 alone, not the composed 270 (normalized -90) — and
+// since a rectangle rotated 180° is visually indistinguishable from one not
+// rotated at all, that read as "the opponent's landscape hitboxes aren't
+// rotated," exactly the bug reported. resolveRotation now sums every
+// contribution it finds across the whole walk (see composeRotations below)
+// instead of stopping at the first — a no-op for the player's own side,
+// where only one ancestor ever carries a rotation.
 //
 // Also confirmed empirically: `data-preview-rotation` (what the old
 // parseRotation() read) stays "0" even on visibly rotated cards — it
@@ -101,4 +116,18 @@ export function resolveElementRotationDeg(info: ElementTransformInfo): number | 
   if (matrixRotate !== undefined) return normalizeDegrees(matrixRotate);
 
   return undefined;
+}
+
+/**
+ * Sums every ancestor's own rotation contribution (as resolveRotation's
+ * walk collects them, nearest-to-anchor first) into one net rotation. Pure
+ * addition, not a matrix multiply — for in-plane (Z-axis-only) rotations,
+ * which is all RiftAtlas's card transforms ever are, nested CSS transforms
+ * compose additively regardless of order, so summation is exact, not an
+ * approximation. Empty input (no ancestor carried any rotation at all)
+ * returns 0, matching resolveRotation's original no-rotation default.
+ */
+export function composeRotations(contributions: readonly number[]): number {
+  if (contributions.length === 0) return 0;
+  return normalizeDegrees(contributions.reduce((sum, deg) => sum + deg, 0));
 }
