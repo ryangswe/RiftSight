@@ -72,6 +72,8 @@ Here's what it looks like once a screenshot is dropped in and the box is matched
 
 Those green outlines are part of the calibration preview itself, so you'll always see them here while lining things up — they're separate from **Show hitbox outlines to viewers** in Advanced settings below, which controls whether your actual viewers see them on the live stream.
 
+*Heads up: Twitch's own player controls (play/pause, volume, etc.) sit on top of every video overlay extension along the very bottom edge of the video — a Twitch platform rule, not something RiftSight can change. If your layout puts cards right at the bottom edge, viewers in a small or windowed player may find those specific cards harder to hover (fullscreen doesn't have this issue). Not something to worry about unless a viewer actually reports it — just worth knowing if one does.*
+
 ### Match your stream delay
 
 Pick **None** / **2s** / **5s** / **10s**, or enter a custom value, to match whatever delay you use in OBS/your broadcast software. Not sure? Start with **None** — you can always come back and increase it later if the card overlay seems to lag behind the video.

@@ -15,6 +15,10 @@ You've been invited to help test RiftSight on a streamer's channel. Here's every
 
 If you just opened the stream, or just refreshed the page, **give it a little time before hovering** — anywhere from a few seconds up to a few minutes, depending on how the streamer has their delay configured. During that window the overlay may show nothing at all, even though it's working correctly. This is expected, not a bug: RiftSight deliberately waits out the streamer's own configured delay before showing anything, rather than risk showing you a snapshot that doesn't match what's actually on screen. If it's been a while and cards still aren't appearing, that's worth reporting.
 
+## Cards near the very bottom of the video
+
+Twitch's own player controls (play/pause, volume, fullscreen, etc.) sit on top of every video overlay extension along the bottom edge — that's a Twitch platform rule, not something RiftSight controls. In a small or windowed player, that strip can cover a noticeable chunk of the video, so a card sitting right at the bottom edge may be harder to hover than one higher up. **Watching in fullscreen avoids this** — the same control strip takes up a much smaller share of a bigger video, so it's less likely to be in the way.
+
 ## Things worth trying
 
 - Hover over different cards in different areas of the board.

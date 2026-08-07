@@ -576,6 +576,11 @@ export function detectCards(root: ParentNode = document): CardDetection[] {
 
   root.querySelectorAll<HTMLElement>(CARD_ANCHOR_SELECTOR).forEach((el) => {
     if (activeDialog && !activeDialog.contains(el)) return;
+    // Rune cards are purely iconographic (a type icon and a name, no rules
+    // text or effect) — hovering one would never show a viewer anything
+    // they can't already read off the board, so these are excluded before
+    // any of the more expensive detection work below runs at all.
+    if (el.getAttribute("data-drop-zone") === "runeArea") return;
 
     const instanceId = el.getAttribute("data-card-id");
     if (!instanceId || !isDetectableInstanceId(instanceId)) return;
