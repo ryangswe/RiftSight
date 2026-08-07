@@ -345,6 +345,21 @@ function findCardUnitsInDialog(dialog: Element): HTMLElement[] {
 }
 
 /**
+ * Finds each mulligan-hand card button at the start of a new game —
+ * live-confirmed a structurally distinct case from both the board (no
+ * data-card-id) and the Trash/Banished/Deck Peek dialogs (no
+ * `[role="dialog"]` portal, no extreme z-index, not even a shared wrapper
+ * class — just plain buttons sitting directly in the board's own layout).
+ * Each button wraps exactly one image (no front/back flip pair), so
+ * buildDetection's existing single-face path already classifies it
+ * correctly via CARDBACK_IMAGE_PATTERN — the same cardback asset used
+ * everywhere else — with no new privacy logic needed here.
+ */
+function findMulliganCardButtons(root: ParentNode): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('button[class*="--mul-card-w"]'));
+}
+
+/**
  * Resolves which face is toward the camera by reading the shared
  * preserve-3d parent's own `transform` — see this module's header and
  * face-transform.ts. Returns "unsupported" (never guesses) whenever the
@@ -563,6 +578,19 @@ export function detectCards(root: ParentNode = document): CardDetection[] {
       }
     });
   }
+
+  // Mulligan-hand cards, shown once at the start of a new game. Unlike the
+  // dialog cards above, each button maps to exactly one physical card with
+  // no duplicate-unit risk (live-confirmed: one button per visible card,
+  // one image each), so a plain position-keyed id is enough — no dedup map
+  // or "prefer public" merge race is possible here.
+  findMulliganCardButtons(root).forEach((button) => {
+    const rect = button.getBoundingClientRect();
+    const detection = buildDetection(button);
+    detection.instanceId = `mulligan-${Math.round(rect.x)},${Math.round(rect.y)}`;
+    detection.dropZone = "hand";
+    byInstanceId.set(detection.instanceId, detection);
+  });
 
   return Array.from(byInstanceId.values());
 }
