@@ -71,6 +71,30 @@ const BATTLEFIELD_SLOT_ID_PATTERN = /^battlefield-marker:battlefield[AB]$/;
 const CHAIN_INSTANCE_ID_PATTERN = /^chain-/i;
 const CARDBACK_IMAGE_PATTERN = /cardback-(white|blue)\.png/;
 
+// RiftAtlas portals every blocking overlay (Trash/Banished viewer, Deck
+// Peek, ...) through a shared wrapper carrying an extreme z-index —
+// live-captured, real value "2147483646" (INT32_MAX - 1, a common "always
+// on top of literally everything" library convention) confirmed identical
+// on two independent components (Trash/Banished's own dialog and Deck
+// Peek's), immediately wrapping a `role="dialog"` element. Board z-indices
+// observed so far are tiny integers (1, 2, 3, "auto"), so a generous
+// threshold cleanly separates "portal-layer content" from "board content"
+// without depending on the exact literal (which could drift slightly in a
+// future RiftAtlas build) or a specific class name (Tailwind arbitrary-value
+// class names aren't a stable public contract).
+const PORTAL_Z_INDEX_THRESHOLD = 100_000;
+// How many ancestors outward from a `role="dialog"` element to check for the
+// portal z-index before giving up — live-confirmed at depth 1 (the dialog's
+// immediate parent) in both captured cases, generous beyond that for the
+// same reason MAX_ANCESTOR_SEARCH_DEPTH below is.
+const PORTAL_ANCESTOR_SEARCH_DEPTH = 4;
+
+/** Exported for unit testing — this threshold decision is what separates "suppress this as board content under a modal" from "leave it alone." */
+export function isExtremeZIndex(zIndex: string): boolean {
+  const parsed = Number.parseInt(zIndex, 10);
+  return !Number.isNaN(parsed) && parsed > PORTAL_Z_INDEX_THRESHOLD;
+}
+
 /** RiftAtlas attaches this to every real card instance — see the module header. Exported so card-observer.ts can watch the exact same set of elements without duplicating the literal. */
 export const CARD_ANCHOR_SELECTOR = "[data-card-id]";
 
@@ -243,6 +267,34 @@ function resolveAncestorTraits(anchor: Element): AncestorTraits {
   return { rotationDeg: composeRotations(rotationContributions), zIndexHint };
 }
 
+/**
+ * Finds the currently active blocking overlay, if any — live-confirmed
+ * (against the real site, not just DOM inspection) that RiftAtlas's own
+ * hover breaks for every board card while one of these is open, not just
+ * ones it visually covers, so detectCards() suppresses all normal board
+ * detections wholesale while one is active rather than computing which
+ * cards are still visually peeking out from behind it.
+ *
+ * Live-confirmed against two independent, real components sharing the exact
+ * same structure — the Trash/Banished viewer and Deck Peek — a
+ * `role="dialog"` element wrapped by an ancestor carrying the portal
+ * z-index signal (see isExtremeZIndex). If more than one such dialog is
+ * somehow open at once — never observed live, so this is a guess rather
+ * than a confirmed behavior — the last one in DOM order is treated as
+ * active, on the assumption a later-opened overlay is the newest/topmost.
+ */
+function findActiveBlockingDialog(root: ParentNode): Element | undefined {
+  const dialogs = Array.from(root.querySelectorAll('[role="dialog"]')).filter((dialog) => {
+    let current: Element | null = dialog;
+    for (let depth = 0; depth <= PORTAL_ANCESTOR_SEARCH_DEPTH && current; depth++) {
+      if (isExtremeZIndex(getComputedStyle(current).zIndex)) return true;
+      current = current.parentElement;
+    }
+    return false;
+  });
+  return dialogs[dialogs.length - 1];
+}
+
 interface VisibilityClassification {
   visibility: Visibility;
   /** The specific front-face <img> to read cardId/name/imageUrl from — only set when visibility is "public". */
@@ -268,21 +320,69 @@ function findBackfaceHiddenAncestor(el: Element, maxHops = 6): Element | undefin
 }
 
 /**
+ * Finds each distinct card "unit" inside a public modal (Trash/Banished) —
+ * live-confirmed these cards carry no data-card-id at all (zero matches
+ * inside either dialog), unlike every other zone, so there's no anchor to
+ * select on directly the way CARD_ANCHOR_SELECTOR does for the board.
+ * Groups face <img>s by their shared 3D-flip parent — the same structure
+ * resolveFaceFacing already depends on — to find each card's own root
+ * element, which buildDetection can then process like any other anchor: it
+ * never actually required a real data-card-id (falls back to "" gracefully),
+ * only cardId, which comes from the image URL regardless.
+ */
+function findCardUnitsInDialog(dialog: Element): HTMLElement[] {
+  const faces = Array.from(dialog.querySelectorAll<HTMLImageElement>("img[src]"));
+  const seen = new Set<HTMLElement>();
+  const units: HTMLElement[] = [];
+  for (const face of faces) {
+    const wrapper = findBackfaceHiddenAncestor(face);
+    const unit = (wrapper?.parentElement ?? wrapper ?? face.parentElement ?? face) as HTMLElement;
+    if (seen.has(unit)) continue;
+    seen.add(unit);
+    units.push(unit);
+  }
+  return units;
+}
+
+/**
  * Resolves which face is toward the camera by reading the shared
  * preserve-3d parent's own `transform` — see this module's header and
  * face-transform.ts. Returns "unsupported" (never guesses) whenever the
  * expected structure isn't found: either wrapper missing, or the two
- * wrappers don't share a single parent.
+ * wrappers don't share a single parent. Takes the already-resolved
+ * wrappers rather than the face elements themselves — classifyCardVisibility
+ * needs to know whether they exist at all (see laterInDocumentOrder's
+ * fallback) before deciding whether to call this, so it finds them once
+ * and passes them in rather than this function re-finding the same two
+ * ancestors a second time on every board card.
  */
-function resolveFaceFacing(frontFace: HTMLImageElement, backFace: HTMLImageElement): FaceFacing {
-  const frontWrapper = findBackfaceHiddenAncestor(frontFace);
-  const backWrapper = findBackfaceHiddenAncestor(backFace);
+function resolveFaceFacing(frontWrapper: Element | undefined, backWrapper: Element | undefined): FaceFacing {
   if (!frontWrapper || !backWrapper) return "unsupported";
 
   const parent = frontWrapper.parentElement;
   if (!parent || parent !== backWrapper.parentElement) return "unsupported";
 
   return classifyFaceFacing(getComputedStyle(parent).transform);
+}
+
+/**
+ * Fallback for when neither face has a backface-hidden wrapper at all —
+ * live-confirmed necessary for Deck Peek specifically: unlike every other
+ * card context found so far, its two face images have no flip-wrapper
+ * ancestor whatsoever (not "present but mismatched parents" — genuinely
+ * absent on both sides), and both report identical
+ * opacity/display/visibility/rect. There's no transform to read, so which
+ * one is actually shown is decided purely by standard CSS same-z-index
+ * stacking: the later sibling in document order paints on top. This
+ * mirrors that exact browser rule rather than sampling rendered pixels —
+ * the pixel-sampling approach this module deliberately moved away from
+ * (see the module header) was unreliable specifically because of occlusion
+ * from unrelated elements; comparing two already-known candidates' own
+ * relative document order carries no such risk, since nothing else is
+ * involved in the comparison.
+ */
+function laterInDocumentOrder(a: Element, b: Element): Element {
+  return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 ? b : a;
 }
 
 /**
@@ -326,7 +426,26 @@ function classifyCardVisibility(anchor: HTMLElement, faces: HTMLImageElement[]):
   const backFace = faces.find((img) => CARDBACK_IMAGE_PATTERN.test(imageSrc(img)));
   if (!frontFace || !backFace) return { visibility: "unknown", visibleFace: undefined };
 
-  const facing = resolveFaceFacing(frontFace, backFace);
+  // Found once, shared below — resolveFaceFacing used to re-find both of
+  // these itself, meaning every 2-face board card paid for this bounded
+  // ancestor walk twice per scan for no reason once this fallback check
+  // needed the same answer first.
+  const frontWrapper = findBackfaceHiddenAncestor(frontFace);
+  const backWrapper = findBackfaceHiddenAncestor(backFace);
+
+  // No flip-wrapper on either side at all — not the normal 3D-flip
+  // structure, so resolveFaceFacing has no transform to read (see
+  // laterInDocumentOrder's doc comment for why this specific case is
+  // live-confirmed, not hypothetical). A missing wrapper on only *one*
+  // side is left to resolveFaceFacing's own "unsupported" — that's a
+  // genuinely unexpected, ambiguous structure worth failing closed on,
+  // unlike this clean both-absent case.
+  if (!frontWrapper && !backWrapper) {
+    const visible = laterInDocumentOrder(frontFace, backFace);
+    return visible === frontFace ? { visibility: "public", visibleFace: frontFace } : { visibility: "hidden", visibleFace: undefined };
+  }
+
+  const facing = resolveFaceFacing(frontWrapper, backWrapper);
   if (facing === "front") return { visibility: "public", visibleFace: frontFace };
   if (facing === "back") return { visibility: "hidden", visibleFace: undefined };
   return { visibility: "unknown", visibleFace: undefined }; // "intermediate" or "unsupported"
@@ -375,11 +494,28 @@ function buildDetection(anchor: HTMLElement): CardDetection {
  * instance sharing the same data-card-id (e.g. a "preview anchor" div and
  * an interactive button) — this dedupes to one, preferring whichever
  * candidate resolved to "public" over "hidden"/"unknown" duplicates.
+ *
+ * While a blocking overlay (Trash/Banished viewer, Deck Peek, ...) is open —
+ * see findActiveBlockingDialog — every normal board card is suppressed
+ * wholesale, live-confirmed to match RiftAtlas's own hover behavior (it
+ * breaks for every board card while one of these is open, not just ones
+ * visually covered). The overlay's own cards are then detected the same way
+ * board cards already are — the same front/back transform classifier is the
+ * only privacy authority here, exactly as it already is for a card in hand
+ * or an opponent's revealed hand: both are also "private until this specific
+ * client renders it face-up," and are already broadcast (delayed) rather
+ * than suppressed, so a modal reveal (Deck Peek included) isn't a new
+ * privacy category needing different treatment — see the module header for
+ * why cardId/imageUrl still can't leak without classifyCardVisibility
+ * having positively confirmed the front face is what's actually showing.
  */
 export function detectCards(root: ParentNode = document): CardDetection[] {
   const byInstanceId = new Map<string, CardDetection>();
+  const activeDialog = findActiveBlockingDialog(root);
 
   root.querySelectorAll<HTMLElement>(CARD_ANCHOR_SELECTOR).forEach((el) => {
+    if (activeDialog && !activeDialog.contains(el)) return;
+
     const instanceId = el.getAttribute("data-card-id");
     if (!instanceId || !isDetectableInstanceId(instanceId)) return;
 
@@ -389,6 +525,44 @@ export function detectCards(root: ParentNode = document): CardDetection[] {
       byInstanceId.set(instanceId, detection);
     }
   });
+
+  if (activeDialog) {
+    // Modal cards carry no data-card-id, so there's no natural identity to
+    // key on. Live-confirmed (Deck Peek specifically): a card's front face
+    // and its cardback sibling don't always share one direct parent the way
+    // board cards do — one of the two can resolve to a shallower wrapper
+    // whose parent only contains that single face, so findCardUnitsInDialog
+    // can hand back two "units" for one real card, at the exact same screen
+    // position: one complete (both faces, resolves "public"), one
+    // incomplete (cardback only, resolves "hidden"). Naively giving each an
+    // incrementing id let the incomplete one silently win the viewer's
+    // stack-order tiebreak at that position — hitbox rendered (a debug
+    // outline doesn't care which "card" it came from), but hover always
+    // lost to the hidden duplicate sitting on top of the real one. Keying
+    // by rounded screen position instead collapses genuine duplicates onto
+    // the same id, and the same "prefer public over hidden/unknown" merge
+    // already used for board-card duplicates above resolves the conflict
+    // the same way.
+    const instanceIdByPosition = new Map<string, string>();
+    let nextModalIndex = 0;
+    findCardUnitsInDialog(activeDialog).forEach((unit) => {
+      const rect = unit.getBoundingClientRect();
+      const positionKey = `${Math.round(rect.x)},${Math.round(rect.y)}`;
+      let instanceId = instanceIdByPosition.get(positionKey);
+      if (!instanceId) {
+        instanceId = `modal-${nextModalIndex++}`;
+        instanceIdByPosition.set(positionKey, instanceId);
+      }
+
+      const detection = buildDetection(unit);
+      detection.instanceId = instanceId;
+      detection.dropZone = "trash";
+      const existing = byInstanceId.get(instanceId);
+      if (!existing || (existing.visibility !== "public" && detection.visibility === "public")) {
+        byInstanceId.set(instanceId, detection);
+      }
+    });
+  }
 
   return Array.from(byInstanceId.values());
 }
