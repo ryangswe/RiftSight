@@ -6,7 +6,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "bundle": "node build.mjs",
     "build": "npm run typecheck && npm run bundle",
-    "watch": "node build.mjs --watch"
+    "watch": "node build.mjs --watch",
+    "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {
     "@riftsight/protocol": "*"

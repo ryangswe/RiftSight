@@ -12,7 +12,7 @@ You'll also need **Chrome (or another Chromium-based browser, like Edge or Brave
 
 ## Step 1 — Install the RiftSight browser extension
 
-1. Download and unzip the `riftsight-extension-closed-beta.zip` file you were given.
+1. Download and unzip the `riftsight-extension.zip` file you were given.
 2. Open a new Chrome tab and go to `chrome://extensions`.
 3. Turn on **Developer mode** — there's a toggle in the top-right corner of that page.
 4. Click **Load unpacked**.

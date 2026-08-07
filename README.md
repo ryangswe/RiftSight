@@ -428,6 +428,8 @@ docker run -p 8787:8787 --env-file relay/.env riftsight-relay
 ```bash
 # Build (each has its own build step; protocol/relay/overlay-core run from source)
 npm run build -w extension          # producer-side browser extension (unpacked, load from extension/)
+npm run extension:package           # build + write riftsight-extension.zip to ~/Downloads — see
+                                     # "Packaging the extension" below
 npm run build -w twitch-extension   # viewer/config pages — respects RIFTSIGHT_RELAY_URL at build time
 npm run package -w twitch-extension # build + write twitch-extension/deploy/ (the exact files to upload
                                      # to your stable asset origin — see "Stable asset hosting" below)
@@ -454,11 +456,22 @@ npm run start -w relay              # tsx src/index.ts — reads RIFTSIGHT_MODE 
 - [ ] `npm run migrate -w relay` has been run at least once against the target database (or trust the automatic at-boot migration on first start).
 - [ ] `twitch-extension` built with `RIFTSIGHT_RELAY_URL=wss://<your-backend-host>` (the same host as the relay above) and `npm run package -w twitch-extension`'s `deploy/` output uploaded to your stable HTTPS asset origin.
 - [ ] That asset origin entered as the Twitch Developer Console's Testing Base URI for the closed-beta version.
-- [ ] `extension/` built with `RIFTSIGHT_MODE=closed-beta` and `RIFTSIGHT_BACKEND_URL=https://<your-backend-host>`.
-- [ ] `extension/manifest.json`'s `host_permissions` includes the real backend origin (it only lists `http://localhost:8788/*` by default — add the deployed origin before packaging).
+- [ ] `extension/` packaged via `RIFTSIGHT_BACKEND_URL=https://<your-backend-host> npm run extension:package` (see "Packaging the extension" above) — `manifest.json`'s `host_permissions` is derived automatically from that URL at build time, not something to hand-edit.
 - [ ] At least one Twitch user ID added via `seed-allowlist add`.
 - [ ] `curl -I https://<backend-host>/health` returns `200`.
 - [ ] Deployed at **exactly one replica**, with `RIFTSIGHT_DB_PATH` pointed at a real mounted persistent volume — this backend's local SQLite and in-memory live session state cannot run correctly (or at all) across more than one replica. On Railway specifically, see [docs/railway-deployment.md](docs/railway-deployment.md) for the volume-creation and `railway.json`'s `numReplicas: 1` steps.
+
+### Packaging the extension
+
+For handing a build to a beta streamer, or reinstalling your own after a code change, from the repo root:
+
+```bash
+npm run extension:package
+```
+
+Builds in closed-beta mode against the deployed Railway backend by default (override with `RIFTSIGHT_BACKEND_URL`/`RIFTSIGHT_MODE` env vars for a different target) and writes `riftsight-extension.zip` — exactly the files Chrome needs (`manifest.json`, `popup.html`, `icons/`, `dist/`) — to `~/Downloads`, falling back to `extension/` itself if that folder doesn't exist. Equivalent to `npm run package -w extension` (which runs `extension/scripts/package.mjs` after the build, mirroring `twitch-extension`'s own `package` script below) if you want a non-closed-beta build without the Railway default.
+
+Reinstalling after any change is a full remove-and-reload in `chrome://extensions` — unzip over the old folder (or extract fresh), remove the existing RiftSight entry, then **Load unpacked** again. A plain refresh of an already-loaded unpacked extension doesn't reliably pick up changed files.
 
 ### Stable asset hosting
 

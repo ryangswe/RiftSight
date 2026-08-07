@@ -10,7 +10,8 @@
     "build": "npm run build -ws --if-present",
     "dev:twitch:build": "npm run build --prefix twitch-extension",
     "dev:twitch:assets": "npx http-server twitch-extension -p 8443 -c-1",
-    "dev:twitch:relay": "npm run start --prefix relay"
+    "dev:twitch:relay": "npm run start --prefix relay",
+    "extension:package": "RIFTSIGHT_MODE=${RIFTSIGHT_MODE:-closed-beta} RIFTSIGHT_BACKEND_URL=${RIFTSIGHT_BACKEND_URL:-https://riftsightrelay-production.up.railway.app} npm run package -w extension"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
