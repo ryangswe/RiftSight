@@ -25,7 +25,7 @@ const deployDir = path.join(packageDir, "deploy");
 // this exact list is what gets copied into deploy/ — nothing more, so a
 // stray dev-only file can never accidentally end up on the real Twitch
 // asset origin just because it happened to be sitting in this directory.
-const REQUIRED_FILES = ["viewer.html", "config.html", "privacy.html", "dist/viewer/main.js", "dist/config/main.js"];
+const REQUIRED_FILES = ["viewer.html", "config.html", "privacy.html", "eula.html", "dist/viewer/main.js", "dist/config/main.js"];
 
 const missing = REQUIRED_FILES.filter((file) => !existsSync(path.join(packageDir, file)));
 if (missing.length > 0) {
