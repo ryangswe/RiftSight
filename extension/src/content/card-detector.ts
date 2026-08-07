@@ -58,6 +58,17 @@ const CARD_IMAGE_URL_PATTERN = /\/cards\/(?:original|small-v2)\/([A-Z0-9]+-\d+)\
 // visibility resolution below), so erring permissive here is safe.
 const CARD_INSTANCE_ID_PATTERN = /^card_[0-9a-f-]+$/i;
 const BATTLEFIELD_SLOT_ID_PATTERN = /^battlefield-marker:battlefield[AB]$/;
+// The card currently resolving on the chain (a spell/ability in response to
+// which players may react) gets a composite id shaped like
+// "chain-plr_<hex>-card_<uuid>-<uuid>" — live-captured, real example:
+// "chain-plr_7a07bb13-card_7db9227a-a606-430b-98b5-ec280c610b34-d526be66-1952-41c9-9a91-2887d66d7f36".
+// The real card_<uuid> is recoverable from the *image* src via
+// CARD_IMAGE_URL_PATTERN regardless, so this only needs to recognize the
+// shape, not fully parse it — deliberately just a prefix check (not
+// anchored at the end) for the same reason CARD_INSTANCE_ID_PATTERN is
+// permissive on shape: this isn't a security boundary, only "does this look
+// like a chain-zone instance id."
+const CHAIN_INSTANCE_ID_PATTERN = /^chain-/i;
 const CARDBACK_IMAGE_PATTERN = /cardback-(white|blue)\.png/;
 
 /** RiftAtlas attaches this to every real card instance — see the module header. Exported so card-observer.ts can watch the exact same set of elements without duplicating the literal. */
@@ -77,11 +88,19 @@ const KNOWN_DROP_ZONES: ReadonlySet<string> = new Set<string>([
 
 /** Exported for unit testing — this pattern-matching decision is what silently under-detected cards on a real live capture (see the module header), so it's worth testing directly rather than only via the DOM-dependent detectCards() as a whole. */
 export function isDetectableInstanceId(id: string): boolean {
-  return CARD_INSTANCE_ID_PATTERN.test(id) || BATTLEFIELD_SLOT_ID_PATTERN.test(id);
+  return CARD_INSTANCE_ID_PATTERN.test(id) || BATTLEFIELD_SLOT_ID_PATTERN.test(id) || CHAIN_INSTANCE_ID_PATTERN.test(id);
 }
 
-function toDropZone(raw: string | null): DropZone {
+/**
+ * Every other zone is read straight off `data-drop-zone` — but a
+ * live capture confirmed the chain card carries no `data-drop-zone`
+ * attribute at all (nor does any ancestor), so its own instance id
+ * (see CHAIN_INSTANCE_ID_PATTERN) is the only signal available for it.
+ * Exported for unit testing, same rationale as isDetectableInstanceId.
+ */
+export function toDropZone(raw: string | null, instanceId: string): DropZone {
   if (raw && KNOWN_DROP_ZONES.has(raw)) return raw as DropZone;
+  if (CHAIN_INSTANCE_ID_PATTERN.test(instanceId)) return "chain";
   return "unknown";
 }
 
@@ -96,6 +115,45 @@ function imageSrc(img: HTMLImageElement): string {
 
 function parseCardId(imageUrl: string): string | undefined {
   return imageUrl.match(CARD_IMAGE_URL_PATTERN)?.[1];
+}
+
+/**
+ * RiftAtlas renders different UI contexts (hand, base, chain, ...) at
+ * different resolution tiers of the same asset — "small-v2" (384×536 native)
+ * and "original" (1030×1438 native, live-confirmed) are the two seen so far
+ * (see CARD_IMAGE_URL_PATTERN). Which tier a given card slot happens to use
+ * is a RiftAtlas layout decision, not something meaningful to preserve:
+ * RiftSight's tooltip always wants sharper art than the smallest on-board
+ * slots render at.
+ *
+ * Deliberately NOT the raw, uncapped "original" source, though — that art is
+ * fetched directly by every viewer's own browser straight from RiftAtlas's
+ * CDN (never through RiftSight's own infrastructure, by design), so an
+ * earlier version of this function that stripped RiftAtlas's own Cloudflare
+ * Image Resizing proxy entirely was needlessly costly to a third party's
+ * infrastructure RiftSight doesn't control or pay for: full native
+ * resolution is far more than the tooltip's own largest configured size
+ * (roughly 400×500 CSS px) ever actually displays, even at 2x device pixel
+ * ratio. This instead rewrites the resize proxy's own `width=` parameter to
+ * a fixed 640 — comfortably covering that largest display size at 2x, live-
+ * confirmed to load successfully against the "original" tier — while still
+ * routing through Cloudflare's resizing (keeping its real compression and
+ * format negotiation, `quality=…,format=auto`) rather than bypassing it.
+ * 640 was chosen over the width already seen to fail (256) specifically
+ * because it's both confirmed-working and adequate for the tooltip's actual
+ * max render size — not because every value between the two is assumed
+ * safe.
+ *
+ * Rewrites the real captured URL (same domain, same query string, same
+ * everything else) rather than reconstructing one from the parsed cardId —
+ * safer, since it never has to know or guess the asset host's actual base
+ * path. A URL with no recognized tier segment at all is returned unchanged;
+ * a URL with no resize-proxy `width=` parameter at all (not seen in any real
+ * capture so far) falls back to the tier's uncapped native resolution rather
+ * than guessing at how to construct a resize-proxy segment from scratch.
+ */
+export function upgradeToOriginalResolution(imageUrl: string): string {
+  return imageUrl.replace(/width=\d+/, "width=640").replace("/cards/small-v2/", "/cards/original/");
 }
 
 function nearestOwner(el: Element): Owner {
@@ -275,6 +333,7 @@ function classifyCardVisibility(anchor: HTMLElement, faces: HTMLImageElement[]):
 }
 
 function buildDetection(anchor: HTMLElement): CardDetection {
+  const instanceId = anchor.getAttribute("data-card-id") ?? "";
   const faces = Array.from(anchor.querySelectorAll<HTMLImageElement>("img[src]"));
   const { rotationDeg, zIndexHint } = resolveAncestorTraits(anchor);
   const { visibility, visibleFace } = classifyCardVisibility(anchor, faces);
@@ -284,18 +343,18 @@ function buildDetection(anchor: HTMLElement): CardDetection {
   let imageUrl: string | undefined;
   if (visibility === "public" && visibleFace) {
     const src = imageSrc(visibleFace);
-    imageUrl = src;
+    imageUrl = upgradeToOriginalResolution(src);
     cardId = parseCardId(src);
     name = visibleFace.alt.trim() || undefined;
   }
 
   return {
-    instanceId: anchor.getAttribute("data-card-id") ?? "",
+    instanceId,
     cardId,
     name,
     imageUrl,
     visibility,
-    dropZone: toDropZone(anchor.getAttribute("data-drop-zone")),
+    dropZone: toDropZone(anchor.getAttribute("data-drop-zone"), instanceId),
     owner: nearestOwner(anchor),
     rotationDeg,
     landscape: anchor.getAttribute("data-preview-landscape") === "true",
