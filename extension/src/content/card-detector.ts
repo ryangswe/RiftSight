@@ -360,27 +360,6 @@ function findMulliganCardButtons(root: ParentNode): HTMLElement[] {
 }
 
 /**
- * Resolves which face is toward the camera by reading the shared
- * preserve-3d parent's own `transform` — see this module's header and
- * face-transform.ts. Returns "unsupported" (never guesses) whenever the
- * expected structure isn't found: either wrapper missing, or the two
- * wrappers don't share a single parent. Takes the already-resolved
- * wrappers rather than the face elements themselves — classifyCardVisibility
- * needs to know whether they exist at all (see laterInDocumentOrder's
- * fallback) before deciding whether to call this, so it finds them once
- * and passes them in rather than this function re-finding the same two
- * ancestors a second time on every board card.
- */
-function resolveFaceFacing(frontWrapper: Element | undefined, backWrapper: Element | undefined): FaceFacing {
-  if (!frontWrapper || !backWrapper) return "unsupported";
-
-  const parent = frontWrapper.parentElement;
-  if (!parent || parent !== backWrapper.parentElement) return "unsupported";
-
-  return classifyFaceFacing(getComputedStyle(parent).transform);
-}
-
-/**
  * Fallback for when neither face has a backface-hidden wrapper at all —
  * live-confirmed necessary for Deck Peek specifically: unlike every other
  * card context found so far, its two face images have no flip-wrapper
@@ -398,6 +377,40 @@ function resolveFaceFacing(frontWrapper: Element | undefined, backWrapper: Eleme
  */
 function laterInDocumentOrder(a: Element, b: Element): Element {
   return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 ? b : a;
+}
+
+/**
+ * Determines which face — front art or cardback — is toward the camera for
+ * a two-face card. Two structurally distinct signals are used, depending on
+ * what RiftAtlas's own markup provides for this card type:
+ *
+ * - Normal case (every context found so far except Deck Peek): both faces
+ *   sit inside a shared backface-hidden 3D-flip wrapper, whose parent's own
+ *   `transform` says which one currently faces the camera (see
+ *   face-transform.ts).
+ * - Deck Peek's case: neither face has a flip wrapper at all — see
+ *   laterInDocumentOrder's own comment for why this is live-confirmed
+ *   necessary, not hypothetical. Which one is shown is then decided purely
+ *   by standard CSS same-z-index stacking.
+ *
+ * A wrapper present on only one side is an unexpected, ambiguous structure
+ * this fails closed on ("unsupported") rather than guessing. Each face's
+ * ancestor chain is walked exactly once here, regardless of which branch is
+ * taken below.
+ */
+function resolveFaceFacing(frontFace: HTMLImageElement, backFace: HTMLImageElement): FaceFacing {
+  const frontWrapper = findBackfaceHiddenAncestor(frontFace);
+  const backWrapper = findBackfaceHiddenAncestor(backFace);
+
+  if (!frontWrapper && !backWrapper) {
+    return laterInDocumentOrder(frontFace, backFace) === frontFace ? "front" : "back";
+  }
+  if (!frontWrapper || !backWrapper) return "unsupported";
+
+  const parent = frontWrapper.parentElement;
+  if (!parent || parent !== backWrapper.parentElement) return "unsupported";
+
+  return classifyFaceFacing(getComputedStyle(parent).transform);
 }
 
 /**
@@ -441,26 +454,7 @@ function classifyCardVisibility(anchor: HTMLElement, faces: HTMLImageElement[]):
   const backFace = faces.find((img) => CARDBACK_IMAGE_PATTERN.test(imageSrc(img)));
   if (!frontFace || !backFace) return { visibility: "unknown", visibleFace: undefined };
 
-  // Found once, shared below — resolveFaceFacing used to re-find both of
-  // these itself, meaning every 2-face board card paid for this bounded
-  // ancestor walk twice per scan for no reason once this fallback check
-  // needed the same answer first.
-  const frontWrapper = findBackfaceHiddenAncestor(frontFace);
-  const backWrapper = findBackfaceHiddenAncestor(backFace);
-
-  // No flip-wrapper on either side at all — not the normal 3D-flip
-  // structure, so resolveFaceFacing has no transform to read (see
-  // laterInDocumentOrder's doc comment for why this specific case is
-  // live-confirmed, not hypothetical). A missing wrapper on only *one*
-  // side is left to resolveFaceFacing's own "unsupported" — that's a
-  // genuinely unexpected, ambiguous structure worth failing closed on,
-  // unlike this clean both-absent case.
-  if (!frontWrapper && !backWrapper) {
-    const visible = laterInDocumentOrder(frontFace, backFace);
-    return visible === frontFace ? { visibility: "public", visibleFace: frontFace } : { visibility: "hidden", visibleFace: undefined };
-  }
-
-  const facing = resolveFaceFacing(frontWrapper, backWrapper);
+  const facing = resolveFaceFacing(frontFace, backFace);
   if (facing === "front") return { visibility: "public", visibleFace: frontFace };
   if (facing === "back") return { visibility: "hidden", visibleFace: undefined };
   return { visibility: "unknown", visibleFace: undefined }; // "intermediate" or "unsupported"
@@ -503,6 +497,58 @@ function buildDetection(anchor: HTMLElement): CardDetection {
   };
 }
 
+/** Inserts `detection` under `instanceId`, keeping whichever of the new and any existing candidate for that id resolved to "public" — the merge rule every duplicate-prone detection source (board cards, dialog cards) needs, since a real card and a stale/incomplete duplicate can share an id but disagree on visibility. */
+function mergePreferPublic(map: Map<string, CardDetection>, instanceId: string, detection: CardDetection): void {
+  const existing = map.get(instanceId);
+  if (!existing || (existing.visibility !== "public" && detection.visibility === "public")) {
+    map.set(instanceId, detection);
+  }
+}
+
+/**
+ * Detects cards inside the currently active blocking overlay (Trash/Banished
+ * viewer, Deck Peek, ...) — see findActiveBlockingDialog. These carry no
+ * data-card-id, so identity and dropZone are both decided here rather than
+ * read off the DOM the way board cards' are.
+ *
+ * Live-confirmed (Deck Peek specifically): a card's front face and its
+ * cardback sibling don't always share one direct parent the way board cards
+ * do — one of the two can resolve to a shallower wrapper whose parent only
+ * contains that single face, so findCardUnitsInDialog can hand back two
+ * "units" for one real card, at the exact same screen position: one
+ * complete (both faces, resolves "public"), one incomplete (cardback only,
+ * resolves "hidden"). Keying by rounded screen position collapses genuine
+ * duplicates onto the same id, and mergePreferPublic resolves which
+ * candidate wins the same way board-card duplicates are resolved.
+ */
+function detectDialogCards(dialog: Element): CardDetection[] {
+  const byPosition = new Map<string, CardDetection>();
+  findCardUnitsInDialog(dialog).forEach((unit) => {
+    const detection = buildDetection(unit);
+    detection.instanceId = `modal-${detection.bounds.x},${detection.bounds.y}`;
+    detection.dropZone = "trash";
+    mergePreferPublic(byPosition, detection.instanceId, detection);
+  });
+  return Array.from(byPosition.values());
+}
+
+/**
+ * Detects mulligan-hand cards, shown once at the start of a new game — see
+ * findMulliganCardButtons. Like dialog cards, these carry no data-card-id,
+ * so identity and dropZone are decided here. Unlike dialog cards, each
+ * button maps to exactly one physical card with no duplicate-unit risk
+ * (live-confirmed: one button per visible card, one image each), so no
+ * dedup merge is needed — a plain position-keyed id is enough.
+ */
+function detectMulliganCards(root: ParentNode): CardDetection[] {
+  return findMulliganCardButtons(root).map((button) => {
+    const detection = buildDetection(button);
+    detection.instanceId = `mulligan-${detection.bounds.x},${detection.bounds.y}`;
+    detection.dropZone = "hand";
+    return detection;
+  });
+}
+
 /**
  * Finds every card-like element under `root` and returns one CardDetection
  * per unique instanceId. RiftAtlas renders more than one element per card
@@ -534,63 +580,14 @@ export function detectCards(root: ParentNode = document): CardDetection[] {
     const instanceId = el.getAttribute("data-card-id");
     if (!instanceId || !isDetectableInstanceId(instanceId)) return;
 
-    const detection = buildDetection(el);
-    const existing = byInstanceId.get(instanceId);
-    if (!existing || (existing.visibility !== "public" && detection.visibility === "public")) {
-      byInstanceId.set(instanceId, detection);
-    }
+    mergePreferPublic(byInstanceId, instanceId, buildDetection(el));
   });
 
   if (activeDialog) {
-    // Modal cards carry no data-card-id, so there's no natural identity to
-    // key on. Live-confirmed (Deck Peek specifically): a card's front face
-    // and its cardback sibling don't always share one direct parent the way
-    // board cards do — one of the two can resolve to a shallower wrapper
-    // whose parent only contains that single face, so findCardUnitsInDialog
-    // can hand back two "units" for one real card, at the exact same screen
-    // position: one complete (both faces, resolves "public"), one
-    // incomplete (cardback only, resolves "hidden"). Naively giving each an
-    // incrementing id let the incomplete one silently win the viewer's
-    // stack-order tiebreak at that position — hitbox rendered (a debug
-    // outline doesn't care which "card" it came from), but hover always
-    // lost to the hidden duplicate sitting on top of the real one. Keying
-    // by rounded screen position instead collapses genuine duplicates onto
-    // the same id, and the same "prefer public over hidden/unknown" merge
-    // already used for board-card duplicates above resolves the conflict
-    // the same way.
-    const instanceIdByPosition = new Map<string, string>();
-    let nextModalIndex = 0;
-    findCardUnitsInDialog(activeDialog).forEach((unit) => {
-      const rect = unit.getBoundingClientRect();
-      const positionKey = `${Math.round(rect.x)},${Math.round(rect.y)}`;
-      let instanceId = instanceIdByPosition.get(positionKey);
-      if (!instanceId) {
-        instanceId = `modal-${nextModalIndex++}`;
-        instanceIdByPosition.set(positionKey, instanceId);
-      }
-
-      const detection = buildDetection(unit);
-      detection.instanceId = instanceId;
-      detection.dropZone = "trash";
-      const existing = byInstanceId.get(instanceId);
-      if (!existing || (existing.visibility !== "public" && detection.visibility === "public")) {
-        byInstanceId.set(instanceId, detection);
-      }
-    });
+    detectDialogCards(activeDialog).forEach((detection) => byInstanceId.set(detection.instanceId, detection));
   }
 
-  // Mulligan-hand cards, shown once at the start of a new game. Unlike the
-  // dialog cards above, each button maps to exactly one physical card with
-  // no duplicate-unit risk (live-confirmed: one button per visible card,
-  // one image each), so a plain position-keyed id is enough — no dedup map
-  // or "prefer public" merge race is possible here.
-  findMulliganCardButtons(root).forEach((button) => {
-    const rect = button.getBoundingClientRect();
-    const detection = buildDetection(button);
-    detection.instanceId = `mulligan-${Math.round(rect.x)},${Math.round(rect.y)}`;
-    detection.dropZone = "hand";
-    byInstanceId.set(detection.instanceId, detection);
-  });
+  detectMulliganCards(root).forEach((detection) => byInstanceId.set(detection.instanceId, detection));
 
   return Array.from(byInstanceId.values());
 }
