@@ -99,6 +99,16 @@ describe("validateEnv", () => {
     if (result.ok) expect(result.config.twitchExtensionClientId).toBe("abc123");
   });
 
+  it("leaves redisUrl undefined when REDIS_URL is unset — single-instance behavior stays the default in every mode", () => {
+    const result = validateEnv(env());
+    if (result.ok) expect(result.config.redisUrl).toBeUndefined();
+  });
+
+  it("passes through REDIS_URL as-is when set", () => {
+    const result = validateEnv(env({ REDIS_URL: "redis://localhost:6379" }));
+    if (result.ok) expect(result.config.redisUrl).toBe("redis://localhost:6379");
+  });
+
   it("defaults dbUrl to a local file path when unset", () => {
     const result = validateEnv(env());
     if (result.ok) expect(result.config.dbUrl).toBe("file:./data/riftsight.db");

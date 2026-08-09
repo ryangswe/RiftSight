@@ -47,6 +47,8 @@ export interface RelayEnvConfig {
   twitchApiClientSecret: string | undefined;
   /** Must exactly match a redirect URI registered for the Twitch API app in the Developer Console. */
   twitchOAuthRedirectUri: string | undefined;
+  /** A redis:// URL enabling cross-instance live-state fan-out (see state-bus.ts/redis-state-bus.ts) — optional in every mode, including closed-beta. Unset means single-instance behavior, unchanged from before this existed: a fresh in-process LocalStateBus per server, which never leaves the process. */
+  redisUrl: string | undefined;
 }
 
 export interface EnvValidationSuccess {
@@ -135,6 +137,7 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
   const twitchApiClientId = env["TWITCH_API_CLIENT_ID"] || undefined;
   const twitchApiClientSecret = env["TWITCH_API_CLIENT_SECRET"] || undefined;
   const twitchOAuthRedirectUri = env["TWITCH_OAUTH_REDIRECT_URI"] || undefined;
+  const redisUrl = env["REDIS_URL"] || undefined;
 
   // Closed-beta hard-fails on any missing required secret instead of the
   // warn-only behavior every other mode keeps — booting with a feature
@@ -193,6 +196,7 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
       twitchApiClientId,
       twitchApiClientSecret,
       twitchOAuthRedirectUri,
+      redisUrl,
     },
     warnings,
   };

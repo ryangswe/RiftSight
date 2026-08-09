@@ -1,10 +1,19 @@
 # RiftSight — Scaling Plan (multi-instance backend)
 
-Written ahead of need, while the Twitch Extension is in Review. Not yet
-implemented — this is the plan to work from once multiple simultaneous
-large-viewership streamers make the current single-instance backend a real
-risk, not a hypothetical one. See "Suggested sequencing" at the bottom for
-what's worth starting now versus waiting on.
+Written ahead of need, while the Twitch Extension is in Review, for once
+multiple simultaneous large-viewership streamers make the current
+single-instance backend a real risk, not a hypothetical one.
+
+**Status: Stage 1's code is done** (`relay/src/state-bus.ts`,
+`relay/src/redis-state-bus.ts`, the `server.ts` refactor, `REDIS_URL` wiring
+in `env.ts`/`index.ts` — see the implementation plan at the time,
+`/Users/rdclder/.claude/plans/foamy-prancing-beaver.md`, for the exact design
+rationale). It's fully opt-in and inert until `REDIS_URL` is actually set —
+today's single-instance deployment is unaffected. **Stages 2–4 below are
+still just planned, not built**: nothing has actually been provisioned
+(no Redis, no Turso, no extra Railway replicas), so the backend still runs
+exactly as it did before this stage, just with the cross-instance code path
+now sitting there ready for Stage 2 to turn on.
 
 ## The actual problem
 
@@ -53,16 +62,31 @@ point `RIFTSIGHT_DB_PATH` at the `libsql://...` URL. Multiple relay
 instances can then safely share one persistent store with zero application
 code changes.
 
-## Stage 1 — Cross-instance live-state fan-out (the real engineering work)
+## Stage 1 — Cross-instance live-state fan-out (the real engineering work) — DONE
 
 This is the piece with no existing escape hatch. `server.ts`'s `sessions`
 map and its `Set<WebSocket>` of viewers only exist within one process — a
 viewer connected to instance B has no way to see a producer update that
 arrived on instance A.
 
-Plan: add a pub/sub layer (Redis is the obvious choice — cheap, a supported
-Railway add-on, and a pub/sub API simple enough not to need much new
-abstraction) so that:
+Built via a `StateBus` abstraction (`relay/src/state-bus.ts`,
+`relay/src/redis-state-bus.ts`) plus a `server.ts` refactor — see the
+implementation plan for the exact design (in particular a real
+correctness bug found only during planning: an instance with no local
+producer for a session must never independently judge it TTL-stale, since
+`session.producer === null` stops meaning "gone" once state can arrive via
+the bus — fixed with `hasLocalProducerAuthority` + a `"producer-claimed"`
+handoff message). Verified: 604/604 tests passing (13 new), every
+pre-existing relay test unmodified and green (proving the no-`REDIS_URL`
+default is byte-for-byte unchanged), and a live boot with `REDIS_URL` unset
+confirmed identical startup behavior. No real Redis was available to verify
+against in this sandbox — `RedisStateBus` is tested against a fake client
+double instead; genuine Redis behavior is unverified until Stage 2
+provisions one for real.
+
+What it *was*: add a pub/sub layer (Redis is the obvious choice — cheap, a
+supported Railway add-on, and a pub/sub API simple enough not to need much
+new abstraction) so that:
 - Each instance keeps holding its own locally-connected producer and viewer
   `WebSocket`s exactly as today (sockets still can't cross processes — that
   doesn't change).
@@ -143,11 +167,11 @@ reason none of this requires a new Twitch review.
 
 ## Suggested sequencing
 
-Given approval could land in as few as 2 business days, this plan almost
-certainly won't be *finished* by then — but it doesn't need to be, since
-single-instance keeps working fine for normal traffic in the meantime; nothing
-here blocks release. Stage 1 (the pub/sub redesign) is the highest-effort,
-highest-value piece, is pure backend work with zero Twitch-review
-implications, and doesn't depend on approval status at all — worth starting
-during the review wait rather than after it, if there's appetite to begin
-before this plan gets formally kicked off.
+Stage 1 (the pub/sub redesign, the highest-effort/highest-value piece) is
+done, started and finished during the Twitch review wait per the reasoning
+below — it was pure backend work with zero Twitch-review implications and no
+dependency on approval status. Given approval could still land in as few as
+2 business days from whenever Stages 2–5 pick up, don't expect to have
+those *finished* by then either — but that's fine, since single-instance
+keeps working fine for normal traffic in the meantime and nothing here
+blocks release.

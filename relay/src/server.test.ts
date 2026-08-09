@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { createRelayServer, type RelayServer } from "./server.js";
+import { createLocalStateBus } from "./state-bus.js";
 
 const BASE64_SECRET = Buffer.from("test-extension-secret-bytes").toString("base64");
 const secretBytes = Buffer.from(BASE64_SECRET, "base64");
@@ -496,6 +497,145 @@ describe("relay server", () => {
 
       viewer.close();
       producer.close();
+    });
+  });
+
+  describe("cross-instance fan-out (shared StateBus)", () => {
+    // These simulate two horizontally-scaled relay instances by giving two
+    // separate createRelayServer calls the same LocalStateBus — proving the
+    // StateBus abstraction's own fan-out is correct without needing real
+    // Redis (none available in this sandbox; RedisStateBus gets its own
+    // narrower tests against a fake client double instead).
+    let servers: RelayServer[] = [];
+
+    afterEach(async () => {
+      await Promise.all(servers.map((s) => s.close()));
+      servers = [];
+    });
+
+    async function createInstance(stateTtl?: { ttlMs: number; sweepIntervalMs: number }, stateBus = createLocalStateBus()) {
+      const instance = await createRelayServer(0, { stateBus, stateTtl });
+      servers.push(instance);
+      return { instance, stateBus };
+    }
+
+    it("a producer connected to instance A reaches a viewer connected to instance B", async () => {
+      const bus = createLocalStateBus();
+      const { instance: instanceA } = await createInstance(undefined, bus);
+      const { instance: instanceB } = await createInstance(undefined, bus);
+
+      const viewer = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "cross-instance" }));
+      await wait(50);
+
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      const received = waitForMessage(viewer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("cross-instance", 1) }));
+
+      const message = (await received) as { payload: { sequence: number } };
+      expect(message.payload.sequence).toBe(1);
+
+      viewer.close();
+      producer.close();
+    });
+
+    it("a viewer newly joining instance B after a producer already sent state on instance A receives it immediately", async () => {
+      const bus = createLocalStateBus();
+      const { instance: instanceA } = await createInstance(undefined, bus);
+      const { instance: instanceB } = await createInstance(undefined, bus);
+
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("cross-instance-late-join", 1) }));
+      await wait(50);
+
+      const viewer = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewer);
+      const received = waitForMessage(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "cross-instance-late-join" }));
+
+      const message = (await received) as { payload: { sequence: number } };
+      expect(message.payload.sequence).toBe(1);
+
+      viewer.close();
+      producer.close();
+    });
+
+    it("a viewer on instance B receives the TTL-expiry clear when the producer (on instance A) disconnects", async () => {
+      const bus = createLocalStateBus();
+      const stateTtl = { ttlMs: 80, sweepIntervalMs: 20 };
+      const { instance: instanceA } = await createInstance(stateTtl, bus);
+      const { instance: instanceB } = await createInstance(stateTtl, bus);
+
+      const viewer = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "cross-instance-ttl" }));
+      await wait(50);
+
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      const firstReceived = waitForMessage(viewer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("cross-instance-ttl", 1) }));
+      await firstReceived;
+
+      producer.close(); // gone, not just quiet — see the single-instance TTL tests above
+      // Listener must be registered before the sweep can fire, not after —
+      // the await below is what does the waiting (however long the sweep
+      // actually takes), not a separate fixed delay beforehand.
+      const staleReceived = waitForMessage(viewer);
+      const message = (await staleReceived) as { payload: { cards: unknown[]; sequence: number } };
+      expect(message.payload.cards).toEqual([]);
+      expect(message.payload.sequence).toBe(2);
+
+      viewer.close();
+    });
+
+    it("an instance that no longer holds a session's producer does not independently re-fire the TTL sweep once a different instance has claimed it", async () => {
+      // Direct proof of the hasLocalProducerAuthority/producer-claimed
+      // fix: without it, instance A — which never re-learns the producer
+      // moved to B — would treat "producer === null locally" as "gone",
+      // and once B's own producer goes quiet past the TTL, A would
+      // independently synthesize and broadcast its own spurious clear.
+      const bus = createLocalStateBus();
+      const stateTtl = { ttlMs: 80, sweepIntervalMs: 20 };
+      const { instance: instanceA } = await createInstance(stateTtl, bus);
+      const { instance: instanceB } = await createInstance(stateTtl, bus);
+
+      const viewer = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "migrate-session" }));
+      await wait(50);
+
+      const producerA = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producerA);
+      const firstReceived = waitForMessage(viewer);
+      producerA.send(JSON.stringify({ type: "overlay-state", payload: sampleState("migrate-session", 1) }));
+      await firstReceived;
+      producerA.close();
+      await wait(30); // let the close propagate before the new producer claims it
+
+      const producerB = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(producerB);
+      const secondReceived = waitForMessage(viewer);
+      producerB.send(JSON.stringify({ type: "overlay-state", payload: sampleState("migrate-session", 2) }));
+      await secondReceived; // this also lets A's "producer-claimed" handling settle before the quiet window below
+
+      const receivedSequences: number[] = [];
+      viewer.on("message", (raw) => {
+        const parsed = JSON.parse(raw.toString()) as { payload: { sequence: number } };
+        receivedSequences.push(parsed.payload.sequence);
+      });
+
+      // producerB stays open and silent (a static board) well past the TTL —
+      // if A still thought it owned this session, its sweep would fire here.
+      await wait(250);
+
+      expect(receivedSequences).toEqual([]);
+
+      viewer.close();
+      producerB.close();
     });
   });
 });

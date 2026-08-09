@@ -7,6 +7,7 @@ import { createLinkHandoffStore } from "./auth/link-handoff.js";
 import type { TwitchOAuthConfig } from "./auth/twitch-oauth.js";
 import { createHttpRouter } from "./http/server.js";
 import { attachRelayWebSocketServer } from "./server.js";
+import { createRedisStateBus, type RedisStateBus } from "./redis-state-bus.js";
 import { logEvent } from "./logging.js";
 
 const result = validateEnv(process.env);
@@ -83,6 +84,14 @@ const httpServer = createServer(
   })
 );
 
+// Cross-instance live-state fan-out (see docs/scaling-plan.md's "Stage 1")
+// is entirely opt-in: unset REDIS_URL means attachRelayWebSocketServer gets
+// no stateBus at all and falls back to its own default (a fresh in-process
+// LocalStateBus), identical to every deployment before this existed. Only
+// constructed here — server.ts never closes an injected bus, since it
+// doesn't own one it didn't create.
+const redisStateBus: RedisStateBus | undefined = config.redisUrl ? createRedisStateBus(config.redisUrl) : undefined;
+
 const { close: closeWebSocketServer } = attachRelayWebSocketServer(httpServer, {
   twitchExtensionClientId: config.twitchExtensionClientId,
   twitchExtensionSecret: config.twitchExtensionSecret,
@@ -94,6 +103,7 @@ const { close: closeWebSocketServer } = attachRelayWebSocketServer(httpServer, {
   // "fast local iteration / existing tunnel workflow remains unchanged"
   // requirements.
   producerAuth: { db, required: config.mode === "closed-beta" },
+  stateBus: redisStateBus,
 });
 
 httpServer.on("error", (err) => {
@@ -126,6 +136,7 @@ async function shutdown(signal: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       httpServer.close((err) => (err ? reject(err) : resolve()));
     });
+    await redisStateBus?.close();
     db.close();
     clearTimeout(forceExitTimer);
     console.log("[relay] shutdown complete");

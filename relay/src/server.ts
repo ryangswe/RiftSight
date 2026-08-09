@@ -14,6 +14,7 @@
 // unmodified.
 
 import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import {
   ProducerMessageSchema,
@@ -25,6 +26,7 @@ import { verifyTwitchJwt } from "./twitch-auth.js";
 import type { DbClient } from "./db/client.js";
 import { authenticateProducerUpgrade, isProducerUpgradePath } from "./ws/producer-auth.js";
 import { logEvent } from "./logging.js";
+import { createLocalStateBus, type StateBus } from "./state-bus.js";
 import {
   createRateLimiter,
   isSlowConsumer,
@@ -43,6 +45,24 @@ interface Session {
   latestState: OverlayState | null;
   /** Set whenever latestState is — either a real producer update or the synthesized empty-cards state the TTL sweep below broadcasts. Drives both admitViewer's "don't hand a new viewer stale hitboxes" gate and the sweep's own "has this crossed STATE_TTL_MS" check. */
   lastUpdatedAt: number;
+  /**
+   * True only once THIS instance has genuinely held this session's producer
+   * socket — decoupled from `producer`/`latestState` because, once state can
+   * arrive via a shared StateBus instead of only a local producer write, an
+   * instance that has never held the producer would otherwise have
+   * `producer === null` and `latestState !== null` simultaneously, a
+   * combination that (pre-StateBus) could only mean "this instance's
+   * producer disconnected." Without this gate, every instance without the
+   * producer would independently judge a perfectly healthy session stale
+   * once it's been quiet past STATE_TTL_MS (a static board is a normal,
+   * frequent case), each firing its own spurious empty-state clear — see
+   * sweepStaleSessions' use of this field. Set true when this instance
+   * claims the producer socket (see the "producer-claimed" StateBus
+   * message); set false when a *different* instance claims it instead —
+   * producer sockets aren't sticky to one instance, so authority has to be
+   * explicitly handed off, not inferred.
+   */
+  hasLocalProducerAuthority: boolean;
 }
 
 /**
@@ -133,6 +153,19 @@ export interface RelayConfig {
    * wait 45+ real seconds.
    */
   stateTtl?: { ttlMs: number; sweepIntervalMs: number };
+  /**
+   * Cross-instance live-state fan-out — see state-bus.ts. Omitted (every
+   * real caller today, since index.ts only constructs one when REDIS_URL is
+   * set, and every existing test) defaults to a fresh in-process
+   * LocalStateBus per server instance, which never leaves the process and
+   * behaves byte-for-byte identically to pre-StateBus code. Pass the SAME
+   * LocalStateBus instance into two separate createRelayServer calls to
+   * simulate two cooperating instances in a test; pass a RedisStateBus for
+   * real multi-instance deployment. Not closed by attachRelayWebSocketServer
+   * — it doesn't own an injected bus (two servers can share one), only
+   * whoever constructed it does.
+   */
+  stateBus?: StateBus;
 }
 
 /**
@@ -147,6 +180,13 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   const allowLocalDebug = config.allowLocalDebug ?? true;
   const stateTtlMs = config.stateTtl?.ttlMs ?? STATE_TTL_MS;
   const ttlSweepIntervalMs = config.stateTtl?.sweepIntervalMs ?? TTL_SWEEP_INTERVAL_MS;
+  const stateBus = config.stateBus ?? createLocalStateBus();
+  // Per-attachRelayWebSocketServer-call identity — used only to let this
+  // instance's own StateBus subscription no-op on messages it just
+  // published itself (see broadcastToLocalViewers' doc comment for why
+  // local delivery stays a direct call rather than round-tripping through
+  // the bus even for the origin instance). Never logged/exposed elsewhere.
+  const instanceId = randomUUID();
   const sessions = new Map<string, Session>();
   // Set during verifyClient (upgrade time), consumed once in the
   // "connection" handler for the same request — this is how the resolved
@@ -159,9 +199,42 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   function getSession(sessionId: string): Session {
     const existing = sessions.get(sessionId);
     if (existing) return existing;
-    const created: Session = { producer: null, viewers: new Set(), latestState: null, lastUpdatedAt: Date.now() };
+    const created: Session = {
+      producer: null,
+      viewers: new Set(),
+      latestState: null,
+      lastUpdatedAt: Date.now(),
+      hasLocalProducerAuthority: false,
+    };
     sessions.set(sessionId, created);
     return created;
+  }
+
+  /**
+   * Sends `payload` to every viewer THIS instance holds a live socket for —
+   * shared by the direct producer-update/sweep call sites (this instance
+   * originated the update) and the StateBus-subscribe handler below (a
+   * different instance originated it). Kept as a direct call rather than
+   * something that itself round-trips through the bus, even for the
+   * originating instance: for a RedisStateBus, publish() is a real network
+   * round trip, and self-delivery through it would add latency to
+   * same-instance producer-to-viewer updates that exists nowhere in today's
+   * design.
+   */
+  function broadcastToLocalViewers(session: Session, payload: OverlayState): number {
+    const encoded = JSON.stringify({ type: "overlay-state", payload });
+    let delivered = 0;
+    for (const viewer of session.viewers) {
+      if (viewer.readyState !== WebSocket.OPEN) continue;
+      if (isSlowConsumer(viewer.bufferedAmount)) {
+        logEvent("connection_disconnected", { reason: "slow-consumer", sessionId: payload.sessionId, bytes: viewer.bufferedAmount });
+        viewer.terminate();
+        continue;
+      }
+      viewer.send(encoded);
+      delivered += 1;
+    }
+    return delivered;
   }
 
   /**
@@ -204,22 +277,59 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     const now = Date.now();
     for (const [sessionId, session] of sessions) {
       if (!session.latestState) continue;
+      // Only the instance that has/had this session's producer may judge
+      // staleness — see Session.hasLocalProducerAuthority's doc comment for
+      // why every other instance's session.producer being null carries no
+      // information once state can arrive via the bus.
+      if (!session.hasLocalProducerAuthority) continue;
       if (isProducerConnectionOpen(session)) continue; // still connected — a static board is not staleness
       if (now - session.lastUpdatedAt <= stateTtlMs) continue;
 
       const emptyState = synthesizeEmptyState(sessionId, session.latestState);
       session.latestState = null;
       logEvent("state_ttl_expired", { sessionId, viewers: session.viewers.size });
-
-      const encoded = JSON.stringify({ type: "overlay-state", payload: emptyState });
-      for (const viewer of session.viewers) {
-        if (viewer.readyState !== WebSocket.OPEN) continue;
-        viewer.send(encoded);
-      }
+      broadcastToLocalViewers(session, emptyState);
+      stateBus.publish({ kind: "state-expired", sessionId, originInstanceId: instanceId, emptyState });
     }
   }
 
   const ttlSweepInterval = setInterval(sweepStaleSessions, ttlSweepIntervalMs);
+
+  /**
+   * Applies a state update that originated on a DIFFERENT instance — see
+   * broadcastToLocalViewers' doc comment for why this instance's own
+   * originated updates are never round-tripped back through here. "state"
+   * and "state-expired" are kept as separate message kinds (rather than
+   * encoding an expiry as a "state" message with an empty-cards payload)
+   * specifically so a receiving instance's own latestState reliably becomes
+   * null on expiry — sweepStaleSessions' own re-fire guard (`if
+   * (!session.latestState) continue`) depends on that, and storing the
+   * empty state AS latestState would silently break it.
+   */
+  const unsubscribeFromStateBus = stateBus.subscribe((message) => {
+    if (message.originInstanceId === instanceId) return; // already applied locally at the point of origin
+    const session = getSession(message.sessionId);
+    if (message.kind === "producer-claimed") {
+      session.hasLocalProducerAuthority = false;
+      return;
+    }
+    if (message.kind === "state") {
+      session.latestState = message.state;
+      session.lastUpdatedAt = Date.now();
+      const delivered = broadcastToLocalViewers(session, message.state);
+      logEvent("state_broadcast", {
+        sessionId: message.sessionId,
+        sequence: message.state.sequence,
+        cards: message.state.cards.length,
+        viewers: delivered,
+      });
+      return;
+    }
+    // message.kind === "state-expired"
+    session.latestState = null;
+    logEvent("state_ttl_expired", { sessionId: message.sessionId, viewers: session.viewers.size });
+    broadcastToLocalViewers(session, message.emptyState);
+  });
 
   function bindAuthenticatedProducer(ws: WebSocket, state: ConnectionState, binding: ProducerBinding): void {
     state.producerBinding = binding;
@@ -229,6 +339,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       session.producer.close(CLOSE_CODE.PRODUCER_REPLACED, "replaced-by-new-producer-connection");
     }
     session.producer = ws;
+    session.hasLocalProducerAuthority = true;
+    stateBus.publish({ kind: "producer-claimed", sessionId: binding.twitchUserId, originInstanceId: instanceId });
     logEvent("producer_connected", { channelId: binding.twitchUserId, broadcasterId: binding.broadcasterId });
   }
 
@@ -331,26 +443,16 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       // multiple producers targeting the same *unauthenticated* session.
       // Authenticated producers are arbitrated earlier, at connection time,
       // by bindAuthenticatedProducer's replace-on-reconnect.
+      const isNewProducerSocket = session.producer !== ws;
       session.producer = ws;
+      if (isNewProducerSocket) {
+        session.hasLocalProducerAuthority = true;
+        stateBus.publish({ kind: "producer-claimed", sessionId: overlayState.sessionId, originInstanceId: instanceId });
+      }
       session.latestState = overlayState;
       session.lastUpdatedAt = Date.now();
 
-      const encoded = JSON.stringify({ type: "overlay-state", payload: overlayState });
-      let delivered = 0;
-      for (const viewer of session.viewers) {
-        if (viewer.readyState !== WebSocket.OPEN) continue;
-        if (isSlowConsumer(viewer.bufferedAmount)) {
-          logEvent("connection_disconnected", {
-            reason: "slow-consumer",
-            sessionId: overlayState.sessionId,
-            bytes: viewer.bufferedAmount,
-          });
-          viewer.terminate();
-          continue;
-        }
-        viewer.send(encoded);
-        delivered += 1;
-      }
+      const delivered = broadcastToLocalViewers(session, overlayState);
       logEvent("state_broadcast", {
         sessionId: overlayState.sessionId,
         sequence: overlayState.sequence,
@@ -358,6 +460,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         viewers: delivered,
         bytes,
       });
+      stateBus.publish({ kind: "state", sessionId: overlayState.sessionId, originInstanceId: instanceId, state: overlayState });
       return;
     }
 
@@ -451,6 +554,13 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         // setInterval keeps the Node process (and, in tests, the test
         // runner) alive/hanging past this close() resolving.
         clearInterval(ttlSweepInterval);
+        // Only removes THIS server's own handler from the bus — a shared
+        // injected bus (two createRelayServer calls sharing one
+        // LocalStateBus, as the cross-instance tests do) keeps working for
+        // whichever server hasn't closed yet. The bus itself is never
+        // closed here — see RelayConfig.stateBus's doc comment on
+        // ownership.
+        unsubscribeFromStateBus();
         // wss.close() with an external server attached does NOT close that
         // server itself — only its own internal state and open sockets.
         // The caller (createRelayServer below, or index.ts) owns closing
