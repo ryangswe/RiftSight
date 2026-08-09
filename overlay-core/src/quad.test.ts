@@ -200,6 +200,18 @@ describe("resolveHoveredCard", () => {
       expect(resolveHoveredCard({ x: 350, y: 350 }, [dialogCard], blockingRegion)?.instanceId).toBe("dialog-card");
     });
 
+    it("a dialog card wins over an overlapping background card even when the background card has a much higher zIndex — the real live bug: detectDialogCards publishes a flat, low zIndex for every dialog card, so a naive single-pool zIndex comparison let an arbitrary background card behind it win the point", () => {
+      const background = candidateFor(
+        { instanceId: "background", fromDialog: false, bounds: { x: 0.25, y: 0.25, width: 0.3, height: 0.3 } },
+        40
+      );
+      const dialogCard = candidateFor(
+        { instanceId: "dialog-card", fromDialog: true, bounds: { x: 0.25, y: 0.25, width: 0.3, height: 0.3 } },
+        1
+      );
+      expect(resolveHoveredCard({ x: 350, y: 350 }, [background, dialogCard], blockingRegion)?.instanceId).toBe("dialog-card");
+    });
+
     it("does not suppress a background card outside blockingRegion", () => {
       const background = candidateFor({
         instanceId: "background",

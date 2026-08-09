@@ -36,6 +36,10 @@ describe("isDetectableInstanceId", () => {
       )
     ).toBe(true);
   });
+
+  it("accepts the later-observed plain 'chain_<uuid>' shape (underscore, no embedded plr_/card_ segments) — RiftAtlas changed this format after the hyphenated example above was captured, silently going undetected until the pattern was widened", () => {
+    expect(isDetectableInstanceId("chain_516ff5cf-5ff9-4245-b037-86bcda220c85")).toBe(true);
+  });
 });
 
 describe("toDropZone", () => {
@@ -51,6 +55,10 @@ describe("toDropZone", () => {
     expect(
       toDropZone(null, "chain-plr_7a07bb13-card_7db9227a-a606-430b-98b5-ec280c610b34-d526be66-1952-41c9-9a91-2887d66d7f36")
     ).toBe("chain");
+  });
+
+  it("also classifies the later-observed underscore 'chain_<uuid>' shape as 'chain'", () => {
+    expect(toDropZone(null, "chain_516ff5cf-5ff9-4245-b037-86bcda220c85")).toBe("chain");
   });
 
   it("falls back to 'unknown' when neither the attribute nor the instance id gives a signal", () => {

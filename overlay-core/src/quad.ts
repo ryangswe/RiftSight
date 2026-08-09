@@ -133,34 +133,55 @@ export interface HoverCandidate {
  * compareStackOrder, using each candidate's position in `candidates` as
  * the paint-order tiebreak) — or null if none contain the point.
  *
+ * Dialog candidates (fromDialog: true) are resolved as their own separate
+ * group, and any one of them matching `point` at all wins outright over
+ * every background candidate, regardless of raw zIndex. This is not
+ * optional: detectDialogCards publishes a flat, low zIndex for every card
+ * it produces (see card-detector.ts), while a background board card's
+ * zIndex is a real, often much larger CSS value — comparing the two
+ * groups by magnitude in one pool let an arbitrary background card behind
+ * a dialog card win the point purely on zIndex, which live testing showed
+ * makes a dialog's own card hoverable only in the sliver where no
+ * background card happens to occupy the same screen position, exactly
+ * backwards from a dialog always being the topmost thing actually painted
+ * there. A dialog card is therefore never suppressed and never has to
+ * out-rank anything outside its own group.
+ *
  * `blockingRegion`, when given, is the active dialog's own bounding quad
- * (see card-detector.ts's detectCards / OverlayState.blockingRegion). A
- * background card (fromDialog: false) that wins resolution but falls
- * inside that region is suppressed (null) rather than returned — it's
- * genuinely there and clickable in the DOM, but visually painted over by
- * the dialog in the actual video, so showing its tooltip would be
- * misleading. The dialog's own cards (fromDialog: true) are exempt, and a
- * background card outside the region is unaffected — see the module
- * plan's "why viewer-side" write-up for why this one extra check, done
- * only against the single already-winning candidate, is the cheap side of
- * this tradeoff rather than pre-clipping every card on the producer.
+ * (see card-detector.ts's detectCards / OverlayState.blockingRegion),
+ * checked only once no dialog candidate matched `point` at all. The
+ * winning background candidate is suppressed (null) rather than returned
+ * when it falls inside that region — it's genuinely there and clickable
+ * in the DOM, but visually painted over by the dialog in the actual
+ * video, so showing its tooltip would be misleading. A background card
+ * outside the region is unaffected.
  */
 export function resolveHoveredCard(
   point: Point,
   candidates: readonly HoverCandidate[],
   blockingRegion?: CardQuad
 ): OverlayCard | null {
-  let best: HoverCandidate | null = null;
-  let bestIndex = -1;
+  let bestDialog: HoverCandidate | null = null;
+  let bestDialogIndex = -1;
+  let bestBackground: HoverCandidate | null = null;
+  let bestBackgroundIndex = -1;
+
   candidates.forEach((candidate, index) => {
     if (!pointInConvexQuad(point, candidate.quad)) return;
-    if (!best || compareStackOrder(candidate, index, best, bestIndex) > 0) {
-      best = candidate;
-      bestIndex = index;
+    if (candidate.card.fromDialog) {
+      if (!bestDialog || compareStackOrder(candidate, index, bestDialog, bestDialogIndex) > 0) {
+        bestDialog = candidate;
+        bestDialogIndex = index;
+      }
+    } else if (!bestBackground || compareStackOrder(candidate, index, bestBackground, bestBackgroundIndex) > 0) {
+      bestBackground = candidate;
+      bestBackgroundIndex = index;
     }
   });
-  if (!best) return null;
-  const winner = best as HoverCandidate;
-  if (blockingRegion && !winner.card.fromDialog && pointInConvexQuad(point, blockingRegion)) return null;
+
+  if (bestDialog) return (bestDialog as HoverCandidate).card;
+  if (!bestBackground) return null;
+  const winner = bestBackground as HoverCandidate;
+  if (blockingRegion && pointInConvexQuad(point, blockingRegion)) return null;
   return winner.card;
 }

@@ -60,15 +60,22 @@ const CARD_INSTANCE_ID_PATTERN = /^card_[0-9a-f-]+$/i;
 const BATTLEFIELD_SLOT_ID_PATTERN = /^battlefield-marker:battlefield[AB]$/;
 // The card currently resolving on the chain (a spell/ability in response to
 // which players may react) gets a composite id shaped like
-// "chain-plr_<hex>-card_<uuid>-<uuid>" — live-captured, real example:
-// "chain-plr_7a07bb13-card_7db9227a-a606-430b-98b5-ec280c610b34-d526be66-1952-41c9-9a91-2887d66d7f36".
-// The real card_<uuid> is recoverable from the *image* src via
-// CARD_IMAGE_URL_PATTERN regardless, so this only needs to recognize the
-// shape, not fully parse it — deliberately just a prefix check (not
-// anchored at the end) for the same reason CARD_INSTANCE_ID_PATTERN is
-// permissive on shape: this isn't a security boundary, only "does this look
-// like a chain-zone instance id."
-const CHAIN_INSTANCE_ID_PATTERN = /^chain-/i;
+// "chain-plr_<hex>-card_<uuid>-<uuid>" — an earlier capture's format, real
+// example: "chain-plr_7a07bb13-card_7db9227a-a606-430b-98b5-ec280c610b34-d526be66-1952-41c9-9a91-2887d66d7f36".
+// A later live capture showed RiftAtlas has since changed this shape to a
+// plain "chain_<uuid>" (underscore, no embedded "plr_"/"card_" segments,
+// real example: "chain_516ff5cf-5ff9-4245-b037-86bcda220c85") — the
+// hyphen-only pattern silently rejected every one of these, the same class
+// of silent under-detection as the short-hex-vs-UUID incident documented
+// on CARD_INSTANCE_ID_PATTERN above. Accepting both separators rather than
+// picking one is deliberate: nothing here rules out RiftAtlas using either
+// shape depending on version/branch. The real card_<uuid> is recoverable
+// from the *image* src via CARD_IMAGE_URL_PATTERN regardless, so this only
+// needs to recognize the shape, not fully parse it — deliberately just a
+// prefix check (not anchored at the end) for the same reason
+// CARD_INSTANCE_ID_PATTERN is permissive on shape: this isn't a security
+// boundary, only "does this look like a chain-zone instance id."
+const CHAIN_INSTANCE_ID_PATTERN = /^chain[-_]/i;
 const CARDBACK_IMAGE_PATTERN = /cardback-(white|blue)\.png/;
 
 /** RiftAtlas attaches this to every real card instance — see the module header. Exported so card-observer.ts can watch the exact same set of elements without duplicating the literal. */
