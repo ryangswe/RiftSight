@@ -390,8 +390,18 @@ function laterInDocumentOrder(a: Element, b: Element): Element {
  * this fails closed on ("unsupported") rather than guessing. Each face's
  * ancestor chain is walked exactly once here, regardless of which branch is
  * taken below.
+ *
+ * Exported for unit testing — unlike isDetectableInstanceId/toDropZone/
+ * mergePreferPublic, this one genuinely needs real DOM elements (parent-
+ * child structure via parentElement, document order via
+ * compareDocumentPosition, computed backfaceVisibility/transform), so its
+ * own tests run under a DOM test environment rather than plain Node. The
+ * underlying transform-matrix classification itself is already covered
+ * DOM-free by face-transform.test.ts's classifyFaceFacing tests — what's
+ * exercised here is only this function's own branching between the
+ * shared-wrapper and no-wrapper-at-all code paths.
  */
-function resolveFaceFacing(frontFace: HTMLImageElement, backFace: HTMLImageElement): FaceFacing {
+export function resolveFaceFacing(frontFace: HTMLImageElement, backFace: HTMLImageElement): FaceFacing {
   const frontWrapper = findBackfaceHiddenAncestor(frontFace);
   const backWrapper = findBackfaceHiddenAncestor(backFace);
 
@@ -491,8 +501,8 @@ function buildDetection(anchor: HTMLElement): CardDetection {
   };
 }
 
-/** Inserts `detection` under `instanceId`, keeping whichever of the new and any existing candidate for that id resolved to "public" — the merge rule every duplicate-prone detection source (board cards, dialog cards) needs, since a real card and a stale/incomplete duplicate can share an id but disagree on visibility. */
-function mergePreferPublic(map: Map<string, CardDetection>, instanceId: string, detection: CardDetection): void {
+/** Inserts `detection` under `instanceId`, keeping whichever of the new and any existing candidate for that id resolved to "public" — the merge rule every duplicate-prone detection source (board cards, dialog cards) needs, since a real card and a stale/incomplete duplicate can share an id but disagree on visibility. Exported for unit testing — takes plain CardDetection values, no DOM involved. */
+export function mergePreferPublic(map: Map<string, CardDetection>, instanceId: string, detection: CardDetection): void {
   const existing = map.get(instanceId);
   if (!existing || (existing.visibility !== "public" && detection.visibility === "public")) {
     map.set(instanceId, detection);
