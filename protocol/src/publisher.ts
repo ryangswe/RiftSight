@@ -1,6 +1,6 @@
 import { fingerprintCards } from "./fingerprint.js";
 import { PROTOCOL_VERSION } from "./schema.js";
-import type { OverlayCard, OverlayState, Viewport } from "./types.js";
+import type { NormalizedBounds, OverlayCard, OverlayState, Viewport } from "./types.js";
 
 /**
  * Turns detection results into OverlayState snapshots: assigns
@@ -21,8 +21,13 @@ export class OverlayStatePublisher {
    * assigned after the fingerprint comparison, so they can never influence
    * whether a state is treated as a duplicate.
    */
-  next(cards: OverlayCard[], viewport: Viewport, now: number = Date.now()): OverlayState | null {
-    const fingerprint = fingerprintCards(cards, viewport);
+  next(
+    cards: OverlayCard[],
+    viewport: Viewport,
+    options: { blockingRegion?: NormalizedBounds; now?: number } = {}
+  ): OverlayState | null {
+    const { blockingRegion, now = Date.now() } = options;
+    const fingerprint = fingerprintCards(cards, viewport, blockingRegion);
     if (fingerprint === this.lastFingerprint) return null;
 
     this.lastFingerprint = fingerprint;
@@ -35,6 +40,7 @@ export class OverlayStatePublisher {
       capturedAt: now,
       sourceViewport: viewport,
       cards,
+      blockingRegion,
     };
   }
 

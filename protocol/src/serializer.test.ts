@@ -18,6 +18,7 @@ function baseDetection(overrides: Partial<DetectionInput> = {}): DetectionInput 
     landscape: false,
     localWidth: 100,
     localHeight: 100,
+    fromDialog: false,
     ...overrides,
   };
 }
@@ -84,6 +85,13 @@ describe("toOverlayCard", () => {
     const b = toOverlayCard(baseDetection({ landscape: true, visibility: "hidden" }), viewport);
     expect(a!.landscape).toBe(true);
     expect(b!.landscape).toBe(true);
+  });
+
+  it("passes fromDialog through unchanged", () => {
+    const a = toOverlayCard(baseDetection({ fromDialog: true }), viewport);
+    const b = toOverlayCard(baseDetection({ fromDialog: false }), viewport);
+    expect(a!.fromDialog).toBe(true);
+    expect(b!.fromDialog).toBe(false);
   });
 
   it("returns null when bounds cannot be normalized", () => {

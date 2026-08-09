@@ -22,6 +22,7 @@ export interface DetectionInput {
   landscape: boolean;
   localWidth: number;
   localHeight: number;
+  fromDialog: boolean;
 }
 
 /**
@@ -61,5 +62,6 @@ export function toOverlayCard(
     // a fraction of the viewport, not of `bounds` itself.
     localWidth: detection.localWidth / viewport.width,
     localHeight: detection.localHeight / viewport.height,
+    fromDialog: detection.fromDialog,
   };
 }

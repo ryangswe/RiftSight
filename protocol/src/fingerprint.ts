@@ -1,16 +1,22 @@
-import type { OverlayCard } from "./types.js";
+import type { NormalizedBounds, OverlayCard } from "./types.js";
 
 /**
- * Deterministic fingerprint of a card set + viewport, deliberately taking
- * only these two inputs — capturedAt/sequence are structurally excluded
- * from equality by never being passed in here, not filtered out after the
- * fact. Sorted by instanceId so input order never affects the result.
- * Bounds are rounded to damp sub-pixel float jitter between renders that
- * shouldn't count as a "real" change.
+ * Deterministic fingerprint of a card set + viewport + blocking region,
+ * deliberately taking only these inputs — capturedAt/sequence are
+ * structurally excluded from equality by never being passed in here, not
+ * filtered out after the fact. Sorted by instanceId so input order never
+ * affects the result. Bounds are rounded to damp sub-pixel float jitter
+ * between renders that shouldn't count as a "real" change.
+ *
+ * blockingRegion is included so a dialog opening/closing with no
+ * card-level change (e.g. a dialog whose own cards are still settling)
+ * still counts as a meaningful change — otherwise it could be silently
+ * deduped away even though hover behavior genuinely changed.
  */
 export function fingerprintCards(
   cards: OverlayCard[],
-  viewport: { width: number; height: number; devicePixelRatio: number }
+  viewport: { width: number; height: number; devicePixelRatio: number },
+  blockingRegion?: NormalizedBounds
 ): string {
   const sorted = [...cards].sort((a, b) => a.instanceId.localeCompare(b.instanceId));
   const canonical = sorted.map((card) => ({
@@ -24,8 +30,9 @@ export function fingerprintCards(
     bounds: roundBounds(card.bounds),
     rotation: card.rotation,
     zIndex: card.zIndex ?? null,
+    fromDialog: card.fromDialog,
   }));
-  return JSON.stringify({ viewport, cards: canonical });
+  return JSON.stringify({ viewport, blockingRegion: blockingRegion ? roundBounds(blockingRegion) : null, cards: canonical });
 }
 
 function roundBounds(bounds: OverlayCard["bounds"]): OverlayCard["bounds"] {

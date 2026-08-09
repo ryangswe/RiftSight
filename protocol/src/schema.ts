@@ -69,6 +69,11 @@ export const OverlayCardSchema = z
     // portrait unit card played onto a battlefield zone stays landscape:
     // false). Drives popup sizing, not detection/geometry.
     landscape: z.boolean(),
+    // True only for cards detected inside an active blocking dialog
+    // (Trash/Banished/Deck Peek/"Opponent revealed deck cards"). The
+    // foolproof "does this card belong to the dialog, not the board behind
+    // it" signal for hover resolution — see OverlayState.blockingRegion.
+    fromDialog: z.boolean(),
   })
   // A second, independent privacy boundary at the schema level (on top of
   // card-detector.ts's visibility classification and protocol's own
@@ -110,6 +115,12 @@ export const OverlayStateSchema = z.object({
   capturedAt: z.number().finite().nonnegative(),
   sourceViewport: ViewportSchema,
   cards: z.array(OverlayCardSchema),
+  // The active blocking dialog's own bounding rect, present only while a
+  // dialog is open. Board cards (fromDialog: false) publish their normal,
+  // unclipped hitboxes always — a viewer suppresses hover for a background
+  // card only when the hovered point also falls inside this rect, since
+  // that's the only region actually painted over on top of the board.
+  blockingRegion: NormalizedBoundsSchema.optional(),
 });
 
 // Producer (extension background) -> relay.

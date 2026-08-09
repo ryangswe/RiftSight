@@ -3,9 +3,10 @@
 // actual relay connection (content scripts should not own backend
 // connection lifecycle — see background/background.ts).
 
-import { OverlayStatePublisher, toOverlayCard, type DetectionInput, type Viewport } from "@riftsight/protocol";
+import { normalizeBounds, OverlayStatePublisher, toOverlayCard, type DetectionInput, type Viewport } from "@riftsight/protocol";
 import { detectCards } from "./card-detector.js";
 import { observeBoard, type CardObserverHandle } from "./card-observer.js";
+import type { CardDetection } from "./types.js";
 
 let observerHandle: CardObserverHandle | null = null;
 let statePublisher: OverlayStatePublisher | null = null;
@@ -19,7 +20,7 @@ function currentViewport(): Viewport {
   };
 }
 
-function toDetectionInput(detection: ReturnType<typeof detectCards>[number]): DetectionInput {
+function toDetectionInput(detection: CardDetection): DetectionInput {
   return {
     instanceId: detection.instanceId,
     cardId: detection.cardId,
@@ -34,6 +35,7 @@ function toDetectionInput(detection: ReturnType<typeof detectCards>[number]): De
     landscape: detection.landscape,
     localWidth: detection.localWidth,
     localHeight: detection.localHeight,
+    fromDialog: detection.fromDialog,
   };
 }
 
@@ -41,11 +43,13 @@ function publishOnce(): void {
   if (!statePublisher) return;
 
   const viewport = currentViewport();
-  const cards = detectCards()
-    .map((detection) => toOverlayCard(toDetectionInput(detection), viewport))
+  const detection = detectCards();
+  const cards = detection.cards
+    .map((card) => toOverlayCard(toDetectionInput(card), viewport))
     .filter((card): card is NonNullable<typeof card> => card !== null);
+  const blockingRegion = detection.blockingRegion ? (normalizeBounds(detection.blockingRegion, viewport) ?? undefined) : undefined;
 
-  const state = statePublisher.next(cards, viewport);
+  const state = statePublisher.next(cards, viewport, { blockingRegion });
   if (!state) return; // deduped — nothing meaningfully changed
 
   publishedCount += 1;

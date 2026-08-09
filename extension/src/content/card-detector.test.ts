@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDetectableInstanceId, isExtremeZIndex, toDropZone, upgradeToOriginalResolution } from "./card-detector.js";
+import { isDetectableInstanceId, toDropZone, upgradeToOriginalResolution } from "./card-detector.js";
 
 describe("isDetectableInstanceId", () => {
   it("accepts the short-hex id format seen in an earlier capture", () => {
@@ -102,21 +102,5 @@ describe("upgradeToOriginalResolution", () => {
   it("leaves a URL with no recognized tier segment unchanged, rather than guessing", () => {
     const url = "https://cdn.example.com/cardback-white.png";
     expect(upgradeToOriginalResolution(url)).toBe(url);
-  });
-});
-
-describe("isExtremeZIndex", () => {
-  it("reproduces the live-captured portal-wrapper value shared by Trash/Banished and Deck Peek", () => {
-    expect(isExtremeZIndex("2147483646")).toBe(true);
-  });
-
-  it("rejects real board z-index values seen live (small integers)", () => {
-    expect(isExtremeZIndex("1")).toBe(false);
-    expect(isExtremeZIndex("2")).toBe(false);
-    expect(isExtremeZIndex("3")).toBe(false);
-  });
-
-  it("rejects 'auto', the default for every board element without an explicit z-index", () => {
-    expect(isExtremeZIndex("auto")).toBe(false);
   });
 });

@@ -15,6 +15,7 @@ function card(overrides: Partial<OverlayCard> = {}): OverlayCard {
     landscape: false,
     localWidth: 0.1,
     localHeight: 0.1,
+    fromDialog: false,
     ...overrides,
   };
 }
@@ -48,5 +49,29 @@ describe("fingerprintCards", () => {
     const a = fingerprintCards([card({ visibility: "public", cardId: "OGN-089" })], viewport);
     const b = fingerprintCards([card({ visibility: "hidden", cardId: undefined })], viewport);
     expect(a).not.toBe(b);
+  });
+
+  it("changes when fromDialog changes even if geometry does not", () => {
+    const a = fingerprintCards([card({ fromDialog: false })], viewport);
+    const b = fingerprintCards([card({ fromDialog: true })], viewport);
+    expect(a).not.toBe(b);
+  });
+
+  it("changes when blockingRegion appears/disappears with identical cards", () => {
+    const withoutRegion = fingerprintCards([card()], viewport);
+    const withRegion = fingerprintCards([card()], viewport, { x: 0.3, y: 0.3, width: 0.2, height: 0.2 });
+    expect(withoutRegion).not.toBe(withRegion);
+  });
+
+  it("changes when blockingRegion moves", () => {
+    const a = fingerprintCards([card()], viewport, { x: 0.3, y: 0.3, width: 0.2, height: 0.2 });
+    const b = fingerprintCards([card()], viewport, { x: 0.4, y: 0.3, width: 0.2, height: 0.2 });
+    expect(a).not.toBe(b);
+  });
+
+  it("ignores sub-pixel float jitter in blockingRegion", () => {
+    const a = fingerprintCards([card()], viewport, { x: 0.300001, y: 0.3, width: 0.2, height: 0.2 });
+    const b = fingerprintCards([card()], viewport, { x: 0.300002, y: 0.3, width: 0.2, height: 0.2 });
+    expect(a).toBe(b);
   });
 });

@@ -363,7 +363,7 @@ function drawOutlines(detections: CardDetection[]): void {
 }
 
 function runDetect(): void {
-  const detections = detectCards();
+  const { cards: detections } = detectCards();
   drawOutlines(detections);
 
   console.groupCollapsed(`[RiftSight] detectCards — ${detections.length} card(s)`);
@@ -812,7 +812,7 @@ setInterval(updatePresenceSection, 2000);
 // re-fetch below — see cachedPublishingIntent's doc comment for why.
 async function sendHeartbeat(): Promise<void> {
   const boardDetected = isGameBoardDetected();
-  const publicCardCount = detectCards().filter((card) => card.visibility === "public").length;
+  const publicCardCount = detectCards().cards.filter((card) => card.visibility === "public").length;
 
   chrome.runtime.sendMessage({ type: "heartbeat", boardDetected, publicCardCount }).catch(() => {
     // Background worker may be waking from suspension; the next tick will retry.

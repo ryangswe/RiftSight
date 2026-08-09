@@ -12,6 +12,7 @@ import {
   cardPopupContentFor,
   computeCardQuad,
   computeHitboxStyle,
+  computeRectQuad,
   computeTooltipMaxSize,
   computeTooltipPosition,
   delayedLiveTarget,
@@ -26,7 +27,7 @@ import {
   type Rect,
   type SourceRegion,
 } from "@riftsight/overlay-core";
-import { TimeWindowBuffer, type OverlayCard, type OverlayState } from "@riftsight/protocol";
+import { TimeWindowBuffer, type NormalizedBounds, type OverlayCard, type OverlayState } from "@riftsight/protocol";
 import { DEFAULT_OVERLAY_CONFIG, MAX_DELAY_MS, parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
 import { MockOverlayStateSource, type MockConnectionStatus } from "../platform/mock-state-source.js";
 import { getConfiguredRelayUrl } from "../platform/relay-url.js";
@@ -73,6 +74,7 @@ let sourceAspectRatioOverride: number | undefined; // broadcaster-set override f
 let sourceRegion: SourceRegion = FULL_FRAME_SOURCE_REGION; // where RiftAtlas sits within the stream canvas, broadcaster-calibrated
 let tooltipScale = DEFAULT_OVERLAY_CONFIG.tooltipScale; // broadcaster-set tooltip size multiplier — see overlay-core's computeTooltipMaxSize
 let latestCards: OverlayCard[] = [];
+let latestBlockingRegion: NormalizedBounds | undefined;
 let displayedState: OverlayState | undefined;
 let tickTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -287,17 +289,29 @@ function computeHoverCandidates(stageSize: { width: number; height: number }): H
 // needing to hook every possible resize trigger individually.
 let candidatesDirty = true;
 let cachedCandidates: HoverCandidate[] = [];
+let cachedBlockingQuad: CardQuad | undefined;
 let cachedStageWidth = 0;
 let cachedStageHeight = 0;
 
+function refreshHoverCacheIfNeeded(stageSize: { width: number; height: number }): void {
+  if (!candidatesDirty && stageSize.width === cachedStageWidth && stageSize.height === cachedStageHeight) return;
+  cachedCandidates = computeHoverCandidates(stageSize);
+  cachedBlockingQuad = latestBlockingRegion
+    ? computeRectQuad(mapBoundsToSourceRegion(latestBlockingRegion, sourceRegion), stageSize)
+    : undefined;
+  cachedStageWidth = stageSize.width;
+  cachedStageHeight = stageSize.height;
+  candidatesDirty = false;
+}
+
 function getHoverCandidates(stageSize: { width: number; height: number }): HoverCandidate[] {
-  if (candidatesDirty || stageSize.width !== cachedStageWidth || stageSize.height !== cachedStageHeight) {
-    cachedCandidates = computeHoverCandidates(stageSize);
-    cachedStageWidth = stageSize.width;
-    cachedStageHeight = stageSize.height;
-    candidatesDirty = false;
-  }
+  refreshHoverCacheIfNeeded(stageSize);
   return cachedCandidates;
+}
+
+function getBlockingQuad(stageSize: { width: number; height: number }): CardQuad | undefined {
+  refreshHoverCacheIfNeeded(stageSize);
+  return cachedBlockingQuad;
 }
 
 // The single source of hover state. Converts the pointer into
@@ -320,8 +334,9 @@ function handlePointerMove(clientX: number, clientY: number): void {
   }
 
   const pixelPoint = { x: clientX - stageRect.left, y: clientY - stageRect.top };
-  const candidates = getHoverCandidates({ width: stageRect.width, height: stageRect.height });
-  const resolved = resolveHoveredCard(pixelPoint, candidates);
+  const stageSize = { width: stageRect.width, height: stageRect.height };
+  const candidates = getHoverCandidates(stageSize);
+  const resolved = resolveHoveredCard(pixelPoint, candidates, getBlockingQuad(stageSize));
 
   // Skip re-showing when the same card is still resolved — this runs on
   // every mousemove pixel, so without this guard a still or
@@ -384,7 +399,8 @@ function applyState(state: OverlayState | undefined): void {
   if (state === displayedState) return; // no meaningful change — skip render
   displayedState = state;
   latestCards = state ? state.cards : [];
-  candidatesDirty = true; // latestCards just changed — see getHoverCandidates
+  latestBlockingRegion = state?.blockingRegion;
+  candidatesDirty = true; // latestCards/latestBlockingRegion just changed — see getHoverCandidates
   if (state) lastSourceViewport = state.sourceViewport;
   renderHitboxes();
   checkAspectRatioMismatch();
