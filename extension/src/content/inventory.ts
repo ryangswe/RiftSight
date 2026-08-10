@@ -17,6 +17,7 @@ import type { CardDetection } from "./types.js";
 import { LINK_STATUS_LABEL, type LinkState } from "../background/link-state.js";
 import { HEARTBEAT_INTERVAL_MS, idlePublishingMessage, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
 import { describeStreamerError } from "../background/error-messages.js";
+import { safeSendMessage } from "../shared/messaging.js";
 
 // closed-beta hides the manual session-ID field and the account section
 // takes over as the sole "which channel does this publish to" mechanism —
@@ -61,7 +62,7 @@ let cachedPublishingIntent = false;
 
 /** Fetches the persisted intent once at content-script load and syncs the panel to match. Safe to call before the panel exists — syncPublishToggleUI() itself no-ops if the panel isn't there yet, and the very next heartbeat tick (at most HEARTBEAT_INTERVAL_MS later) will pick up an intent that arrives just after ensurePanel() runs. */
 async function initPublishingIntent(): Promise<void> {
-  const response = (await chrome.runtime.sendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
+  const response = (await safeSendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
     | { intent?: boolean }
     | undefined;
   cachedPublishingIntent = Boolean(response?.intent);
@@ -71,7 +72,7 @@ async function initPublishingIntent(): Promise<void> {
 /** Changes cachedPublishingIntent immediately in response to the streamer's own click on THIS tab — for zero-latency feedback here specifically. Not the only writer of the underlying persisted value anymore (see cachedPublishingIntent's doc comment above); sendHeartbeat()'s tick is what reconciles this tab against changes made elsewhere. */
 async function setIntent(intent: boolean): Promise<void> {
   cachedPublishingIntent = intent;
-  await chrome.runtime.sendMessage({ type: "set-publishing-intent", intent }).catch(() => {
+  await safeSendMessage({ type: "set-publishing-intent", intent }).catch(() => {
     // Best-effort — if the background worker is mid-suspend/wake, the
     // in-memory cache above still reflects the streamer's actual click for
     // the rest of this tab's lifetime; a genuinely dropped persist would
@@ -446,7 +447,7 @@ function buildAccountSection(panel: HTMLElement): void {
   connectButton.textContent = "Connect Twitch";
   connectButton.style.cssText = "margin-right:6px;cursor:pointer;";
   connectButton.addEventListener("click", () => {
-    void chrome.runtime.sendMessage({ type: "start-link" }).then(updateAccountSection);
+    void safeSendMessage({ type: "start-link" }).then(updateAccountSection);
   });
   panel.appendChild(connectButton);
 
@@ -455,7 +456,7 @@ function buildAccountSection(panel: HTMLElement): void {
   disconnectButton.textContent = "Disconnect";
   disconnectButton.style.cssText = "cursor:pointer;display:none;";
   disconnectButton.addEventListener("click", () => {
-    void chrome.runtime.sendMessage({ type: "disconnect-link" }).then(updateAccountSection);
+    void safeSendMessage({ type: "disconnect-link" }).then(updateAccountSection);
   });
   panel.appendChild(disconnectButton);
 
@@ -474,9 +475,8 @@ function updateAccountSection(): void {
   const disconnectButton = panel.querySelector<HTMLButtonElement>(`#${PANEL_ID}-disconnect-button`);
   if (!statusEl || !connectButton || !disconnectButton) return;
 
-  chrome.runtime
-    .sendMessage({ type: "get-link-state" })
-    .then((state: LinkState | undefined) => {
+  safeSendMessage<LinkState>({ type: "get-link-state" })
+    .then((state) => {
       const status: LinkState["status"] = state?.status ?? "not-connected";
       const label = LINK_STATUS_LABEL[status];
       statusEl.textContent = status === "connected" && state?.displayName ? `${label} as ${state.displayName}` : label;
@@ -700,9 +700,8 @@ function updatePublishStatus(): void {
     return;
   }
 
-  chrome.runtime
-    .sendMessage({ type: "get-status" })
-    .then((response: { status?: string; hasUnsent?: boolean; replaced?: boolean } | undefined) => {
+  safeSendMessage<{ status?: string; hasUnsent?: boolean; replaced?: boolean }>({ type: "get-status" })
+    .then((response) => {
       // A not-connected -> connected transition means the relay connection
       // just came back (most notably: the backend restarted, or a network
       // blip). The board may well look identical to before the drop, which
@@ -784,9 +783,8 @@ function updatePresenceSection(): void {
   const el = panel.querySelector<HTMLDivElement>(`#${PANEL_ID}-presence-status`);
   if (!el) return;
 
-  chrome.runtime
-    .sendMessage({ type: "get-presence-state" })
-    .then((response: { status?: PresenceStatus } | undefined) => {
+  safeSendMessage<{ status?: PresenceStatus }>({ type: "get-presence-state" })
+    .then((response) => {
       lastKnownPresenceStatus = response?.status ?? "no-riftatlas";
       el.textContent = PRESENCE_STATUS_LABEL[lastKnownPresenceStatus];
     })
@@ -814,7 +812,7 @@ async function sendHeartbeat(): Promise<void> {
   const boardDetected = isGameBoardDetected();
   const publicCardCount = detectCards().cards.filter((card) => card.visibility === "public").length;
 
-  chrome.runtime.sendMessage({ type: "heartbeat", boardDetected, publicCardCount }).catch(() => {
+  safeSendMessage({ type: "heartbeat", boardDetected, publicCardCount }).catch(() => {
     // Background worker may be waking from suspension; the next tick will retry.
   });
 
@@ -823,7 +821,7 @@ async function sendHeartbeat(): Promise<void> {
   // cachedPublishingIntent's doc comment above for why this is required
   // now that the toolbar popup can also flip it from a separate execution
   // context this tab has no other way to learn about.
-  const intentResponse = (await chrome.runtime.sendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
+  const intentResponse = (await safeSendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
     | { intent?: boolean }
     | undefined;
   cachedPublishingIntent = Boolean(intentResponse?.intent);

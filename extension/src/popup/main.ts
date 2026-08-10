@@ -24,6 +24,7 @@
 import { LINK_STATUS_LABEL, type LinkState, type LinkStatus } from "../background/link-state.js";
 import { idlePublishingMessage, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
 import { describeStreamerError } from "../background/error-messages.js";
+import { safeSendMessage } from "../shared/messaging.js";
 
 function requireElement<T extends Element>(id: string): T {
   const el = document.getElementById(id);
@@ -43,9 +44,8 @@ let lastKnownLinkStatus: LinkStatus = "not-connected";
 let lastKnownPresenceStatus: PresenceStatus = "no-riftatlas";
 
 function updateAccountSection(): void {
-  chrome.runtime
-    .sendMessage({ type: "get-link-state" })
-    .then((state: LinkState | undefined) => {
+  safeSendMessage<LinkState>({ type: "get-link-state" })
+    .then((state) => {
       const status: LinkStatus = state?.status ?? "not-connected";
       lastKnownLinkStatus = status;
       const label = LINK_STATUS_LABEL[status];
@@ -67,9 +67,8 @@ function updateAccountSection(): void {
 }
 
 function updatePresenceSection(): void {
-  chrome.runtime
-    .sendMessage({ type: "get-presence-state" })
-    .then((response: { status?: PresenceStatus } | undefined) => {
+  safeSendMessage<{ status?: PresenceStatus }>({ type: "get-presence-state" })
+    .then((response) => {
       lastKnownPresenceStatus = response?.status ?? "no-riftatlas";
       presenceStatusEl.textContent = PRESENCE_STATUS_LABEL[lastKnownPresenceStatus];
     })
@@ -100,9 +99,8 @@ function updatePublishStatus(): void {
     return;
   }
 
-  chrome.runtime
-    .sendMessage({ type: "get-status" })
-    .then((response: { status?: string; replaced?: boolean } | undefined) => {
+  safeSendMessage<{ status?: string; replaced?: boolean }>({ type: "get-status" })
+    .then((response) => {
       publishStatusEl.textContent = response?.replaced
         ? describeStreamerError("producer-replaced")
         : response?.status === "connected"
@@ -117,10 +115,10 @@ function updatePublishStatus(): void {
 }
 
 connectButton.addEventListener("click", () => {
-  void chrome.runtime.sendMessage({ type: "start-link" }).then(updateAccountSection);
+  void safeSendMessage({ type: "start-link" }).then(updateAccountSection);
 });
 disconnectButton.addEventListener("click", () => {
-  void chrome.runtime.sendMessage({ type: "disconnect-link" }).then(updateAccountSection);
+  void safeSendMessage({ type: "disconnect-link" }).then(updateAccountSection);
 });
 
 publishToggleButton.addEventListener("click", () => {
@@ -131,7 +129,7 @@ publishToggleButton.addEventListener("click", () => {
   cachedPublishingIntent = !cachedPublishingIntent;
   syncPublishToggleUI();
   updatePublishStatus();
-  void chrome.runtime.sendMessage({ type: "set-publishing-intent", intent: cachedPublishingIntent }).catch(() => {
+  void safeSendMessage({ type: "set-publishing-intent", intent: cachedPublishingIntent }).catch(() => {
     // Best-effort, matching content/inventory.ts's setIntent() — a
     // genuinely dropped persist only matters across a reload, and the
     // content script's own heartbeat-tick re-fetch of this same value will
@@ -142,7 +140,7 @@ publishToggleButton.addEventListener("click", () => {
 async function init(): Promise<void> {
   updateAccountSection();
   updatePresenceSection();
-  const intentResponse = (await chrome.runtime.sendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
+  const intentResponse = (await safeSendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
     | { intent?: boolean }
     | undefined;
   cachedPublishingIntent = Boolean(intentResponse?.intent);

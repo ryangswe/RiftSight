@@ -7,6 +7,7 @@ import { normalizeBounds, OverlayStatePublisher, toOverlayCard, type DetectionIn
 import { detectCards } from "./card-detector.js";
 import { observeBoard, type CardObserverHandle } from "./card-observer.js";
 import type { CardDetection } from "./types.js";
+import { safeSendMessage } from "../shared/messaging.js";
 
 let observerHandle: CardObserverHandle | null = null;
 let statePublisher: OverlayStatePublisher | null = null;
@@ -53,7 +54,7 @@ function publishOnce(): void {
   if (!state) return; // deduped — nothing meaningfully changed
 
   publishedCount += 1;
-  chrome.runtime.sendMessage({ type: "overlay-state", payload: state }).catch(() => {
+  safeSendMessage({ type: "overlay-state", payload: state }).catch(() => {
     // The background worker may be waking up from suspension; it'll pick
     // up the next debounced publish. Nothing useful to do with this here.
   });
@@ -107,7 +108,7 @@ export function stopPublishing(): void {
   if (statePublisher) {
     const state = statePublisher.next([], currentViewport());
     if (state) {
-      chrome.runtime.sendMessage({ type: "overlay-state", payload: state }).catch(() => {
+      safeSendMessage({ type: "overlay-state", payload: state }).catch(() => {
         // Best-effort: if the background worker is mid-suspend/wake and
         // misses this, the relay's own TTL sweep is the fallback safety
         // net — see server.ts's sweepStaleSessions.
