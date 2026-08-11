@@ -278,6 +278,12 @@
         <input id="recording-import-input" type="file" accept="application/json" />
       </label>
       <span id="recording-status-text">not recording</span>
+      <span style="margin-left: auto; display: inline-flex; gap: 8px; align-items: center">
+        <!-- Dev-only: exports the current live board state as a single
+             OverlayState JSON, for use as the riftsight.gg demo fixture
+             (site/demo/demo-state.json). Not part of any production UI. -->
+        <button id="demo-fixture-button" type="button" disabled>⬇ Board state (demo fixture)</button>
+      </span>
     </div>
     <div id="stage-wrap">
       <div id="stage">

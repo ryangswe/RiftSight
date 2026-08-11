@@ -70,7 +70,7 @@
       /* Mirrors viewer.html's #tooltip exactly — no background/border on
          the container itself, the popup is just the card's own image. */
       #tooltip {
-        position: fixed;
+        position: absolute;
         pointer-events: none;
         display: none;
         z-index: 1000;
@@ -170,8 +170,7 @@
     </div>
     <img id="mock-bg-image" alt="" />
     <video id="mock-bg-video" muted playsinline loop></video>
-    <div id="overlay-stage"></div>
-    <div id="tooltip"></div>
+    <div id="overlay-stage"><div id="tooltip"></div></div>
     <script src="dist/viewer/main.js"></script>
   </body>
 </html>

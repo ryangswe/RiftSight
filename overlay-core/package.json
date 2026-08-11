@@ -10,5 +10,6 @@
   },
   "dependencies": {
     "@riftsight/protocol": "*"
-  }
+  },
+  "sideEffects": false
 }

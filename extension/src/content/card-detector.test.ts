@@ -1,5 +1,22 @@
+// @vitest-environment happy-dom
+//
+// Only resolveFaceFacing's own tests below actually need a DOM (real
+// parent/child structure via parentElement, document order via
+// compareDocumentPosition, computed backfaceVisibility/transform) — every
+// other test in this file operates on plain values and would pass under
+// the default Node environment too. happy-dom is applied file-wide rather
+// than per-describe-block since vitest's environment pragma is a whole-file
+// directive, and it costs those other tests nothing to run under it.
+
 import { describe, expect, it } from "vitest";
-import { isDetectableInstanceId, isExtremeZIndex, toDropZone, upgradeToOriginalResolution } from "./card-detector.js";
+import {
+  isDetectableInstanceId,
+  mergePreferPublic,
+  resolveFaceFacing,
+  toDropZone,
+  upgradeToOriginalResolution,
+} from "./card-detector.js";
+import type { CardDetection } from "./types.js";
 
 describe("isDetectableInstanceId", () => {
   it("accepts the short-hex id format seen in an earlier capture", () => {
@@ -36,6 +53,10 @@ describe("isDetectableInstanceId", () => {
       )
     ).toBe(true);
   });
+
+  it("accepts the later-observed plain 'chain_<uuid>' shape (underscore, no embedded plr_/card_ segments) — RiftAtlas changed this format after the hyphenated example above was captured, silently going undetected until the pattern was widened", () => {
+    expect(isDetectableInstanceId("chain_516ff5cf-5ff9-4245-b037-86bcda220c85")).toBe(true);
+  });
 });
 
 describe("toDropZone", () => {
@@ -51,6 +72,10 @@ describe("toDropZone", () => {
     expect(
       toDropZone(null, "chain-plr_7a07bb13-card_7db9227a-a606-430b-98b5-ec280c610b34-d526be66-1952-41c9-9a91-2887d66d7f36")
     ).toBe("chain");
+  });
+
+  it("also classifies the later-observed underscore 'chain_<uuid>' shape as 'chain'", () => {
+    expect(toDropZone(null, "chain_516ff5cf-5ff9-4245-b037-86bcda220c85")).toBe("chain");
   });
 
   it("falls back to 'unknown' when neither the attribute nor the instance id gives a signal", () => {
@@ -105,18 +130,144 @@ describe("upgradeToOriginalResolution", () => {
   });
 });
 
-describe("isExtremeZIndex", () => {
-  it("reproduces the live-captured portal-wrapper value shared by Trash/Banished and Deck Peek", () => {
-    expect(isExtremeZIndex("2147483646")).toBe(true);
+describe("mergePreferPublic", () => {
+  function detection(overrides: Partial<CardDetection> = {}): CardDetection {
+    return {
+      instanceId: "card_1",
+      cardId: undefined,
+      name: undefined,
+      imageUrl: undefined,
+      visibility: "unknown",
+      dropZone: "hand",
+      owner: "self",
+      rotationDeg: 0,
+      landscape: false,
+      zIndexHint: undefined,
+      bounds: { x: 0, y: 0, width: 100, height: 100 },
+      localWidth: 100,
+      localHeight: 100,
+      fromDialog: false,
+      element: document.createElement("div"),
+      ...overrides,
+    };
+  }
+
+  it("inserts the detection when nothing is registered for that id yet", () => {
+    const map = new Map<string, CardDetection>();
+    const first = detection({ visibility: "hidden" });
+    mergePreferPublic(map, "card_1", first);
+    expect(map.get("card_1")).toBe(first);
   });
 
-  it("rejects real board z-index values seen live (small integers)", () => {
-    expect(isExtremeZIndex("1")).toBe(false);
-    expect(isExtremeZIndex("2")).toBe(false);
-    expect(isExtremeZIndex("3")).toBe(false);
+  it("replaces a non-public existing entry with a public duplicate — the upgrade case", () => {
+    const map = new Map<string, CardDetection>();
+    mergePreferPublic(map, "card_1", detection({ visibility: "hidden" }));
+    const upgraded = detection({ visibility: "public", cardId: "OGN-089" });
+    mergePreferPublic(map, "card_1", upgraded);
+    expect(map.get("card_1")).toBe(upgraded);
   });
 
-  it("rejects 'auto', the default for every board element without an explicit z-index", () => {
-    expect(isExtremeZIndex("auto")).toBe(false);
+  it("keeps an existing public entry rather than overwriting it with a non-public duplicate — never downgrades", () => {
+    const map = new Map<string, CardDetection>();
+    const original = detection({ visibility: "public", cardId: "OGN-089" });
+    mergePreferPublic(map, "card_1", original);
+    mergePreferPublic(map, "card_1", detection({ visibility: "hidden" }));
+    expect(map.get("card_1")).toBe(original);
+  });
+
+  it("keeps the first public entry when a second public duplicate arrives for the same id", () => {
+    const map = new Map<string, CardDetection>();
+    const first = detection({ visibility: "public", cardId: "OGN-089" });
+    mergePreferPublic(map, "card_1", first);
+    mergePreferPublic(map, "card_1", detection({ visibility: "public", cardId: "OGN-999" }));
+    expect(map.get("card_1")).toBe(first);
+  });
+
+  it("keeps the first non-public entry when a second non-public duplicate arrives for the same id", () => {
+    const map = new Map<string, CardDetection>();
+    const first = detection({ visibility: "hidden" });
+    mergePreferPublic(map, "card_1", first);
+    mergePreferPublic(map, "card_1", detection({ visibility: "unknown" }));
+    expect(map.get("card_1")).toBe(first);
+  });
+});
+
+describe("resolveFaceFacing", () => {
+  // Real captured matrix values from face-transform.ts's own header comment
+  // — "none" (identity, 0deg) and the confirmed rotateY(180deg) matrix3d —
+  // rather than inventing new ones, so a disagreement here would also flag
+  // if the two modules' shared assumptions about these values drift apart.
+  const FRONT_TRANSFORM = "none";
+  const BACK_TRANSFORM = "matrix3d(-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1)";
+
+  // happy-dom's getComputedStyle only reflects inline styles for elements
+  // actually connected to the document (confirmed directly: an identical
+  // detached tree returns "" for every computed property, even a plain
+  // `color: red` sanity check) — appending to document.body is therefore
+  // required, not optional, for any test exercising findBackfaceHiddenAncestor.
+  function faceWithWrapper(parent: HTMLElement): HTMLImageElement {
+    const wrapper = document.createElement("div");
+    wrapper.style.backfaceVisibility = "hidden";
+    const img = document.createElement("img");
+    wrapper.appendChild(img);
+    parent.appendChild(wrapper);
+    return img;
+  }
+
+  it("classifies via the shared flip parent's transform when both faces have a backface-hidden wrapper under one shared parent", () => {
+    const front = document.createElement("div");
+    front.style.transform = FRONT_TRANSFORM;
+    document.body.appendChild(front);
+    const frontFace = faceWithWrapper(front);
+    const backFace = faceWithWrapper(front);
+    expect(resolveFaceFacing(frontFace, backFace)).toBe("front");
+  });
+
+  it("classifies as 'back' when the shared parent's transform is the confirmed rotateY(180deg) matrix", () => {
+    const parent = document.createElement("div");
+    parent.style.transform = BACK_TRANSFORM;
+    document.body.appendChild(parent);
+    const frontFace = faceWithWrapper(parent);
+    const backFace = faceWithWrapper(parent);
+    expect(resolveFaceFacing(frontFace, backFace)).toBe("back");
+  });
+
+  it("falls back to document order when neither face has a backface-hidden wrapper at all — the Deck Peek case", () => {
+    const container = document.createElement("div");
+    const frontFace = document.createElement("img");
+    const backFace = document.createElement("img");
+    container.appendChild(frontFace);
+    container.appendChild(backFace);
+    // backFace is the later sibling, so standard same-z-index stacking says it paints on top.
+    expect(resolveFaceFacing(frontFace, backFace)).toBe("back");
+  });
+
+  it("resolves to whichever face is later in document order, regardless of which argument is 'front'", () => {
+    const container = document.createElement("div");
+    const backFace = document.createElement("img");
+    const frontFace = document.createElement("img");
+    container.appendChild(backFace);
+    container.appendChild(frontFace);
+    // frontFace is now the later sibling.
+    expect(resolveFaceFacing(frontFace, backFace)).toBe("front");
+  });
+
+  it("returns 'unsupported' when only one side has a backface-hidden wrapper — an unexpected, ambiguous structure", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const frontFace = faceWithWrapper(parent);
+    const backFace = document.createElement("img");
+    parent.appendChild(backFace);
+    expect(resolveFaceFacing(frontFace, backFace)).toBe("unsupported");
+  });
+
+  it("returns 'unsupported' when both faces have wrappers but the wrappers don't share a parent", () => {
+    const parentA = document.createElement("div");
+    const parentB = document.createElement("div");
+    document.body.appendChild(parentA);
+    document.body.appendChild(parentB);
+    const frontFace = faceWithWrapper(parentA);
+    const backFace = faceWithWrapper(parentB);
+    expect(resolveFaceFacing(frontFace, backFace)).toBe("unsupported");
   });
 });

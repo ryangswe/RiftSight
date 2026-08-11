@@ -63,6 +63,7 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     landscape: false,
     localWidth: 0.12,
     localHeight: 0.18,
+    fromDialog: false,
   },
   {
     instanceId: "preview-card-2",
@@ -77,6 +78,7 @@ const MOCK_PREVIEW_CARDS: OverlayCard[] = [
     // Demonstrates the rotated-hitbox fix in this same preview.
     localWidth: 0.07,
     localHeight: 0.1,
+    fromDialog: false,
   },
 ];
 

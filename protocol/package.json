@@ -10,5 +10,6 @@
   },
   "dependencies": {
     "zod": "^3.23.8"
-  }
+  },
+  "sideEffects": false
 }

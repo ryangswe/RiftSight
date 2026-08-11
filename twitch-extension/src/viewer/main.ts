@@ -4,30 +4,24 @@
 // window.__RIFTSIGHT_MOCK__ before this script loads) — per the milestone
 // spec's requirement that mock mode run "the same UI code used inside
 // Twitch". Only the OverlayStateSource implementation and the dev-only
-// chrome differ between the two; the rendering logic below never touches
-// window.Twitch directly — only the onAuthorized wiring at the bottom of
-// this file does.
+// chrome differ between the two.
+//
+// The hover-resolution + popup-rendering loop itself now lives in
+// overlay-core's CardHoverOverlay (shared verbatim with the riftsight.gg
+// website demo, so the two can't drift). This file's job is the
+// Twitch/relay-specific part: authenticating, receiving OverlayState over
+// the relay, buffering it for delayed-live, and feeding cards/config into
+// the controller. The controller never touches window.Twitch, the relay,
+// or the buffer.
 import {
+  CardHoverOverlay,
   FULL_FRAME_SOURCE_REGION,
-  cardPopupContentFor,
-  computeCardQuad,
-  computeHitboxStyle,
-  computeTooltipMaxSize,
-  computeTooltipPosition,
   delayedLiveTarget,
-  hitboxClassName,
   isWaitingForHistory,
-  mapBoundsToSourceRegion,
-  mapSizeToSourceRegion,
-  resolveHoveredCard,
-  tooltipContentFor,
-  type CardQuad,
-  type HoverCandidate,
-  type Rect,
   type SourceRegion,
 } from "@riftsight/overlay-core";
-import { TimeWindowBuffer, type OverlayCard, type OverlayState } from "@riftsight/protocol";
-import { DEFAULT_OVERLAY_CONFIG, MAX_DELAY_MS, parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
+import { TimeWindowBuffer, type OverlayState } from "@riftsight/protocol";
+import { MAX_DELAY_MS, parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
 import { MockOverlayStateSource, type MockConnectionStatus } from "../platform/mock-state-source.js";
 import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";
@@ -43,6 +37,14 @@ function requireElement<T extends Element>(id: string): T {
 
 const stage = requireElement<HTMLElement>("overlay-stage");
 const tooltip = requireElement<HTMLElement>("tooltip");
+
+// The shared hover/preview controller — the exact loop the website demo
+// also drives. main.ts only feeds it cards (applyState) and broadcaster
+// config (applyConfig) and lets it own all geometry/popup rendering. Mouse
+// hover is wired here (document-level, so nothing intercepts the Twitch
+// video's own pointer events — #overlay-stage stays pointer-events: none).
+const overlay = new CardHoverOverlay({ stage, tooltip });
+overlay.attachMouseHover();
 
 // Every incoming state is buffered regardless of delay (a delay of 0ms is
 // just "no meaningful lag" through the same pipeline, not a separate
@@ -67,12 +69,9 @@ const bufferStartedAt = Date.now();
 const DELAYED_LIVE_TICK_MS = 200;
 
 let delayMs = 0;
-let debugOutlines = false; // hidden by default in production; the mock harness has its own checkbox
-let overlayEnabled = true; // broadcaster kill-switch, applied via broadcaster config in real Twitch mode
+let debugOutlines = false; // retained here only for checkAspectRatioMismatch's debug-gated logging (the controller owns its own copy)
 let sourceAspectRatioOverride: number | undefined; // broadcaster-set override for checkAspectRatioMismatch, when set
-let sourceRegion: SourceRegion = FULL_FRAME_SOURCE_REGION; // where RiftAtlas sits within the stream canvas, broadcaster-calibrated
-let tooltipScale = DEFAULT_OVERLAY_CONFIG.tooltipScale; // broadcaster-set tooltip size multiplier — see overlay-core's computeTooltipMaxSize
-let latestCards: OverlayCard[] = [];
+let sourceRegion: SourceRegion = FULL_FRAME_SOURCE_REGION; // retained here only for checkAspectRatioMismatch's rendered-ratio math
 let displayedState: OverlayState | undefined;
 let tickTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -96,252 +95,6 @@ function setDiagnosticStage(stage: string): void {
   diagnosticsPanel.style.display = "block";
   diagnosticsPanel.textContent = stage;
 }
-
-// Takes a plain Rect (the resolved card's true quad, reduced to its AABB)
-// rather than a live DOM element — the stage-level resolver below no
-// longer has (or needs) a specific hitbox element to anchor to; the
-// card's own computed geometry is the only source of truth now.
-function positionTooltipNear(targetRect: Rect): void {
-  const position = computeTooltipPosition(
-    targetRect,
-    { width: tooltip.offsetWidth, height: tooltip.offsetHeight },
-    { width: window.innerWidth, height: window.innerHeight }
-  );
-  tooltip.style.left = `${position.left}px`;
-  tooltip.style.top = `${position.top}px`;
-}
-
-/** Reduces a card's true rotated quad to the axis-aligned rect computeTooltipPosition expects (it only needs a placement anchor, not the exact rotated silhouette). */
-function quadToRect(quad: CardQuad): Rect {
-  const xs = quad.points.map((p) => p.x);
-  const ys = quad.points.map((p) => p.y);
-  const left = Math.min(...xs);
-  const top = Math.min(...ys);
-  return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
-}
-
-function createFallbackLabel(label: string): HTMLElement {
-  const text = document.createElement("div");
-  text.className = "tooltip-fallback";
-  text.textContent = label;
-  return text;
-}
-
-// Normal viewers see the card's art and nothing else — see cardPopupContentFor.
-// The fuller zone/owner/instanceId text (tooltipContentFor) only ever
-// appears here when debugOutlines is on, for calibration/QA purposes.
-let currentlyShownInstanceId: string | undefined;
-
-function showTooltipFor(card: OverlayCard, targetRect: Rect): void {
-  // Hidden/unknown cards get no popup at all — there's nothing safe to show
-  // (cardPopupContentFor already withholds the image, but a "Hidden card"
-  // label on hover is itself an unwanted signal the viewer doesn't need).
-  // Still hides any popup already showing for a previously-hovered card.
-  if (card.visibility !== "public") {
-    hideTooltip();
-    return;
-  }
-
-  currentlyShownInstanceId = card.instanceId;
-  const content = cardPopupContentFor(card);
-  tooltip.replaceChildren();
-  // Battlefield-type cards (e.g. Star Spring) are landscape-format art, so
-  // the same box that fits a portrait unit/spell card comfortably leaves
-  // them looking noticeably smaller — give them more room via a dedicated
-  // CSS class. Driven by the card's own landscape flag, not which zone it's
-  // in: a portrait unit card (e.g. Ruined Rex) sitting on a battlefield
-  // zone must keep the normal size, only the battlefield card itself grows.
-  tooltip.classList.toggle("tooltip-battlefield", card.landscape);
-
-  if (content.imageUrl) {
-    const img = document.createElement("img");
-    img.src = content.imageUrl;
-    img.alt = content.altText;
-    // No `loading="lazy"` here: the <img> is only ever created on-demand
-    // at hover time in the first place (never preloaded for every card),
-    // which already gives "don't fetch until needed" for free. Adding
-    // native lazy-loading on top gates the fetch behind an
-    // IntersectionObserver-style heuristic that doesn't reliably fire for
-    // a `position: fixed` popup that appears and disappears quickly —
-    // confirmed to stall indefinitely (network request never even sent)
-    // in manual testing. No cache-busting query param is added anywhere,
-    // so normal browser HTTP caching still applies across hovers.
-    img.decoding = "async";
-    img.className = "tooltip-art";
-    // Base sizes (320x448 portrait, 400x500 landscape) live in one place —
-    // overlay-core's computeTooltipMaxSize — and are always applied here
-    // as inline styles, which is why viewer.html/index.html no longer
-    // carry their own width/height rules for .tooltip-art: an inline style
-    // would silently win over those anyway, so keeping both would just be
-    // a second, driftable copy of the same numbers.
-    //
-    // Explicit width/height (not max-width/max-height) is deliberate: a
-    // bare max-* only caps growth, it never enlarges an <img> past its own
-    // source file's native resolution. RiftAtlas serves visibly
-    // lower-resolution art for some zones than others (e.g. hand/trash
-    // thumbnails vs. the base zone), so a max-only box left those cards'
-    // tooltips rendering smaller than everything else even though every
-    // card is asking for the exact same intended box here. Forcing
-    // width/height plus the CSS class's object-fit: contain gets every
-    // card the same box size regardless of its source resolution, without
-    // distorting whatever aspect ratio the real image actually has.
-    const maxSize = computeTooltipMaxSize(card.landscape, tooltipScale);
-    img.style.width = `${maxSize.maxWidthPx}px`;
-    img.style.height = `${maxSize.maxHeightPx}px`;
-    img.onerror = () => {
-      // The popup may have already moved on to a different card by the
-      // time a slow/broken image errors out — only replace content if
-      // this image is still the one actually being shown. Swap just the
-      // img node itself (not the whole tooltip) so a debug line appended
-      // alongside it isn't lost.
-      if (!img.isConnected) return;
-      img.replaceWith(createFallbackLabel(content.fallbackLabel));
-    };
-    img.onload = () => {
-      // The position computed below (before the image has loaded) assumes
-      // a 0×0 box, since an <img> with no explicit width/height has no
-      // intrinsic size until it loads. Once it loads and grows to its real
-      // (much larger) size, re-run positioning so it's actually centered
-      // near the card and re-clamped within the viewport instead of
-      // silently growing past an edge.
-      if (!img.isConnected) return;
-      positionTooltipNear(targetRect);
-    };
-    tooltip.appendChild(img);
-  } else {
-    tooltip.appendChild(createFallbackLabel(content.fallbackLabel));
-  }
-
-  if (debugOutlines) {
-    const debugLine = document.createElement("div");
-    debugLine.className = "tooltip-debug";
-    debugLine.textContent = tooltipContentFor(card).lines.join(" · ");
-    tooltip.appendChild(debugLine);
-  }
-
-  tooltip.style.display = "block";
-  positionTooltipNear(targetRect);
-}
-
-function hideTooltip(): void {
-  tooltip.style.display = "none";
-  currentlyShownInstanceId = undefined;
-}
-
-// #overlay-stage and every .hitbox are pointer-events: none — the resolver
-// below (handlePointerMove) is now the sole source of hover state, driven
-// by point-in-quad geometry against each card's true rotated shape rather
-// than DOM hit-testing against these boxes. The previous approach (CSS
-// clip-path computed from a global, pre-rotation overlap analysis but
-// applied to each element's local, pre-transform box) could never
-// correctly represent a rotated card's real exposed region — confirmed
-// live: it left genuine dead zones on a dense hand, and on a rotated,
-// stacked base-zone row it clipped every hitbox down to a thin sliver
-// near one edge, since the clip and the rotation were computed in two
-// coordinate spaces that don't map edge-for-edge. Hitboxes are still
-// created and positioned below purely for the debug-outline
-// visualization; they carry no event listeners at all now.
-function renderHitboxes(): void {
-  stage.replaceChildren();
-  if (!overlayEnabled) return; // broadcaster kill-switch — no hitboxes, no tooltip, nothing rendered
-
-  for (const card of latestCards) {
-    const mappedBounds = mapBoundsToSourceRegion(card.bounds, sourceRegion);
-    const mappedSize = mapSizeToSourceRegion({ width: card.localWidth, height: card.localHeight }, sourceRegion);
-    const mappedCard = { ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height };
-
-    const box = document.createElement("div");
-    box.className = `${hitboxClassName(card)} ${debugOutlines ? "debug-outline" : ""}`.trim();
-
-    const style = computeHitboxStyle(mappedCard);
-    box.style.left = style.left;
-    box.style.top = style.top;
-    box.style.width = style.width;
-    box.style.height = style.height;
-    box.style.zIndex = style.zIndex;
-    box.style.transform = style.transform ?? "";
-    box.style.transformOrigin = style.transformOrigin ?? "";
-
-    stage.appendChild(box);
-  }
-}
-
-/** Region-mapped hover candidates (card + true rotated quad + effective stack rank) for the current frame's cards. */
-function computeHoverCandidates(stageSize: { width: number; height: number }): HoverCandidate[] {
-  return latestCards.map((card) => {
-    const mappedBounds = mapBoundsToSourceRegion(card.bounds, sourceRegion);
-    const mappedSize = mapSizeToSourceRegion({ width: card.localWidth, height: card.localHeight }, sourceRegion);
-    const mappedCard = { ...card, bounds: mappedBounds, localWidth: mappedSize.width, localHeight: mappedSize.height };
-    return { card, quad: computeCardQuad(mappedCard, stageSize), zIndex: card.zIndex ?? 0 };
-  });
-}
-
-// Rebuilding every card's quad (rotation trig included) is only ever
-// actually necessary when latestCards/sourceRegion change (applyState /
-// applyConfig) or the stage itself resizes — never merely because the
-// mouse moved. handlePointerMove used to call computeHoverCandidates
-// directly on every mousemove pixel, redoing that work dozens of times a
-// second for no reason. candidatesDirty is set wherever latestCards or
-// sourceRegion actually change; the stage-size comparison below catches
-// the remaining case (window resize, Twitch layout-mode change) without
-// needing to hook every possible resize trigger individually.
-let candidatesDirty = true;
-let cachedCandidates: HoverCandidate[] = [];
-let cachedStageWidth = 0;
-let cachedStageHeight = 0;
-
-function getHoverCandidates(stageSize: { width: number; height: number }): HoverCandidate[] {
-  if (candidatesDirty || stageSize.width !== cachedStageWidth || stageSize.height !== cachedStageHeight) {
-    cachedCandidates = computeHoverCandidates(stageSize);
-    cachedStageWidth = stageSize.width;
-    cachedStageHeight = stageSize.height;
-    candidatesDirty = false;
-  }
-  return cachedCandidates;
-}
-
-// The single source of hover state. Converts the pointer into
-// stage-relative pixel coordinates, tests it against every card's true
-// rotated quad, and shows/hides the tooltip for whichever card — if any
-// — is both under the pointer and highest-stacked there (resolveHoveredCard).
-// Attached to `document`, not `#overlay-stage` (which stays
-// pointer-events: none) — document always receives mousemove regardless
-// of any descendant's pointer-events, so nothing here can ever intercept
-// a click/hover meant for the underlying Twitch video player.
-function handlePointerMove(clientX: number, clientY: number): void {
-  const stageRect = stage.getBoundingClientRect();
-  const withinStage =
-    clientX >= stageRect.left && clientX <= stageRect.right && clientY >= stageRect.top && clientY <= stageRect.bottom;
-
-  if (!overlayEnabled || !withinStage || stageRect.width === 0 || stageRect.height === 0) {
-    hideTooltip();
-    document.body.style.cursor = "";
-    return;
-  }
-
-  const pixelPoint = { x: clientX - stageRect.left, y: clientY - stageRect.top };
-  const candidates = getHoverCandidates({ width: stageRect.width, height: stageRect.height });
-  const resolved = resolveHoveredCard(pixelPoint, candidates);
-
-  // Skip re-showing when the same card is still resolved — this runs on
-  // every mousemove pixel, so without this guard a still or
-  // slowly-moving cursor would recreate the popup's <img> continuously.
-  if (resolved?.instanceId !== currentlyShownInstanceId) {
-    if (resolved) {
-      const resolvedCandidate = candidates.find((c) => c.card.instanceId === resolved.instanceId)!;
-      showTooltipFor(resolved, quadToRect(resolvedCandidate.quad));
-    } else {
-      hideTooltip();
-    }
-  }
-  document.body.style.cursor = resolved ? "pointer" : "";
-}
-
-document.addEventListener("mousemove", (event) => handlePointerMove(event.clientX, event.clientY));
-document.addEventListener("mouseleave", () => {
-  hideTooltip();
-  document.body.style.cursor = "";
-});
 
 // This milestone still uses direct rectangular mapping only (no
 // automatic contain/cover/crop-edge/letterbox/perspective correction) —
@@ -383,10 +136,8 @@ function checkAspectRatioMismatch(): void {
 function applyState(state: OverlayState | undefined): void {
   if (state === displayedState) return; // no meaningful change — skip render
   displayedState = state;
-  latestCards = state ? state.cards : [];
-  candidatesDirty = true; // latestCards just changed — see getHoverCandidates
+  overlay.setCards(state ? state.cards : [], state?.blockingRegion);
   if (state) lastSourceViewport = state.sourceViewport;
-  renderHitboxes();
   checkAspectRatioMismatch();
   setDiagnosticStage(
     state
@@ -413,21 +164,22 @@ function startDelayedLiveTicking(): void {
 // controls instead). Takes effect immediately, no iframe reload needed —
 // called both on first read and from configuration.onChanged.
 function applyConfig(config: OverlayConfig): void {
-  overlayEnabled = config.overlayEnabled;
   delayMs = config.delayMs;
   debugOutlines = config.debugOutlines;
   sourceAspectRatioOverride = config.sourceAspectRatio;
   sourceRegion = config.sourceRegion;
-  candidatesDirty = true; // sourceRegion just changed — see getHoverCandidates
-  tooltipScale = config.tooltipScale;
-  if (!overlayEnabled) hideTooltip();
+  overlay.setConfig({
+    overlayEnabled: config.overlayEnabled,
+    debugOutlines: config.debugOutlines,
+    sourceRegion: config.sourceRegion,
+    tooltipScale: config.tooltipScale,
+  });
   delayedLiveTick(); // re-selects state under the new delay; applyState only re-renders if the *selected state* changed
-  renderHitboxes(); // config fields like overlayEnabled/debugOutlines change what's rendered even when the state itself didn't — must re-render unconditionally, not just rely on delayedLiveTick's state-dedup path
   checkAspectRatioMismatch();
   setDiagnosticStage(lastDiagnosticStage); // re-evaluates visibility now that debugOutlines may have just changed
 }
 
-// Hitboxes are positioned with CSS percentages against #overlay-stage
+// Hitboxes/popup are positioned in #overlay-stage's local pixel space
 // (position: absolute; inset: 0), so they re-map correctly on their own
 // whenever the iframe itself resizes — normal/theater/fullscreen player
 // layouts all fall out of that for free, no per-layout-mode branching
@@ -497,7 +249,7 @@ if (isMock) {
 
   toggleOutlines.addEventListener("change", () => {
     debugOutlines = toggleOutlines.checked;
-    renderHitboxes();
+    overlay.setConfig({ debugOutlines });
   });
 
   function currentDelayFromInput(): number {

@@ -101,7 +101,7 @@ export class OverlayRecorder {
   record(state: OverlayState, now: number = Date.now()): void {
     if (!this.recording) return;
 
-    const fingerprint = fingerprintCards(state.cards, state.sourceViewport);
+    const fingerprint = fingerprintCards(state.cards, state.sourceViewport, state.blockingRegion);
     if (fingerprint === this.lastFingerprint) return;
     this.lastFingerprint = fingerprint;
 

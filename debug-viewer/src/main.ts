@@ -506,6 +506,21 @@ Array.from(document.querySelectorAll<HTMLButtonElement>("[data-sync-step]")).for
   button.addEventListener("click", () => setSyncOffset(syncOffsetMs + Number(button.dataset["syncStep"] ?? "0")));
 });
 
+// Dev-only: download the current live board state as a single OverlayState
+// JSON, ready to drop into the riftsight.gg demo as site/demo/demo-state.json.
+// Reuses the exact payload the extension published — no manual JSON authoring.
+const demoFixtureButton = requireElement<HTMLButtonElement>("demo-fixture-button");
+demoFixtureButton.addEventListener("click", () => {
+  if (!lastLiveState) return;
+  const blob = new Blob([JSON.stringify(lastLiveState, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "demo-state.json";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
 connectViewer({
   sessionId,
   onStatusChange: setStatus,
@@ -513,6 +528,7 @@ connectViewer({
     stateBuffer.push(state.capturedAt, state);
     recordingControls.recordIfActive(state);
     lastLiveState = state;
+    demoFixtureButton.disabled = false;
     if (mode === "live") applyState(state, Date.now());
     else refreshDiagnostics(Date.now()); // keep buffer/age readouts current even off the live path
   },

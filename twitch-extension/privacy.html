@@ -45,8 +45,9 @@
       <p class="updated">Last updated: August 2026</p>
 
       <p>
-        RiftSight is an unofficial, fan-made Twitch Extension that shows card details for Riftbound games streamed
-        through RiftAtlas. RiftSight is not affiliated with Riot Games, UVS Games, RiftAtlas, or Twitch.
+        RiftSight has two parts: a browser extension a streamer installs, and a Twitch Extension that renders the
+        overlay for viewers. RiftSight is an unofficial, fan-made project and is not affiliated with Riot Games, UVS
+        Games, RiftAtlas, or Twitch.
       </p>
 
       <h2>If you're a viewer</h2>
@@ -58,7 +59,33 @@
         viewer-facing overlay.
       </p>
 
-      <h2>If you're a streamer</h2>
+      <h2>If you're a streamer: the browser extension</h2>
+      <p>
+        The RiftSight browser extension is what you install to publish card data from your own
+        <a href="https://play.riftatlas.com">RiftAtlas</a> games. Its content script only runs on
+        <code>play.riftatlas.com</code> &mdash; it doesn't run on, or have access to, any other site you visit.
+        While active, it reads card information already rendered on your screen (card art, names, positions, which
+        zone each card is in) and sends it over an encrypted connection (<code>wss://</code>) to RiftSight's backend,
+        which forwards it to your stream's overlay. It never reads or sends anything RiftAtlas itself is keeping
+        hidden from you (an opponent's hand, a face-down card) &mdash; the same visibility rules that apply to what
+        you can see in the game apply to what the extension will ever publish, and nothing is retained after your
+        stream ends. Card art images are a separate exception: your browser fetches those directly from RiftAtlas's
+        own image CDN, the same way loading any web page fetches its images &mdash; that traffic never passes
+        through RiftSight's servers.
+      </p>
+      <p>The extension requests three permissions, each scoped to exactly what it needs:</p>
+      <ul>
+        <li><code>storage</code> &mdash; remembers whether you'd like publishing on or off, locally in your browser.</li>
+        <li><code>alarms</code> &mdash; schedules periodic reconnect/heartbeat checks to RiftSight's backend without keeping the extension constantly active in the background.</li>
+        <li><code>host permissions</code> (RiftSight's own backend domain only) &mdash; the extension's sole network destination; it never requests access to sites it doesn't need.</li>
+      </ul>
+      <p>
+        No analytics, no third-party trackers, no advertising SDKs, no browsing history, no data from any site other
+        than <code>play.riftatlas.com</code>, and no remotely loaded or dynamically evaluated code &mdash;
+        everything the extension does is contained in the code you install.
+      </p>
+
+      <h2>Connecting your Twitch account (OAuth)</h2>
       <p>To use RiftSight as a streamer, you connect your Twitch account through Twitch's own OAuth authorization flow. We store:</p>
       <ul>
         <li>Your Twitch user ID and Twitch login name, so we know which channel to publish card data to.</li>
@@ -68,14 +95,6 @@
       <p>
         We never store your Twitch password &mdash; that's handled entirely by Twitch's own OAuth consent screen and
         never passes through RiftSight. We do not sell or share this data with any third party.
-      </p>
-
-      <h2>What RiftSight publishes to your stream</h2>
-      <p>
-        While you're actively using RiftSight, it reads publicly visible card information from your own RiftAtlas
-        browser tab (card art, names, and stats already visible on your screen) and relays it in real time so
-        viewers can see it in the overlay. This never includes hidden information (opponents' hands, hidden zones)
-        and is not retained after your stream ends.
       </p>
 
       <h2>Operational logs</h2>

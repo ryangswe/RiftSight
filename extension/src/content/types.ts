@@ -80,6 +80,8 @@ export interface CardDetection {
    */
   localWidth: number;
   localHeight: number;
+  /** True only for cards detected inside an active blocking dialog (Trash/Banished/Deck Peek/"Opponent revealed deck cards") — see card-detector.ts's detectDialogCards. False for every other detection path (normal board pass, mulligan). The signal a viewer uses to tell a dialog's own card apart from a background board card at the same screen position. */
+  fromDialog: boolean;
   /** The anchor element this was built from. Not serializable — strip before logging/copying as JSON. */
   element: HTMLElement;
 }

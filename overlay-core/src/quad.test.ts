@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { OverlayCard } from "@riftsight/protocol";
 import { compareStackOrder } from "./stack-order.js";
-import { computeCardQuad, pointInConvexQuad, resolveHoveredCard, type CardQuad, type HoverCandidate } from "./quad.js";
+import {
+  computeCardQuad,
+  computeRectQuad,
+  pointInConvexQuad,
+  resolveHoveredCard,
+  type CardQuad,
+  type HoverCandidate,
+} from "./quad.js";
 
 function card(overrides: Partial<OverlayCard> = {}): OverlayCard {
   const bounds = overrides.bounds ?? { x: 0.25, y: 0.25, width: 0.2, height: 0.3 };
@@ -15,6 +22,7 @@ function card(overrides: Partial<OverlayCard> = {}): OverlayCard {
     landscape: false,
     localWidth: bounds.width,
     localHeight: bounds.height,
+    fromDialog: false,
     ...overrides,
   };
 }
@@ -61,6 +69,17 @@ describe("computeCardQuad", () => {
     // Center of bounds: (0.37, 0.52) → pixel (296, 416); local half-size (0.05, 0.1) → pixel (40, 80).
     expect(quad.points[0]).toEqual({ x: 256, y: 336 });
     expect(quad.points[2]).toEqual({ x: 336, y: 496 });
+  });
+});
+
+describe("computeRectQuad", () => {
+  it("builds an unrotated 4-corner rect scaled per-axis by stage size", () => {
+    const stageSize = { width: 1000, height: 500 };
+    const quad = computeRectQuad({ x: 0.3, y: 0.4, width: 0.2, height: 0.3 }, stageSize);
+    expect(quad.points[0]).toEqual({ x: 300, y: 200 }); // top-left
+    expect(quad.points[1]).toEqual({ x: 500, y: 200 }); // top-right
+    expect(quad.points[2]).toEqual({ x: 500, y: 350 }); // bottom-right
+    expect(quad.points[3]).toEqual({ x: 300, y: 350 }); // bottom-left
   });
 });
 
@@ -158,5 +177,57 @@ describe("resolveHoveredCard", () => {
     const higher = candidateFor({ instanceId: "higher", bounds: { x: 0.3, y: 0.3, width: 0.3, height: 0.3 } }, 1);
     // Top-left sliver of `lower`, not covered by `higher` (which starts further right/down).
     expect(resolveHoveredCard({ x: 220, y: 220 }, [lower, higher])?.instanceId).toBe("lower");
+  });
+
+  describe("blockingRegion", () => {
+    const blockingRegion: CardQuad = computeRectQuad({ x: 0.3, y: 0.3, width: 0.2, height: 0.2 }, stageSize);
+
+    it("suppresses a background card whose winning point falls inside blockingRegion", () => {
+      const background = candidateFor({
+        instanceId: "background",
+        fromDialog: false,
+        bounds: { x: 0.25, y: 0.25, width: 0.3, height: 0.3 },
+      });
+      expect(resolveHoveredCard({ x: 350, y: 350 }, [background], blockingRegion)).toBeNull();
+    });
+
+    it("does not suppress a dialog card (fromDialog: true) at the same position", () => {
+      const dialogCard = candidateFor({
+        instanceId: "dialog-card",
+        fromDialog: true,
+        bounds: { x: 0.25, y: 0.25, width: 0.3, height: 0.3 },
+      });
+      expect(resolveHoveredCard({ x: 350, y: 350 }, [dialogCard], blockingRegion)?.instanceId).toBe("dialog-card");
+    });
+
+    it("a dialog card wins over an overlapping background card even when the background card has a much higher zIndex — the real live bug: detectDialogCards publishes a flat, low zIndex for every dialog card, so a naive single-pool zIndex comparison let an arbitrary background card behind it win the point", () => {
+      const background = candidateFor(
+        { instanceId: "background", fromDialog: false, bounds: { x: 0.25, y: 0.25, width: 0.3, height: 0.3 } },
+        40
+      );
+      const dialogCard = candidateFor(
+        { instanceId: "dialog-card", fromDialog: true, bounds: { x: 0.25, y: 0.25, width: 0.3, height: 0.3 } },
+        1
+      );
+      expect(resolveHoveredCard({ x: 350, y: 350 }, [background, dialogCard], blockingRegion)?.instanceId).toBe("dialog-card");
+    });
+
+    it("does not suppress a background card outside blockingRegion", () => {
+      const background = candidateFor({
+        instanceId: "background",
+        fromDialog: false,
+        bounds: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 },
+      });
+      expect(resolveHoveredCard({ x: 700, y: 700 }, [background], blockingRegion)?.instanceId).toBe("background");
+    });
+
+    it("behaves exactly as today when no blockingRegion is passed", () => {
+      const background = candidateFor({
+        instanceId: "background",
+        fromDialog: false,
+        bounds: { x: 0.25, y: 0.25, width: 0.3, height: 0.3 },
+      });
+      expect(resolveHoveredCard({ x: 350, y: 350 }, [background])?.instanceId).toBe("background");
+    });
   });
 });

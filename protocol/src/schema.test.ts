@@ -18,6 +18,7 @@ const validState = {
       landscape: false,
       localWidth: 0.1,
       localHeight: 0.1,
+      fromDialog: false,
     },
   ],
 };
@@ -114,6 +115,35 @@ describe("OverlayStateSchema", () => {
 
   it("rejects a negative localWidth/localHeight", () => {
     const malformed = { ...validState, cards: [{ ...validState.cards[0], localWidth: -0.1 }] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects a card missing fromDialog", () => {
+    const { fromDialog: _fromDialog, ...cardWithoutFromDialog } = validState.cards[0]!;
+    const malformed = { ...validState, cards: [cardWithoutFromDialog] };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("accepts a state with no blockingRegion (the common, no-dialog-open case)", () => {
+    expect(OverlayStateSchema.safeParse(validState).success).toBe(true);
+    expect((validState as { blockingRegion?: unknown }).blockingRegion).toBeUndefined();
+  });
+
+  it("accepts a state with a well-formed blockingRegion", () => {
+    const withRegion = { ...validState, blockingRegion: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 } };
+    expect(OverlayStateSchema.safeParse(withRegion).success).toBe(true);
+  });
+
+  it("rejects a state with a malformed blockingRegion", () => {
+    const malformed = { ...validState, blockingRegion: { x: 0.3, y: 0.3, width: -0.2, height: 0.2 } };
+    expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("rejects a hidden card with fromDialog: true that still carries identity fields — the privacy boundary applies regardless of fromDialog", () => {
+    const malformed = {
+      ...validState,
+      cards: [{ ...validState.cards[0], fromDialog: true, visibility: "hidden", cardId: "OGN-213", name: "Should Not Appear" }],
+    };
     expect(OverlayStateSchema.safeParse(malformed).success).toBe(false);
   });
 });

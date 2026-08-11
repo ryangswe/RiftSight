@@ -60,40 +60,23 @@ const CARD_INSTANCE_ID_PATTERN = /^card_[0-9a-f-]+$/i;
 const BATTLEFIELD_SLOT_ID_PATTERN = /^battlefield-marker:battlefield[AB]$/;
 // The card currently resolving on the chain (a spell/ability in response to
 // which players may react) gets a composite id shaped like
-// "chain-plr_<hex>-card_<uuid>-<uuid>" — live-captured, real example:
-// "chain-plr_7a07bb13-card_7db9227a-a606-430b-98b5-ec280c610b34-d526be66-1952-41c9-9a91-2887d66d7f36".
-// The real card_<uuid> is recoverable from the *image* src via
-// CARD_IMAGE_URL_PATTERN regardless, so this only needs to recognize the
-// shape, not fully parse it — deliberately just a prefix check (not
-// anchored at the end) for the same reason CARD_INSTANCE_ID_PATTERN is
-// permissive on shape: this isn't a security boundary, only "does this look
-// like a chain-zone instance id."
-const CHAIN_INSTANCE_ID_PATTERN = /^chain-/i;
+// "chain-plr_<hex>-card_<uuid>-<uuid>" — an earlier capture's format, real
+// example: "chain-plr_7a07bb13-card_7db9227a-a606-430b-98b5-ec280c610b34-d526be66-1952-41c9-9a91-2887d66d7f36".
+// A later live capture showed RiftAtlas has since changed this shape to a
+// plain "chain_<uuid>" (underscore, no embedded "plr_"/"card_" segments,
+// real example: "chain_516ff5cf-5ff9-4245-b037-86bcda220c85") — the
+// hyphen-only pattern silently rejected every one of these, the same class
+// of silent under-detection as the short-hex-vs-UUID incident documented
+// on CARD_INSTANCE_ID_PATTERN above. Accepting both separators rather than
+// picking one is deliberate: nothing here rules out RiftAtlas using either
+// shape depending on version/branch. The real card_<uuid> is recoverable
+// from the *image* src via CARD_IMAGE_URL_PATTERN regardless, so this only
+// needs to recognize the shape, not fully parse it — deliberately just a
+// prefix check (not anchored at the end) for the same reason
+// CARD_INSTANCE_ID_PATTERN is permissive on shape: this isn't a security
+// boundary, only "does this look like a chain-zone instance id."
+const CHAIN_INSTANCE_ID_PATTERN = /^chain[-_]/i;
 const CARDBACK_IMAGE_PATTERN = /cardback-(white|blue)\.png/;
-
-// RiftAtlas portals every blocking overlay (Trash/Banished viewer, Deck
-// Peek, ...) through a shared wrapper carrying an extreme z-index —
-// live-captured, real value "2147483646" (INT32_MAX - 1, a common "always
-// on top of literally everything" library convention) confirmed identical
-// on two independent components (Trash/Banished's own dialog and Deck
-// Peek's), immediately wrapping a `role="dialog"` element. Board z-indices
-// observed so far are tiny integers (1, 2, 3, "auto"), so a generous
-// threshold cleanly separates "portal-layer content" from "board content"
-// without depending on the exact literal (which could drift slightly in a
-// future RiftAtlas build) or a specific class name (Tailwind arbitrary-value
-// class names aren't a stable public contract).
-const PORTAL_Z_INDEX_THRESHOLD = 100_000;
-// How many ancestors outward from a `role="dialog"` element to check for the
-// portal z-index before giving up — live-confirmed at depth 1 (the dialog's
-// immediate parent) in both captured cases, generous beyond that for the
-// same reason MAX_ANCESTOR_SEARCH_DEPTH below is.
-const PORTAL_ANCESTOR_SEARCH_DEPTH = 4;
-
-/** Exported for unit testing — this threshold decision is what separates "suppress this as board content under a modal" from "leave it alone." */
-export function isExtremeZIndex(zIndex: string): boolean {
-  const parsed = Number.parseInt(zIndex, 10);
-  return !Number.isNaN(parsed) && parsed > PORTAL_Z_INDEX_THRESHOLD;
-}
 
 /** RiftAtlas attaches this to every real card instance — see the module header. Exported so card-observer.ts can watch the exact same set of elements without duplicating the literal. */
 export const CARD_ANCHOR_SELECTOR = "[data-card-id]";
@@ -268,30 +251,40 @@ function resolveAncestorTraits(anchor: Element): AncestorTraits {
 }
 
 /**
- * Finds the currently active blocking overlay, if any — live-confirmed
- * (against the real site, not just DOM inspection) that RiftAtlas's own
- * hover breaks for every board card while one of these is open, not just
- * ones it visually covers, so detectCards() suppresses all normal board
- * detections wholesale while one is active rather than computing which
- * cards are still visually peeking out from behind it.
+ * Finds the currently active blocking overlay, if any. Live-confirmed
+ * (via document.elementFromPoint() and direct getComputedStyle inspection
+ * against the real site, not just static DOM reading) that RiftAtlas never
+ * actually blocks board interaction outside the dialog's own rectangle:
+ * every such overlay uses a full-screen `pointer-events: none` wrapper
+ * purely for paint order, with only the dialog's own much smaller
+ * `pointer-events: auto` content box capturing pointer events. detectCards()
+ * therefore keeps detecting board cards normally, dialog open or not, and
+ * returns this element's own bounding rect (see detectCards' blockingRegion)
+ * so hover resolution downstream can suppress only the region actually
+ * painted over.
  *
- * Live-confirmed against two independent, real components sharing the exact
- * same structure — the Trash/Banished viewer and Deck Peek — a
- * `role="dialog"` element wrapped by an ancestor carrying the portal
- * z-index signal (see isExtremeZIndex). If more than one such dialog is
- * somehow open at once — never observed live, so this is a guess rather
- * than a confirmed behavior — the last one in DOM order is treated as
- * active, on the assumption a later-opened overlay is the newest/topmost.
+ * `role="dialog"` alone is the signal — no z-index/portal check on top of
+ * it. An earlier version also required an ancestor carrying an extreme
+ * z-index (RiftAtlas's shared "always on top of literally everything"
+ * portal wrapper, live-confirmed on Trash/Banished and Deck Peek), on the
+ * theory that this was needed to distinguish a blocking overlay from
+ * ordinary board content. Live-confirmed wrong: "Opponent revealed deck
+ * cards" is a genuine blocking `role="dialog"` that never goes through that
+ * portal at all (its z-index tops out at 92, nowhere near the old
+ * threshold) — the z-index check was excluding a real case, not guarding
+ * against a false one. `role="dialog"` was already the ARIA-correct signal
+ * for "this is a modal" on its own; dropping the extra check is a
+ * generalization, not a loosening; also picks up any future dialog-shaped
+ * card reveal automatically, without needing its own investigation, as long
+ * as its cards follow one of the already-handled face patterns.
+ *
+ * If more than one such dialog is somehow open at once — never observed
+ * live, so this is a guess rather than a confirmed behavior — the last one
+ * in DOM order is treated as active, on the assumption a later-opened
+ * overlay is the newest/topmost.
  */
 function findActiveBlockingDialog(root: ParentNode): Element | undefined {
-  const dialogs = Array.from(root.querySelectorAll('[role="dialog"]')).filter((dialog) => {
-    let current: Element | null = dialog;
-    for (let depth = 0; depth <= PORTAL_ANCESTOR_SEARCH_DEPTH && current; depth++) {
-      if (isExtremeZIndex(getComputedStyle(current).zIndex)) return true;
-      current = current.parentElement;
-    }
-    return false;
-  });
+  const dialogs = root.querySelectorAll('[role="dialog"]');
   return dialogs[dialogs.length - 1];
 }
 
@@ -397,8 +390,18 @@ function laterInDocumentOrder(a: Element, b: Element): Element {
  * this fails closed on ("unsupported") rather than guessing. Each face's
  * ancestor chain is walked exactly once here, regardless of which branch is
  * taken below.
+ *
+ * Exported for unit testing — unlike isDetectableInstanceId/toDropZone/
+ * mergePreferPublic, this one genuinely needs real DOM elements (parent-
+ * child structure via parentElement, document order via
+ * compareDocumentPosition, computed backfaceVisibility/transform), so its
+ * own tests run under a DOM test environment rather than plain Node. The
+ * underlying transform-matrix classification itself is already covered
+ * DOM-free by face-transform.test.ts's classifyFaceFacing tests — what's
+ * exercised here is only this function's own branching between the
+ * shared-wrapper and no-wrapper-at-all code paths.
  */
-function resolveFaceFacing(frontFace: HTMLImageElement, backFace: HTMLImageElement): FaceFacing {
+export function resolveFaceFacing(frontFace: HTMLImageElement, backFace: HTMLImageElement): FaceFacing {
   const frontWrapper = findBackfaceHiddenAncestor(frontFace);
   const backWrapper = findBackfaceHiddenAncestor(backFace);
 
@@ -493,12 +496,13 @@ function buildDetection(anchor: HTMLElement): CardDetection {
     // card's true unrotated size, unlike bounds' rotation-inflated AABB.
     localWidth: anchor.offsetWidth,
     localHeight: anchor.offsetHeight,
+    fromDialog: false,
     element: anchor,
   };
 }
 
-/** Inserts `detection` under `instanceId`, keeping whichever of the new and any existing candidate for that id resolved to "public" — the merge rule every duplicate-prone detection source (board cards, dialog cards) needs, since a real card and a stale/incomplete duplicate can share an id but disagree on visibility. */
-function mergePreferPublic(map: Map<string, CardDetection>, instanceId: string, detection: CardDetection): void {
+/** Inserts `detection` under `instanceId`, keeping whichever of the new and any existing candidate for that id resolved to "public" — the merge rule every duplicate-prone detection source (board cards, dialog cards) needs, since a real card and a stale/incomplete duplicate can share an id but disagree on visibility. Exported for unit testing — takes plain CardDetection values, no DOM involved. */
+export function mergePreferPublic(map: Map<string, CardDetection>, instanceId: string, detection: CardDetection): void {
   const existing = map.get(instanceId);
   if (!existing || (existing.visibility !== "public" && detection.visibility === "public")) {
     map.set(instanceId, detection);
@@ -527,6 +531,7 @@ function detectDialogCards(dialog: Element): CardDetection[] {
     const detection = buildDetection(unit);
     detection.instanceId = `modal-${detection.bounds.x},${detection.bounds.y}`;
     detection.dropZone = "trash";
+    detection.fromDialog = true;
     mergePreferPublic(byPosition, detection.instanceId, detection);
   });
   return Array.from(byPosition.values());
@@ -549,6 +554,12 @@ function detectMulliganCards(root: ParentNode): CardDetection[] {
   });
 }
 
+/** Return shape of detectCards() — see its own doc comment for blockingRegion. */
+export interface DetectionResult {
+  cards: CardDetection[];
+  blockingRegion?: PixelBounds;
+}
+
 /**
  * Finds every card-like element under `root` and returns one CardDetection
  * per unique instanceId. RiftAtlas renders more than one element per card
@@ -556,26 +567,23 @@ function detectMulliganCards(root: ParentNode): CardDetection[] {
  * an interactive button) — this dedupes to one, preferring whichever
  * candidate resolved to "public" over "hidden"/"unknown" duplicates.
  *
- * While a blocking overlay (Trash/Banished viewer, Deck Peek, ...) is open —
- * see findActiveBlockingDialog — every normal board card is suppressed
- * wholesale, live-confirmed to match RiftAtlas's own hover behavior (it
- * breaks for every board card while one of these is open, not just ones
- * visually covered). The overlay's own cards are then detected the same way
- * board cards already are — the same front/back transform classifier is the
- * only privacy authority here, exactly as it already is for a card in hand
- * or an opponent's revealed hand: both are also "private until this specific
- * client renders it face-up," and are already broadcast (delayed) rather
- * than suppressed, so a modal reveal (Deck Peek included) isn't a new
- * privacy category needing different treatment — see the module header for
- * why cardId/imageUrl still can't leak without classifyCardVisibility
- * having positively confirmed the front face is what's actually showing.
+ * Board cards are detected normally regardless of whether a blocking
+ * overlay (Trash/Banished viewer, Deck Peek, "Opponent revealed deck
+ * cards", ...) is open — see findActiveBlockingDialog for why: RiftAtlas
+ * never actually blocks board interaction outside the dialog's own
+ * rectangle. When a dialog is active, its own cards are additionally
+ * detected (fromDialog: true, via detectDialogCards — same front/back
+ * transform classifier as everywhere else is the only privacy authority
+ * here, exactly as it already is for a card in hand or an opponent's
+ * revealed hand) and blockingRegion is set to the dialog's own bounding
+ * rect, letting a viewer suppress hover for a background card only where
+ * the dialog is actually painted on top of it.
  */
-export function detectCards(root: ParentNode = document): CardDetection[] {
+export function detectCards(root: ParentNode = document): DetectionResult {
   const byInstanceId = new Map<string, CardDetection>();
   const activeDialog = findActiveBlockingDialog(root);
 
   root.querySelectorAll<HTMLElement>(CARD_ANCHOR_SELECTOR).forEach((el) => {
-    if (activeDialog && !activeDialog.contains(el)) return;
     // Rune cards are purely iconographic (a type icon and a name, no rules
     // text or effect) — hovering one would never show a viewer anything
     // they can't already read off the board, so these are excluded before
@@ -594,5 +602,8 @@ export function detectCards(root: ParentNode = document): CardDetection[] {
 
   detectMulliganCards(root).forEach((detection) => byInstanceId.set(detection.instanceId, detection));
 
-  return Array.from(byInstanceId.values());
+  return {
+    cards: Array.from(byInstanceId.values()),
+    blockingRegion: activeDialog ? toPixelBounds(activeDialog) : undefined,
+  };
 }

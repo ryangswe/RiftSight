@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["twitch-extension/build.mjs", "--serve"],
       "port": 8789
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["http-server", "site", "-p", "4321", "-c-1"],
+      "port": 4321
     }
   ]
 }

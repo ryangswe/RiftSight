@@ -23,6 +23,7 @@ function state(overrides: Partial<OverlayState> = {}): OverlayState {
         landscape: false,
         localWidth: 0.1,
         localHeight: 0.1,
+        fromDialog: false,
       },
     ],
     ...overrides,
@@ -69,6 +70,14 @@ describe("OverlayRecorder", () => {
     recorder.start(1000);
     recorder.record(state({ sequence: 1 }), 1000);
     recorder.record(state({ sequence: 2, cards: [] }), 1200); // genuinely different
+    expect(recorder.length).toBe(2);
+  });
+
+  it("records a state again when only blockingRegion changes, same cards", () => {
+    const recorder = new OverlayRecorder();
+    recorder.start(1000);
+    recorder.record(state({ sequence: 1 }), 1000);
+    recorder.record(state({ sequence: 2, blockingRegion: { x: 0.3, y: 0.3, width: 0.2, height: 0.2 } }), 1200);
     expect(recorder.length).toBe(2);
   });
 

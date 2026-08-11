@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RiftSight — Hover over any Riftbound card while you watch</title>
+    <meta
+      name="description"
+      content="RiftSight adds instant card previews to Rift Atlas streams on Twitch. Hover over any card in the video to see its full image — nothing to install for viewers. Free, open source, community-built."
+    />
+    <link rel="canonical" href="https://riftsight.gg/" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="./assets/favicon-16.png" />
+    <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" />
+
+    <!-- Open Graph / Twitter -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="RiftSight" />
+    <meta property="og:title" content="RiftSight — Hover over any Riftbound card while you watch" />
+    <meta
+      property="og:description"
+      content="Instant card previews for Rift Atlas streams on Twitch. Hover over any card in the video to see its full image — nothing to install for viewers."
+    />
+    <meta property="og:url" content="https://riftsight.gg/" />
+    <meta property="og:image" content="https://riftsight.gg/assets/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="RiftSight — Hover over any Riftbound card while you watch" />
+    <meta
+      name="twitter:description"
+      content="Instant card previews for Rift Atlas streams on Twitch. Hover over any card in the video to see its full image — nothing to install for viewers."
+    />
+    <meta name="twitter:image" content="https://riftsight.gg/assets/og-image.png" />
+
+    <link rel="stylesheet" href="./site.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <!-- =============================== HEADER =============================== -->
+    <header class="site-header">
+      <div class="wrap nav">
+        <a class="brand" href="#top" aria-label="RiftSight home">
+          <img src="./assets/riftsight-logo.png" alt="" width="30" height="30" />
+          RiftSight
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a class="nav-page-link" href="#how">How it works</a>
+          <a class="nav-page-link" href="#demo">Demo</a>
+          <a class="nav-page-link" href="./setup.html">Setup</a>
+          <a class="nav-page-link" href="#community">Community</a>
+          <a class="nav-icon" data-link="github" href="#" aria-label="RiftSight on GitHub" title="GitHub">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.11.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.4-5.27 5.69.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
+          </a>
+          <a class="btn btn-primary nav-cta" data-cta="primary" href="./setup.html">Stream with RiftSight</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <span id="top"></span>
+
+      <!-- =============================== HERO =============================== -->
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="wrap">
+          <div class="hero-grid">
+            <div class="hero-copy">
+              <span class="eyebrow"><span class="dot" aria-hidden="true"></span> Card previews for Rift Atlas on Twitch</span>
+              <h1 class="hero-title" id="hero-title">
+                Hover over any <span class="grad">Riftbound card</span> while you watch.
+              </h1>
+              <p class="hero-sub">
+                RiftSight shows the full card image the moment you hover over it on a Rift Atlas stream.
+                Nothing to install for viewers.
+              </p>
+              <div class="hero-ctas">
+                <a class="btn btn-primary" data-cta="primary" href="./setup.html">Stream with RiftSight</a>
+                <a class="btn btn-secondary" href="#demo">See it in action</a>
+              </div>
+              <p class="cta-note">RiftSight is currently in beta. Streamer access is being rolled out gradually.</p>
+              <p class="hero-note">
+                <span><span class="tick" aria-hidden="true">✓</span> Free &amp; open source</span>
+                <span><span class="tick" aria-hidden="true">✓</span> Community-built</span>
+                <span><span class="tick" aria-hidden="true">✓</span> No viewer install</span>
+              </p>
+            </div>
+
+            <!-- Hero product demo. The `.demo-media[data-demo]` container holds a
+                 CSS mockup now and is swapped for a real <video> automatically
+                 when config.demo.video is set (see site.js + config.js). -->
+            <div class="hero-visual">
+              <div class="demo-frame glow stream-shell">
+                <div class="tw-topnav" aria-hidden="true">
+                  <div class="tw-nav-left">
+                    <span class="tw-logo"></span>
+                    <span class="tw-navlink">Following</span>
+                    <span class="tw-navlink">Browse</span>
+                  </div>
+                  <span class="tw-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4" stroke-linecap="round"/></svg> Search</span>
+                  <img class="tw-navavatar" src="./assets/stream-avatar.webp" alt="" width="28" height="28" />
+                </div>
+                <div class="tw-player">
+                  <div class="demo-media" data-demo data-demo-label="RiftSight showing a full Riftbound card preview when a viewer hovers a card on a Rift Atlas Twitch stream." role="img" aria-label="A viewer hovers a card on a Rift Atlas Twitch stream and RiftSight shows the full card image.">
+                    <div class="demo-board" aria-hidden="true">
+                      <div class="demo-card"></div>
+                      <div class="demo-card"></div>
+                      <div class="demo-card is-target"></div>
+                      <div class="demo-card"></div>
+                      <div class="demo-card"></div>
+                    </div>
+                    <div class="demo-popup" aria-hidden="true">
+                      <div class="art"></div>
+                      <div class="line"></div>
+                      <div class="line short"></div>
+                    </div>
+                    <svg class="demo-cursor" viewBox="0 0 24 24" fill="#fff" stroke="#0b0f16" stroke-width="1.4" aria-hidden="true">
+                      <path d="M4 2l7 18 2.5-7.5L21 10 4 2z" />
+                    </svg>
+                  </div>
+                  <span class="tw-livebadge" aria-hidden="true"><span class="dot"></span>Live</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== HOW IT WORKS =============================== -->
+      <section class="band" id="how" aria-labelledby="how-title">
+        <div class="wrap">
+          <div class="section-head">
+            <span class="kicker">How it works</span>
+            <h2 id="how-title">One-time setup for streamers. None for viewers.</h2>
+          </div>
+          <div class="how-grid">
+            <div class="panel">
+              <span class="panel-label">For streamers</span>
+              <ol class="steps">
+                <li><div><strong>Install the browser extension</strong><span>Add RiftSight to Chrome and connect your Twitch account.</span></div></li>
+                <li><div><strong>Enable the RiftSight Twitch Extension</strong><span>Add it to your channel and activate it as a video overlay.</span></div></li>
+                <li><div><strong>Open Rift Atlas and go live</strong><span>Your visible cards sync to viewers automatically while you play.</span></div></li>
+              </ol>
+              <a class="panel-link" href="./setup.html">View setup guide <span aria-hidden="true">→</span></a>
+            </div>
+            <div class="panel viewer-panel">
+              <span class="panel-label viewer">For viewers</span>
+              <p class="big">Nothing to install. No account.</p>
+              <p>Activate the RiftSight overlay on the Twitch player, then hover over any visible card.</p>
+              <span class="viewer-badge">Almost zero setup</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== SEE IT IN ACTION =============================== -->
+      <section class="band alt" id="demo" aria-labelledby="demo-title">
+        <div class="wrap">
+          <div class="section-head">
+            <span class="kicker">See it in action</span>
+            <h2 id="demo-title">Just hover over a card.</h2>
+          </div>
+
+          <div class="showcase-media">
+            <!-- Interactive product demo. The board is a STATIC screenshot; the
+                 real overlay-core CardHoverOverlay (site/src/demo.ts → the
+                 bundled demo.bundle.js) overlays invisible hitboxes from a
+                 captured board-state fixture and shows the real card previews
+                 on hover/tap. No relay, Twitch, or network beyond the local
+                 fixture + card images. Degrades to just the board with no JS. -->
+            <div class="demo-frame glow stream-shell">
+              <div class="tw-topnav" aria-hidden="true">
+                <div class="tw-nav-left">
+                  <span class="tw-logo"></span>
+                  <span class="tw-navlink">Following</span>
+                  <span class="tw-navlink">Browse</span>
+                </div>
+                <span class="tw-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4" stroke-linecap="round"/></svg> Search</span>
+                <img class="tw-navavatar" src="./assets/stream-avatar.webp" alt="" width="28" height="28" />
+              </div>
+              <div class="tw-player">
+                <div class="rs-demo-stage" id="rs-demo-stage">
+                  <img
+                    class="rs-demo-board"
+                    id="rs-demo-board"
+                    src="./demo/demo-board.webp"
+                    alt="A Rift Atlas card game board as it appears on a Twitch stream"
+                    draggable="false"
+                  />
+                  <!-- Focusable, screen-reader-labelled per-card targets are injected here by demo.bundle.js. -->
+                  <div class="rs-demo-a11y" id="rs-demo-a11y" role="group" aria-label="Hoverable cards on the board"></div>
+                  <div class="rs-demo-tooltip" id="rs-demo-tooltip" aria-hidden="true"></div>
+                  <div class="rs-demo-hint" id="rs-demo-hint" aria-hidden="true">Try hovering over a card</div>
+                </div>
+                <span class="tw-livebadge" aria-hidden="true"><span class="dot"></span>Live</span>
+              </div>
+              <div class="tw-infobar" aria-hidden="true">
+                <img class="tw-savatar" src="./assets/stream-avatar.webp" alt="" width="42" height="42" />
+                <div class="tw-meta">
+                  <span class="tw-channel">JuicyKaraageNo1</span>
+                  <span class="tw-title">Riftbound — hover any card to preview it</span>
+                  <span class="tw-tags"><span class="tw-cat">Riftbound</span><span class="tw-lang">English</span></span>
+                </div>
+                <div class="tw-actions">
+                  <div class="tw-btnrow">
+                    <span class="tw-btn icon-only follow" title="Follow"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-8-4.6-8-10.2A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 8 4.8C20 16.4 12 21 12 21z"/></svg></span>
+                    <span class="tw-btn icon-only bell" title="Notifications"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a5.5 5.5 0 0 0-5.5 5.5c0 4.4-2 5.5-2 5.5h15s-2-1.1-2-5.5A5.5 5.5 0 0 0 12 3z"/><path d="M10.2 18.5a2 2 0 0 0 3.6 0z"/></svg><svg class="tw-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round"/></svg></span>
+                    <span class="tw-btn continue"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7l4.5 3.5L12 4l4.5 6.5L21 7v11H3z"/></svg> Continue Sub</span>
+                    <span class="tw-btn gift"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 7h-3.1a2.4 2.4 0 1 0-4.6-.9 2.4 2.4 0 1 0-4.6.9H4v4h1v9h14v-9h1zm-8 0a1 1 0 1 1 1-1 1 1 0 0 1-1 1z"/></svg><span class="tw-btn-text">Gift a Sub</span><svg class="tw-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round"/></svg></span>
+                  </div>
+                  <div class="tw-metrics">
+                    <span class="tw-viewers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.4"/><path d="M5 20a7 7 0 0 1 14 0" stroke-linecap="round"/></svg>227</span>
+                    <span class="tw-uptime">1:56:19</span>
+                    <span class="tw-micon" title="Share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15V4M8 8l4-4 4 4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 13v6h14v-6" stroke-linecap="round"/></svg></span>
+                    <span class="tw-micon" title="More"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="annotations">
+            <div class="annotation"><span class="num" aria-hidden="true">1</span><p><strong>Point at a visible card</strong>Hover it on desktop, or tap on mobile.</p></div>
+            <div class="annotation"><span class="num" aria-hidden="true">2</span><p><strong>See the full card instantly</strong>The complete Riftbound card appears.</p></div>
+            <div class="annotation"><span class="num" aria-hidden="true">3</span><p><strong>Move on</strong>The preview disappears when you leave the card.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== BENEFITS =============================== -->
+      <section class="band" id="benefits" aria-labelledby="benefits-title">
+        <div class="wrap">
+          <div class="section-head">
+            <span class="kicker">Why RiftSight</span>
+            <h2 id="benefits-title">Built for watching Riftbound</h2>
+          </div>
+          <div class="benefits-grid">
+            <div class="benefit">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></span>
+              <h3>Read cards instantly</h3>
+              <p>See the full card image without pausing or leaving the stream.</p>
+            </div>
+            <div class="benefit">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg></span>
+              <h3>Stay in the action</h3>
+              <p>No squinting, searching, or interrupting playback.</p>
+            </div>
+            <div class="benefit">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+              <h3>Almost no viewer setup</h3>
+              <p>Viewers only need to activate the Twitch extension on the stream.</p>
+            </div>
+            <div class="benefit">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+              <h3>Works across Twitch modes</h3>
+              <p>Normal, theater, and fullscreen — hover works the same everywhere.</p>
+            </div>
+            <div class="benefit">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z"/></svg></span>
+              <h3>Respects hidden information</h3>
+              <p>Only visible, public Rift Atlas card state is ever shown.</p>
+            </div>
+            <div class="benefit">
+              <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg></span>
+              <h3>Free and open source</h3>
+              <p>No ads, subscriptions, or tracking. The full source is public.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== BETA / STATUS =============================== -->
+      <section class="band status-band alt" id="beta" aria-labelledby="beta-title">
+        <div class="wrap">
+          <div class="status-card">
+            <span class="status-pill"><span class="dot" aria-hidden="true"></span> <span data-status="label">Beta</span></span>
+            <h2 class="status-heading" id="beta-title" data-status="heading">RiftSight is now available on Twitch.</h2>
+            <p data-status="message">Viewers can use RiftSight on any supported stream. We're gradually onboarding Rift Atlas streamers while we monitor reliability and scale up.</p>
+            <a class="btn btn-primary" data-cta="primary" href="./setup.html">Stream with RiftSight</a>
+            <p class="status-note" data-status="note">Streamer access may require approval during the beta.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== COMMUNITY =============================== -->
+      <section class="band" id="community" aria-labelledby="community-title">
+        <div class="wrap">
+          <div class="section-head">
+            <span class="kicker">Community</span>
+            <h2 id="community-title">Questions, ideas, or want to help test?</h2>
+          </div>
+          <div class="community-grid">
+            <a class="comm-card featured" data-link="discord" data-requires="discord" href="#">
+              <span class="ci" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.2.4a18.3 18.3 0 0 1 4.3 1.4A18.5 18.5 0 0 0 3 6.9C1 10.6.5 14.2.8 17.8A19.9 19.9 0 0 0 6.8 21l.4-.7c-.9-.3-1.8-.7-2.5-1.2l.6-.4a14.2 14.2 0 0 0 12.2 0l.6.4c-.8.5-1.6.9-2.5 1.2l.4.7a19.8 19.8 0 0 0 6-3.2c.4-4.2-.6-7.8-2.7-11.4ZM8.6 15.3c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Zm6.8 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Z"/></svg></span>
+              <div>
+                <p class="cc-title">Discord <span class="comm-tag">Start here</span></p>
+                <p class="cc-desc">Questions, bug reports, feature requests, and beta testing — the main place to reach us.</p>
+              </div>
+              <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+            </a>
+            <a class="comm-card" data-link="x" data-requires="x" href="#">
+              <span class="ci" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.24 2H21l-6.55 7.48L22 22h-6.16l-4.82-6.3L5.5 22H2.74l7-8L2 2h6.32l4.36 5.77L18.24 2Zm-1.08 18h1.7L7.02 3.7H5.2L17.16 20Z"/></svg></span>
+              <div>
+                <p class="cc-title">Twitter / X</p>
+                <p class="cc-desc">Updates, demos, and new releases.</p>
+              </div>
+            </a>
+            <a class="comm-card" data-link="github" href="#">
+              <span class="ci" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.11.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.4-5.27 5.69.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg></span>
+              <div>
+                <p class="cc-title">GitHub</p>
+                <p class="cc-desc">Source code, issues, and contributions.</p>
+              </div>
+            </a>
+          </div>
+          <p class="support-note" data-requires="support">
+            RiftSight is free and open source. Optional contributions help cover hosting and continued development.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- =============================== FOOTER =============================== -->
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="footer-top">
+          <span class="footer-brand">
+            <img src="./assets/riftsight-logo.png" alt="" width="26" height="26" />
+            RiftSight
+          </span>
+          <nav class="footer-links" aria-label="Footer">
+            <a href="./setup.html">Setup</a>
+            <a data-link="github" href="#">Source</a>
+            <a data-link="discord" data-requires="discord" href="#">Discord</a>
+            <a data-link="privacy" href="./privacy.html">Privacy</a>
+            <a data-link="terms" href="./eula.html">Terms</a>
+            <a data-link="supportEmail" href="mailto:riftsight.support@gmail.com">Contact</a>
+          </nav>
+        </div>
+        <p class="footer-disclaimer">
+          RiftSight is an independent, fan-made community project and is not affiliated with or endorsed by
+          Riot Games, UVS Games, Twitch, or Rift Atlas. Riftbound and all related card imagery are the property
+          of their respective owners.
+        </p>
+        <p class="footer-copy">© <span data-year>2026</span> RiftSight</p>
+      </div>
+    </footer>
+
+    <script src="./config.js"></script>
+    <script src="./site.js"></script>
+    <!-- Interactive "See it in action" demo — bundled from site/src/demo.ts
+         (imports the real @riftsight/overlay-core). Deferred + lazy: it only
+         initializes when the section scrolls near the viewport. -->
+    <script src="./assets/demo.bundle.js" defer></script>
+  </body>
+</html>

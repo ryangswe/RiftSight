@@ -1,4 +1,4 @@
-import type { OverlayCard } from "@riftsight/protocol";
+import type { NormalizedBounds, OverlayCard } from "@riftsight/protocol";
 import { computeHitboxBox } from "./render.js";
 import { compareStackOrder } from "./stack-order.js";
 
@@ -73,6 +73,27 @@ export function computeCardQuad(card: OverlayCard, stageSize: StageSize): CardQu
 }
 
 /**
+ * Direct 4-corner rectangle, never rotated — for non-card geometry (a
+ * dialog's own bounding rect) that still needs to hit-test via
+ * pointInConvexQuad. `bounds` must already be region-mapped, same contract
+ * as computeCardQuad.
+ */
+export function computeRectQuad(bounds: NormalizedBounds, stageSize: StageSize): CardQuad {
+  const left = bounds.x * stageSize.width;
+  const top = bounds.y * stageSize.height;
+  const width = bounds.width * stageSize.width;
+  const height = bounds.height * stageSize.height;
+  return {
+    points: [
+      { x: left, y: top },
+      { x: left + width, y: top },
+      { x: left + width, y: top + height },
+      { x: left, y: top + height },
+    ],
+  };
+}
+
+/**
  * Same-sign-cross-product test against each of the quad's four edges —
  * valid because a rotated rectangle is always convex, regardless of
  * winding direction as long as it's consistent (computeCardQuad always
@@ -110,20 +131,57 @@ export interface HoverCandidate {
  * Filters to candidates whose true rotated quad actually contains `point`,
  * then returns whichever has the highest effective stack rank (per
  * compareStackOrder, using each candidate's position in `candidates` as
- * the paint-order tiebreak) — or null if none contain the point. Built
- * now, ahead of Phase 2's interaction wiring, so the diagnostic can show
- * "what the new model would resolve" alongside what's actually showing
- * today, without changing any real behavior yet.
+ * the paint-order tiebreak) — or null if none contain the point.
+ *
+ * Dialog candidates (fromDialog: true) are resolved as their own separate
+ * group, and any one of them matching `point` at all wins outright over
+ * every background candidate, regardless of raw zIndex. This is not
+ * optional: detectDialogCards publishes a flat, low zIndex for every card
+ * it produces (see card-detector.ts), while a background board card's
+ * zIndex is a real, often much larger CSS value — comparing the two
+ * groups by magnitude in one pool let an arbitrary background card behind
+ * a dialog card win the point purely on zIndex, which live testing showed
+ * makes a dialog's own card hoverable only in the sliver where no
+ * background card happens to occupy the same screen position, exactly
+ * backwards from a dialog always being the topmost thing actually painted
+ * there. A dialog card is therefore never suppressed and never has to
+ * out-rank anything outside its own group.
+ *
+ * `blockingRegion`, when given, is the active dialog's own bounding quad
+ * (see card-detector.ts's detectCards / OverlayState.blockingRegion),
+ * checked only once no dialog candidate matched `point` at all. The
+ * winning background candidate is suppressed (null) rather than returned
+ * when it falls inside that region — it's genuinely there and clickable
+ * in the DOM, but visually painted over by the dialog in the actual
+ * video, so showing its tooltip would be misleading. A background card
+ * outside the region is unaffected.
  */
-export function resolveHoveredCard(point: Point, candidates: readonly HoverCandidate[]): OverlayCard | null {
-  let best: HoverCandidate | null = null;
-  let bestIndex = -1;
+export function resolveHoveredCard(
+  point: Point,
+  candidates: readonly HoverCandidate[],
+  blockingRegion?: CardQuad
+): OverlayCard | null {
+  let bestDialog: HoverCandidate | null = null;
+  let bestDialogIndex = -1;
+  let bestBackground: HoverCandidate | null = null;
+  let bestBackgroundIndex = -1;
+
   candidates.forEach((candidate, index) => {
     if (!pointInConvexQuad(point, candidate.quad)) return;
-    if (!best || compareStackOrder(candidate, index, best, bestIndex) > 0) {
-      best = candidate;
-      bestIndex = index;
+    if (candidate.card.fromDialog) {
+      if (!bestDialog || compareStackOrder(candidate, index, bestDialog, bestDialogIndex) > 0) {
+        bestDialog = candidate;
+        bestDialogIndex = index;
+      }
+    } else if (!bestBackground || compareStackOrder(candidate, index, bestBackground, bestBackgroundIndex) > 0) {
+      bestBackground = candidate;
+      bestBackgroundIndex = index;
     }
   });
-  return best ? (best as HoverCandidate).card : null;
+
+  if (bestDialog) return (bestDialog as HoverCandidate).card;
+  if (!bestBackground) return null;
+  const winner = bestBackground as HoverCandidate;
+  if (blockingRegion && pointInConvexQuad(point, blockingRegion)) return null;
+  return winner.card;
 }

@@ -18,6 +18,7 @@ function card(overrides: Partial<OverlayCard> = {}): OverlayCard {
     // output, so most existing assertions don't need to change.
     localWidth: bounds.width,
     localHeight: bounds.height,
+    fromDialog: false,
     ...overrides,
   };
 }
