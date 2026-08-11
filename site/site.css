@@ -545,6 +545,27 @@ h1.hero-title .grad {
 .shot-gallery figcaption { font-size: 13px; color: var(--text-muted); margin-top: var(--space-2); }
 .shot-gallery figcaption b { color: var(--text); font-weight: 600; }
 
+/* Click-to-enlarge: each screenshot links to its full-size WebP (opens in a
+   new tab → native pinch-zoom on mobile). The full image is only fetched on
+   click, so it adds nothing to initial page load. */
+.shot-zoom { display: block; position: relative; cursor: zoom-in; }
+.shot-zoom:hover { text-decoration: none; }
+.shot-gallery .frame .shot-zoom { width: 100%; height: 100%; }
+.shot-zoom::after {
+  content: "⤢";
+  position: absolute; bottom: 8px; right: 8px; z-index: 2;
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  font-size: 15px; line-height: 1; color: #fff;
+  background: rgba(11, 15, 22, 0.72); border: 1px solid var(--border-strong); border-radius: 6px;
+  opacity: 0.7; transition: opacity 140ms; pointer-events: none;
+}
+.shot-zoom:hover::after,
+.shot-zoom:focus-visible::after { opacity: 1; }
+.shot-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* FAQ (OBS) image: keep the link hugging the image so the badge sits on it. */
+.faq-body .shot-zoom { max-width: 560px; margin-top: var(--space-3); }
+.faq-body .shot-zoom img { width: 100%; height: auto; max-width: 100%; margin: 0; }
+
 /* RiftSight icon status legend */
 .legend { max-width: 900px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--space-6); }
 @media (max-width: 560px) { .legend { grid-template-columns: 1fr; } }
