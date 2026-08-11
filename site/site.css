@@ -28,7 +28,7 @@
   --space-6: 32px;
   --space-8: 48px;
   --space-10: 72px;
-  --maxw: 1120px;
+  --maxw: 1200px;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -206,6 +206,66 @@ h1.hero-title .grad {
 .demo-topbar .live { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.5px; }
 .demo-topbar .live .rec { width: 7px; height: 7px; border-radius: 50%; background: #ff5b6e; box-shadow: 0 0 8px #ff5b6e; }
 
+/* ---- Mock Twitch player chrome (decorative shell around the demo media) ----
+   Evokes the Twitch web UI to set context; it is NOT the real Twitch brand and
+   uses a neutral demo channel. The interactive stage lives inside .tw-player
+   and is untouched — this is pure decoration. `container-type` lets the bottom
+   bar condense itself based on the FRAME's width (the hero frame is smaller
+   than the showcase), independent of the page viewport. */
+.stream-shell { container-type: inline-size; }
+
+/* Top nav: left group, a Twitch-style centered search, and the user avatar. */
+.tw-topnav { position: relative; display: flex; align-items: center; height: 42px; padding: 0 12px; background: #0e0e12; border-bottom: 1px solid #26262c; }
+.tw-nav-left { display: inline-flex; align-items: center; gap: 14px; }
+.tw-logo { width: 20px; height: 20px; border-radius: 5px; background: linear-gradient(160deg, #a970ff, #772ce8); flex-shrink: 0; position: relative; }
+.tw-logo::after { content: ""; position: absolute; inset: 5px 6px 4px 6px; background: #fff; opacity: 0.92; clip-path: polygon(0 0, 100% 0, 100% 66%, 62% 66%, 44% 100%, 44% 66%, 0 66%); }
+.tw-navlink { font-size: 13px; font-weight: 600; color: #efeff1; }
+.tw-search { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 6px; width: 280px; max-width: 44%; height: 28px; padding: 0 10px; border-radius: 6px; background: #18181b; border: 1px solid #3a3a42; color: #adadb8; font-size: 12.5px; }
+.tw-search svg { width: 13px; height: 13px; flex-shrink: 0; }
+.tw-navavatar { margin-left: auto; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+
+/* Player + LIVE badge (top-right). */
+.tw-player { position: relative; line-height: 0; background: #000; }
+.tw-livebadge { position: absolute; top: 10px; right: 10px; z-index: 6; pointer-events: none; display: inline-flex; align-items: center; gap: 5px; background: #eb0400; color: #fff; font: 700 11px/1 var(--font-ui); letter-spacing: 0.4px; padding: 4px 7px; border-radius: 4px; text-transform: uppercase; }
+.tw-livebadge .dot { width: 5px; height: 5px; border-radius: 50%; background: #fff; }
+
+/* Bottom info bar: streamer meta (left) + action buttons over metrics (right). */
+.tw-infobar { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: #0d0d10; border-top: 1px solid #26262c; }
+.tw-savatar { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; flex-shrink: 0; box-shadow: 0 0 0 2px #0d0d10, 0 0 0 3.5px #eb0400; }
+.tw-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; line-height: 1.25; }
+.tw-channel { font-size: 15px; font-weight: 700; color: #efeff1; white-space: nowrap; }
+.tw-title { font-size: 13px; color: #dedee3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; }
+.tw-tags { display: inline-flex; align-items: center; gap: 8px; margin-top: 3px; }
+.tw-cat { font-size: 12px; color: #bf94ff; font-weight: 600; }
+.tw-lang { font-size: 11px; color: #adadb8; background: #26262c; border-radius: 999px; padding: 2px 9px; }
+
+.tw-actions { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+.tw-btnrow { display: inline-flex; align-items: center; gap: 8px; }
+.tw-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 6px; background: rgba(255, 255, 255, 0.15); color: #efeff1; font: 700 13px/1 var(--font-ui); white-space: nowrap; }
+.tw-btn svg { width: 15px; height: 15px; }
+.tw-btn.icon-only { padding: 0 9px; }
+.tw-btn.gift { background: #9147ff; }
+.tw-btn .tw-caret { width: 11px; opacity: 0.85; }
+.tw-metrics { display: inline-flex; align-items: center; gap: 12px; }
+.tw-viewers { display: inline-flex; align-items: center; gap: 4px; color: #eb0400; font-weight: 700; font-size: 13.5px; }
+.tw-viewers svg { width: 15px; height: 15px; }
+.tw-uptime { font: 500 12.5px/1 var(--font-mono); color: #adadb8; }
+.tw-micon { display: inline-flex; color: #adadb8; }
+.tw-micon svg { width: 16px; height: 16px; }
+
+/* Condense the chrome in narrower frames (the smaller hero frame + mobile). */
+@container (max-width: 700px) {
+  .tw-navlink, .tw-title, .tw-tags, .tw-uptime, .tw-micon, .tw-btn.bell, .tw-btn.continue { display: none; }
+}
+@container (max-width: 470px) {
+  .tw-search { display: none; }
+  .tw-infobar { gap: 8px; padding: 10px 12px; }
+  .tw-savatar { width: 34px; height: 34px; }
+  .tw-channel { font-size: 14px; }
+  .tw-btn.gift .tw-btn-text, .tw-btn.gift .tw-caret { display: none; }
+  .tw-btn.gift { padding: 0 9px; }
+}
+
 .demo-media { position: relative; aspect-ratio: 16 / 9; background: radial-gradient(120% 120% at 50% 0%, #16203a 0%, #0a0f1a 70%); overflow: hidden; }
 /* When a real video is swapped in, let the frame follow the clip's own aspect
    ratio (the demo capture may be cropped, e.g. 2.13:1) — no crop, no letterbox. */
@@ -266,7 +326,9 @@ h1.hero-title .grad {
 .viewer-badge { align-self: flex-start; margin-top: var(--space-3); font-size: 12px; font-weight: 700; color: var(--success); background: rgba(123, 224, 138, 0.12); border: 1px solid rgba(123, 224, 138, 0.35); padding: 5px 12px; border-radius: 999px; }
 
 /* ---- Showcase: "See it in action" ------------------------------ */
-.showcase-media { max-width: 940px; margin: 0 auto; }
+/* The interactive demo fills the section width, aligned with every other
+   section (they all share --maxw via .wrap). */
+.showcase-media { margin: 0 auto; }
 .showcase-media .demo-media { aspect-ratio: 16 / 9; }
 .showcase-media .demo-board { grid-template-columns: repeat(6, 1fr); gap: 2.4%; padding: 7% 5%; }
 .annotations {
@@ -282,6 +344,63 @@ h1.hero-title .grad {
 }
 .annotation p { margin: 0; font-size: 14px; color: var(--text-muted); }
 .annotation p strong { display: block; color: var(--text); font-weight: 600; font-size: 14.5px; }
+
+/* ---- Interactive demo (See it in action) ----------------------- */
+/* The stage is the positioned coordinate space the shared CardHoverOverlay
+   works in. The board <img> defines its height, so the overlay layers
+   (hitboxes, a11y targets, popup) line up with the screenshot at any width. */
+.rs-demo-stage { position: relative; overflow: hidden; line-height: 0; background: #0a0f1a; }
+.rs-demo-board { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+
+/* Focusable per-card targets (keyboard/AT only) — pointer-events: none so
+   mouse/touch fall through to the geometry resolver on the stage. */
+.rs-demo-a11y { position: absolute; inset: 0; z-index: 2; }
+.rs-demo-target {
+  position: absolute; margin: 0; padding: 0; border: 0; background: transparent;
+  border-radius: 6px; cursor: default; pointer-events: none;
+}
+.rs-demo-target:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Popup — mirrors the production viewer's tooltip visual language exactly
+   (see twitch-extension/viewer.html). Sizes are applied inline by
+   CardHoverOverlay via computeTooltipMaxSize, so none are set here. */
+.rs-demo-tooltip { position: absolute; pointer-events: none; display: none; z-index: 30; }
+.rs-demo-tooltip .tooltip-art { display: block; border-radius: 6px; filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.6)); object-fit: contain; }
+.rs-demo-tooltip .tooltip-fallback {
+  max-width: 240px; background: rgba(17, 17, 17, 0.95); border: 1px solid #444;
+  border-radius: 6px; padding: 8px 10px; font: 13px/1.4 var(--font-ui); color: var(--text);
+}
+.rs-demo-tooltip .tooltip-debug {
+  margin-top: 4px; max-width: 320px; background: rgba(17, 17, 17, 0.85);
+  border-radius: 4px; padding: 4px 8px; color: #9fdf9f; font: 11px/1.4 var(--font-mono);
+}
+
+/* Debug outlines (dev alignment only — enable with ?demoDebug=1). */
+.rs-demo-stage .hitbox-layer .hitbox { border: 1px solid transparent; }
+.rs-demo-stage .hitbox.debug-outline { border-color: rgba(102, 255, 102, 0.7); background: rgba(102, 255, 102, 0.06); }
+.rs-demo-stage .hitbox.debug-outline.hidden-card { border-color: rgba(255, 102, 102, 0.7); background: rgba(255, 102, 102, 0.06); }
+
+/* First-load affordance: a small hint pill + one subtle pulse on a card. */
+.rs-demo-hint {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%) translateY(6px);
+  z-index: 10; pointer-events: none; opacity: 0; transition: opacity 240ms, transform 240ms;
+  font: 600 13px/1 var(--font-ui); color: var(--text); white-space: nowrap;
+  background: rgba(11, 15, 22, 0.82); backdrop-filter: blur(6px);
+  border: 1px solid var(--border-strong); border-radius: 999px; padding: 8px 14px;
+  box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.7);
+}
+.rs-demo-hint.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+.rs-demo-pulse {
+  position: absolute; z-index: 3; pointer-events: none; border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--accent), 0 0 22px -2px rgba(102, 204, 255, 0.7);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rs-demo-pulse { animation: rsDemoPulse 1.4s ease-in-out 3; }
+}
+@keyframes rsDemoPulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.9; }
+}
 
 /* ---- Benefits (lighter than cards) ----------------------------- */
 .benefits-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-5) var(--space-6); }

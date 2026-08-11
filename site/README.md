@@ -20,8 +20,25 @@ backend. Canonical domain: **riftsight.gg**.
   (they are the source of truth).
 - `assets/` — logo, favicons, the Open Graph image; also where the extension ZIP
   (`riftsight-extension.zip`), demo video, and `setup/` screenshots go.
-- `build.mjs` — copies the static files into `dist/` (a deploy artifact + an
-  integrity check). No transpiling happens.
+- `build.mjs` — copies the static files into `dist/`, and **bundles the one
+  piece of TypeScript on the site**: the interactive "See it in action" demo.
+- `src/demo.ts` — the interactive demo module; imports the real
+  `@riftsight/overlay-core` (the same overlay controller the Twitch viewer
+  runs) and drives it from a static fixture. Bundled by esbuild to
+  `assets/demo.bundle.js` (git-ignored, generated). Lazy-loaded when the
+  section scrolls into view; degrades to a static board with no JS.
+- `demo/` — the demo's fixture: `demo-state.json` (a captured `OverlayState`)
+  + `demo-board.svg` (the board screenshot) + placeholder card art. See
+  `demo/README.md` for how to capture and swap in a real board.
+
+## Build note
+
+The demo requires a build step (`npm run build -w site`) to produce
+`assets/demo.bundle.js`. The `dev` script runs it automatically before serving.
+On Cloudflare Pages, use Build command `npm run build` with output `site/dist`
+(recommended). Serving the source dir statically also works once the bundle has
+been built at least once; without it, the demo simply degrades to a static
+board.
 
 ## Editing links / CTAs
 

@@ -50,8 +50,15 @@
          panel. Text states (fallback/debug) draw their own small
          backdrop below, since they need contrast against arbitrary video
          and no longer inherit one from this wrapper. */
+      /* position: absolute (not fixed) — the popup is a child of
+         #overlay-stage and positioned in the stage's own local pixel space
+         by overlay-core's CardHoverOverlay. Since the stage fills the iframe
+         (inset: 0), stage-local coordinates coincide with the viewport here,
+         so this behaves exactly as the old fixed positioning did — but the
+         same controller also works when the stage is only part of a page
+         (the riftsight.gg demo). */
       #tooltip {
-        position: fixed;
+        position: absolute;
         pointer-events: none;
         display: none;
         z-index: 1000;
@@ -134,8 +141,9 @@
   <body>
     <div id="auth-status"></div>
     <div id="diagnostics"></div>
-    <div id="overlay-stage"></div>
-    <div id="tooltip"></div>
+    <!-- #tooltip is a child of #overlay-stage so the shared CardHoverOverlay
+         can position it in the stage's local coordinate space. -->
+    <div id="overlay-stage"><div id="tooltip"></div></div>
     <!-- Twitch Extensions JS Helper — must load before dist/viewer/main.js so window.Twitch.ext exists when it runs. https://dev.twitch.tv/docs/extensions/reference/ -->
     <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
     <script src="dist/viewer/main.js"></script>

@@ -1,18 +1,35 @@
 // Produces dist/ — the exact set of static files to deploy for the RiftSight
-// landing site. There is no bundling or transpiling here: the site is plain
-// HTML/CSS with one small config script. This script exists so the package
-// participates in the monorepo's `npm run build -ws` and so a deploy artifact
-// (dist/) can be pointed at directly. It fails loudly if a required file is
-// missing, catching an incomplete tree before anything is uploaded.
+// landing site. The site is plain HTML/CSS with one small config script, with
+// one exception: the interactive "See it in action" demo is a TypeScript
+// module that imports the shared @riftsight/overlay-core + @riftsight/protocol
+// packages, so it's bundled here with esbuild into assets/demo.bundle.js
+// (the same real overlay code the Twitch viewer runs). Everything else is
+// copied verbatim. Fails loudly if a required file is missing.
 //
-// Cloudflare Pages can serve either this dist/ (Build command: `npm run build`,
-// Output dir: `site/dist`) or the source directory as-is with no build step.
+// Cloudflare Pages: use Build command `npm run build` (from site/) with Output
+// dir `site/dist`. Serving the source directory statically also works, but the
+// demo needs assets/demo.bundle.js built first (`npm run build -w site`);
+// without it the demo degrades gracefully to the static board screenshot.
 import { existsSync, mkdirSync, copyFileSync, rmSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { build as esbuild } from "esbuild";
 
 const pkgDir = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(pkgDir, "dist");
+
+// Bundle the interactive demo module first, so the copy step below picks up
+// the freshly built assets/demo.bundle.js.
+await esbuild({
+  entryPoints: [path.join(pkgDir, "src/demo.ts")],
+  bundle: true,
+  format: "iife",
+  target: "es2020",
+  minify: true,
+  outfile: path.join(pkgDir, "assets", "demo.bundle.js"),
+  logLevel: "info",
+});
+console.log("[site] bundled assets/demo.bundle.js");
 
 // Top-level files that must exist and get copied verbatim.
 const REQUIRED_FILES = ["index.html", "setup.html", "config.js", "site.js", "site.css", "privacy.html", "eula.html"];
@@ -42,5 +59,9 @@ if (!existsSync(assetsSrc)) {
   process.exit(1);
 }
 copyDir(assetsSrc, path.join(distDir, "assets"));
+
+// The interactive demo's fixture + board screenshot + card art.
+const demoSrc = path.join(pkgDir, "demo");
+if (existsSync(demoSrc)) copyDir(demoSrc, path.join(distDir, "demo"));
 
 console.log(`[site] wrote deployable static site: ${distDir}`);

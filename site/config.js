@@ -71,6 +71,22 @@ window.RIFTSIGHT_CONFIG = {
     poster: null,
   },
 
+  // ---- Interactive "See it in action" demo --------------------------------
+  // The live, hoverable product demo. `state` is a captured RiftSight
+  // OverlayState payload and `board` is the matching Rift Atlas screenshot;
+  // to swap in a real board, replace the two files in ./demo/ (see
+  // site/demo/README or the site README). `sourceRegion` (optional) is only
+  // needed if the screenshot is a full stream canvas with Rift Atlas in a
+  // sub-rectangle rather than the game frame itself; leave null for a
+  // full-frame screenshot. `tooltipScale` (optional) overrides the automatic
+  // stage-relative popup sizing.
+  interactiveDemo: {
+    state: "./demo/demo-state.json",
+    board: "./demo/demo-board.webp",
+    sourceRegion: null,
+    tooltipScale: null,
+  },
+
   // ---- Setup page ---------------------------------------------------------
   // `video` is the embed URL for the "Watch the setup" walkthrough. Use a
   // YouTube *embed* URL, e.g. "https://www.youtube.com/embed/VIDEO_ID".

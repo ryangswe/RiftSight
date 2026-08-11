@@ -92,28 +92,35 @@
                  CSS mockup now and is swapped for a real <video> automatically
                  when config.demo.video is set (see site.js + config.js). -->
             <div class="hero-visual">
-              <div class="demo-frame glow">
-                <div class="demo-topbar" aria-hidden="true">
-                  <span class="tl"></span><span class="tl"></span><span class="tl"></span>
-                  <span class="url">twitch.tv &middot; Rift Atlas stream</span>
-                  <span class="live"><span class="rec"></span> Live</span>
+              <div class="demo-frame glow stream-shell">
+                <div class="tw-topnav" aria-hidden="true">
+                  <div class="tw-nav-left">
+                    <span class="tw-logo"></span>
+                    <span class="tw-navlink">Following</span>
+                    <span class="tw-navlink">Browse</span>
+                  </div>
+                  <span class="tw-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4" stroke-linecap="round"/></svg> Search</span>
+                  <img class="tw-navavatar" src="./assets/stream-avatar.webp" alt="" width="28" height="28" />
                 </div>
-                <div class="demo-media" data-demo data-demo-label="RiftSight showing a full Riftbound card preview when a viewer hovers a card on a Rift Atlas Twitch stream." role="img" aria-label="A viewer hovers a card on a Rift Atlas Twitch stream and RiftSight shows the full card image.">
-                  <div class="demo-board" aria-hidden="true">
-                    <div class="demo-card"></div>
-                    <div class="demo-card"></div>
-                    <div class="demo-card is-target"></div>
-                    <div class="demo-card"></div>
-                    <div class="demo-card"></div>
+                <div class="tw-player">
+                  <div class="demo-media" data-demo data-demo-label="RiftSight showing a full Riftbound card preview when a viewer hovers a card on a Rift Atlas Twitch stream." role="img" aria-label="A viewer hovers a card on a Rift Atlas Twitch stream and RiftSight shows the full card image.">
+                    <div class="demo-board" aria-hidden="true">
+                      <div class="demo-card"></div>
+                      <div class="demo-card"></div>
+                      <div class="demo-card is-target"></div>
+                      <div class="demo-card"></div>
+                      <div class="demo-card"></div>
+                    </div>
+                    <div class="demo-popup" aria-hidden="true">
+                      <div class="art"></div>
+                      <div class="line"></div>
+                      <div class="line short"></div>
+                    </div>
+                    <svg class="demo-cursor" viewBox="0 0 24 24" fill="#fff" stroke="#0b0f16" stroke-width="1.4" aria-hidden="true">
+                      <path d="M4 2l7 18 2.5-7.5L21 10 4 2z" />
+                    </svg>
                   </div>
-                  <div class="demo-popup" aria-hidden="true">
-                    <div class="art"></div>
-                    <div class="line"></div>
-                    <div class="line short"></div>
-                  </div>
-                  <svg class="demo-cursor" viewBox="0 0 24 24" fill="#fff" stroke="#0b0f16" stroke-width="1.4" aria-hidden="true">
-                    <path d="M4 2l7 18 2.5-7.5L21 10 4 2z" />
-                  </svg>
+                  <span class="tw-livebadge" aria-hidden="true"><span class="dot"></span>Live</span>
                 </div>
               </div>
             </div>
@@ -157,38 +164,67 @@
           </div>
 
           <div class="showcase-media">
-            <!-- Large product demo. Same swap-in-a-video behavior as the hero. -->
-            <div class="demo-frame glow">
-              <div class="demo-topbar" aria-hidden="true">
-                <span class="tl"></span><span class="tl"></span><span class="tl"></span>
-                <span class="url">twitch.tv &middot; Rift Atlas stream</span>
-                <span class="live"><span class="rec"></span> Live</span>
+            <!-- Interactive product demo. The board is a STATIC screenshot; the
+                 real overlay-core CardHoverOverlay (site/src/demo.ts → the
+                 bundled demo.bundle.js) overlays invisible hitboxes from a
+                 captured board-state fixture and shows the real card previews
+                 on hover/tap. No relay, Twitch, or network beyond the local
+                 fixture + card images. Degrades to just the board with no JS. -->
+            <div class="demo-frame glow stream-shell">
+              <div class="tw-topnav" aria-hidden="true">
+                <div class="tw-nav-left">
+                  <span class="tw-logo"></span>
+                  <span class="tw-navlink">Following</span>
+                  <span class="tw-navlink">Browse</span>
+                </div>
+                <span class="tw-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4" stroke-linecap="round"/></svg> Search</span>
+                <img class="tw-navavatar" src="./assets/stream-avatar.webp" alt="" width="28" height="28" />
               </div>
-              <div class="demo-media" data-demo data-demo-static data-demo-label="RiftSight showing a full Riftbound card preview when a viewer hovers a card during a live Rift Atlas match on Twitch." role="img" aria-label="During a live Rift Atlas match on Twitch, a viewer hovers a card and RiftSight shows the full card image.">
-                <div class="demo-board" aria-hidden="true">
-                  <div class="demo-card"></div>
-                  <div class="demo-card"></div>
-                  <div class="demo-card"></div>
-                  <div class="demo-card is-target"></div>
-                  <div class="demo-card"></div>
-                  <div class="demo-card"></div>
+              <div class="tw-player">
+                <div class="rs-demo-stage" id="rs-demo-stage">
+                  <img
+                    class="rs-demo-board"
+                    id="rs-demo-board"
+                    src="./demo/demo-board.webp"
+                    alt="A Rift Atlas card game board as it appears on a Twitch stream"
+                    draggable="false"
+                  />
+                  <!-- Focusable, screen-reader-labelled per-card targets are injected here by demo.bundle.js. -->
+                  <div class="rs-demo-a11y" id="rs-demo-a11y" role="group" aria-label="Hoverable cards on the board"></div>
+                  <div class="rs-demo-tooltip" id="rs-demo-tooltip" aria-hidden="true"></div>
+                  <div class="rs-demo-hint" id="rs-demo-hint" aria-hidden="true">Try hovering over a card</div>
                 </div>
-                <div class="demo-popup" aria-hidden="true">
-                  <div class="art"></div>
-                  <div class="line"></div>
-                  <div class="line short"></div>
+                <span class="tw-livebadge" aria-hidden="true"><span class="dot"></span>Live</span>
+              </div>
+              <div class="tw-infobar" aria-hidden="true">
+                <img class="tw-savatar" src="./assets/stream-avatar.webp" alt="" width="42" height="42" />
+                <div class="tw-meta">
+                  <span class="tw-channel">JuicyKaraageNo1</span>
+                  <span class="tw-title">Riftbound — hover any card to preview it</span>
+                  <span class="tw-tags"><span class="tw-cat">Riftbound</span><span class="tw-lang">English</span></span>
                 </div>
-                <svg class="demo-cursor" viewBox="0 0 24 24" fill="#fff" stroke="#0b0f16" stroke-width="1.4" aria-hidden="true">
-                  <path d="M4 2l7 18 2.5-7.5L21 10 4 2z" />
-                </svg>
+                <div class="tw-actions">
+                  <div class="tw-btnrow">
+                    <span class="tw-btn icon-only follow" title="Follow"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-8-4.6-8-10.2A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 8 4.8C20 16.4 12 21 12 21z"/></svg></span>
+                    <span class="tw-btn icon-only bell" title="Notifications"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a5.5 5.5 0 0 0-5.5 5.5c0 4.4-2 5.5-2 5.5h15s-2-1.1-2-5.5A5.5 5.5 0 0 0 12 3z"/><path d="M10.2 18.5a2 2 0 0 0 3.6 0z"/></svg><svg class="tw-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round"/></svg></span>
+                    <span class="tw-btn continue"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7l4.5 3.5L12 4l4.5 6.5L21 7v11H3z"/></svg> Continue Sub</span>
+                    <span class="tw-btn gift"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 7h-3.1a2.4 2.4 0 1 0-4.6-.9 2.4 2.4 0 1 0-4.6.9H4v4h1v9h14v-9h1zm-8 0a1 1 0 1 1 1-1 1 1 0 0 1-1 1z"/></svg><span class="tw-btn-text">Gift a Sub</span><svg class="tw-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round"/></svg></span>
+                  </div>
+                  <div class="tw-metrics">
+                    <span class="tw-viewers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.4"/><path d="M5 20a7 7 0 0 1 14 0" stroke-linecap="round"/></svg>227</span>
+                    <span class="tw-uptime">1:56:19</span>
+                    <span class="tw-micon" title="Share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15V4M8 8l4-4 4 4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 13v6h14v-6" stroke-linecap="round"/></svg></span>
+                    <span class="tw-micon" title="More"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
           <div class="annotations">
-            <div class="annotation"><span class="num" aria-hidden="true">1</span><p><strong>Hover over a visible card</strong>Point at any card shown on the stream.</p></div>
+            <div class="annotation"><span class="num" aria-hidden="true">1</span><p><strong>Point at a visible card</strong>Hover it on desktop, or tap on mobile.</p></div>
             <div class="annotation"><span class="num" aria-hidden="true">2</span><p><strong>See the full card instantly</strong>The complete Riftbound card appears.</p></div>
-            <div class="annotation"><span class="num" aria-hidden="true">3</span><p><strong>Keep watching</strong>Move away and the preview disappears.</p></div>
+            <div class="annotation"><span class="num" aria-hidden="true">3</span><p><strong>Move on</strong>The preview disappears when you leave the card.</p></div>
           </div>
         </div>
       </section>
@@ -314,5 +350,9 @@
 
     <script src="./config.js"></script>
     <script src="./site.js"></script>
+    <!-- Interactive "See it in action" demo — bundled from site/src/demo.ts
+         (imports the real @riftsight/overlay-core). Deferred + lazy: it only
+         initializes when the section scrolls near the viewport. -->
+    <script src="./assets/demo.bundle.js" defer></script>
   </body>
 </html>
