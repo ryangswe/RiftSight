@@ -73,5 +73,5 @@ export const LINK_STATUS_LABEL: Record<LinkStatus, string> = {
   connected: "Connected", // callers append "as <displayName>" themselves
   "credential-expired": "Producer credential expired — reconnect to Twitch",
   "backend-unavailable": "RiftSight backend unavailable — try again shortly",
-  "not-in-beta": "This Twitch account isn't part of the RiftSight closed beta yet.",
+  "not-in-beta": "This Twitch account isn't part of the RiftSight closed beta yet. Email riftsight.support@gmail.com to request access.",
 };

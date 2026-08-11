@@ -8,7 +8,8 @@
     "relay",
     "overlay-core",
     "debug-viewer",
-    "twitch-extension"
+    "twitch-extension",
+    "site"
   ],
   "scripts": {
     "dev": "concurrently -n extension,relay,viewer -c blue,green,magenta \"npm run watch -w extension\" \"npm run dev -w relay\" \"npm run dev -w debug-viewer\"",

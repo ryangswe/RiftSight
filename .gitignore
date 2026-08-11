@@ -2,6 +2,8 @@ node_modules/
 dist/
 deploy/
 *.zip
+# …but the site serves the extension download as a committed static asset.
+!site/assets/riftsight-extension.zip
 *.log
 .DS_Store
 .idea/
