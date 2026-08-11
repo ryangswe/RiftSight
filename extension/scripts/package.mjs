@@ -65,14 +65,3 @@ try {
 
 console.log(`[package] wrote ${zipPath}`);
 console.log('[package] in chrome://extensions: remove the existing RiftSight entry, unzip this file, then "Load unpacked" the extracted riftsight-extension/ folder.');
-
-// Also refresh the copy the public site serves as its "Download the extension"
-// button (site/assets/riftsight-extension.zip), so the download always matches
-// the latest build. Skipped quietly if the site package isn't present.
-const repoRoot = path.dirname(packageDir);
-const siteAssetsDir = path.join(repoRoot, "site", "assets");
-if (existsSync(siteAssetsDir)) {
-  const siteZip = path.join(siteAssetsDir, "riftsight-extension.zip");
-  cpSync(zipPath, siteZip);
-  console.log(`[package] also updated the site download: ${siteZip}`);
-}
