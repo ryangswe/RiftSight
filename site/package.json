@@ -1,0 +1,10 @@
+{
+  "name": "@riftsight/site",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RiftSight public landing page — static, no framework.",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "npx http-server . -p 4321 -c-1"
+  }
+}

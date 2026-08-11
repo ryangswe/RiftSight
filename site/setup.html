@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Set up RiftSight — streamer setup &amp; installation</title>
+    <meta
+      name="description"
+      content="Set up RiftSight for your Rift Atlas stream in a few minutes. RiftSight is in beta — viewer access is open, streamer access is rolling out gradually. Watch the walkthrough or follow the written steps."
+    />
+    <link rel="canonical" href="https://riftsight.gg/setup" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="./assets/favicon-16.png" />
+    <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" />
+
+    <!-- Open Graph / Twitter -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="RiftSight" />
+    <meta property="og:title" content="Set up RiftSight — streamer setup & installation" />
+    <meta property="og:description" content="Set up RiftSight for your Rift Atlas stream in a few minutes. Watch the walkthrough or follow the written steps." />
+    <meta property="og:url" content="https://riftsight.gg/setup" />
+    <meta property="og:image" content="https://riftsight.gg/assets/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Set up RiftSight — streamer setup & installation" />
+    <meta name="twitter:description" content="Set up RiftSight for your Rift Atlas stream in a few minutes. Watch the walkthrough or follow the written steps." />
+    <meta name="twitter:image" content="https://riftsight.gg/assets/og-image.png" />
+
+    <link rel="stylesheet" href="./site.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <!-- =============================== HEADER =============================== -->
+    <header class="site-header">
+      <div class="wrap nav">
+        <a class="brand" href="./" aria-label="RiftSight home">
+          <img src="./assets/riftsight-logo.png" alt="" width="30" height="30" />
+          RiftSight
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a class="nav-page-link" href="./index.html#how">How it works</a>
+          <a class="nav-page-link" href="./index.html#demo">Demo</a>
+          <a class="nav-page-link" href="./setup.html" aria-current="page">Setup</a>
+          <a class="nav-page-link" href="./index.html#community">Community</a>
+          <a class="nav-icon" data-link="github" href="#" aria-label="RiftSight on GitHub" title="GitHub">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.11.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.4-5.27 5.69.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- =============================== SETUP HERO + ACCESS =============================== -->
+      <section class="setup-hero">
+        <div class="wrap wrap-narrow">
+          <span class="kicker">Streamer setup</span>
+          <h1>Set up RiftSight</h1>
+          <p class="lead">
+            RiftSight is currently in beta. Viewer access is open on supported streams, while streamer access is
+            being rolled out gradually as we monitor reliability. Setup only takes a few minutes.
+          </p>
+
+          <!-- BETA ACCESS GATE ————————————————————————————————————————————————
+               Temporary manual allowlist for the early beta. To open streamer
+               onboarding fully later, delete this .access-card block (the
+               install steps below stand on their own) and adjust the copy above. -->
+          <div class="access-card">
+            <div class="access-copy">
+              <strong>Requesting streamer access</strong>
+              <p>
+                During the beta we onboard streamers in small batches. Request access below and we'll be in touch —
+                then follow the setup steps on this page.
+              </p>
+            </div>
+            <div class="access-actions">
+              <a class="btn btn-primary" data-cta="request" href="#">Request Streamer Access</a>
+              <a class="sub-link" data-link="discord" data-requires="discord" href="#">Questions? Ask in Discord</a>
+            </div>
+          </div>
+          <!-- /BETA ACCESS GATE ———————————————————————————————————————————————— -->
+        </div>
+      </section>
+
+      <!-- =============================== WATCH THE SETUP =============================== -->
+      <section class="band" aria-labelledby="video-title">
+        <div class="wrap wrap-narrow">
+          <div class="section-head">
+            <span class="kicker">Watch the setup</span>
+            <h2 id="video-title">Follow the full setup in about 2 minutes.</h2>
+          </div>
+          <div class="video-block">
+            <!-- Replaced with a YouTube embed iframe when config.setup.video is set. -->
+            <div class="video-embed" data-setup-video>
+              <div class="video-placeholder">
+                <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+                <span class="vp-text">Setup walkthrough — coming soon</span>
+              </div>
+            </div>
+            <p class="video-caption">Prefer written instructions? Follow the steps below.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== WRITTEN GUIDE =============================== -->
+      <section class="band alt" aria-labelledby="guide-title">
+        <div class="wrap">
+          <div class="section-head">
+            <span class="kicker">Step by step</span>
+            <h2 id="guide-title">Install and configure RiftSight</h2>
+            <p>No coding, terminal, or technical knowledge required — just your browser.</p>
+          </div>
+
+          <div class="guide">
+            <!-- STEP 1 — Install the browser extension -->
+            <div class="guide-step full">
+              <div class="guide-body">
+                <span class="guide-num" aria-hidden="true">1</span>
+                <h3>Install the RiftSight browser extension</h3>
+                <p>
+                  Download RiftSight and unzip it. In Chrome, open <code>chrome://extensions</code>, turn on
+                  <strong>Developer mode</strong> (top-right), click <strong>Load unpacked</strong>, and select the
+                  unzipped folder. A purple RiftSight icon appears in your toolbar — pin it so it’s always visible.
+                </p>
+                <a class="btn btn-primary" data-cta="install" data-label-zip="Download the extension (ZIP)" data-label-store="Add to Chrome" href="#">Download the extension (ZIP)</a>
+              </div>
+              <div class="shot-gallery cols-2">
+                <figure>
+                  <div class="frame"><img src="./assets/setup/load-unpacked.png" alt="chrome://extensions with Developer mode on and the Load unpacked button" loading="lazy" /></div>
+                  <figcaption><b>Load unpacked</b> — enable Developer mode, then select the unzipped folder.</figcaption>
+                </figure>
+                <figure>
+                  <div class="frame"><img src="./assets/setup/browser-extension.png" alt="The RiftSight extension loaded and pinned in the Chrome toolbar" loading="lazy" /></div>
+                  <figcaption><b>Pin the icon</b> — RiftSight now sits in your Chrome toolbar.</figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <!-- STEP 2 — Connect Twitch -->
+            <div class="guide-step">
+              <div class="guide-body">
+                <span class="guide-num" aria-hidden="true">2</span>
+                <h3>Connect your Twitch account</h3>
+                <p>
+                  Click the RiftSight icon and choose <strong>Connect Twitch</strong>. Authorize RiftSight in the tab
+                  that opens, then return to the panel — it should read <strong>Connected as your Twitch username</strong>.
+                  Your password stays with Twitch.
+                </p>
+              </div>
+              <div class="guide-shot real">
+                <div class="fig"><img src="./assets/setup/connect-twitch.png" alt="The RiftSight extension panel showing the Connect Twitch action" loading="lazy" /></div>
+              </div>
+            </div>
+
+            <!-- STEP 3 — Open Rift Atlas & start publishing -->
+            <div class="guide-step">
+              <div class="guide-body">
+                <span class="guide-num" aria-hidden="true">3</span>
+                <h3>Open Rift Atlas and start publishing</h3>
+                <p>
+                  Open Rift Atlas as usual. Click the RiftSight icon — it reads <strong>Rift Atlas detected</strong>
+                  once you’re in a game. Click <strong>Start publishing</strong>; a green dot on the icon confirms it’s
+                  live. RiftSight remembers this and keeps working in the background whenever Rift Atlas is open.
+                </p>
+              </div>
+              <div class="guide-shot real">
+                <div class="fig"><img src="./assets/setup/start-publishing.png" alt="The RiftSight panel with Rift Atlas detected and the Start publishing action" loading="lazy" /></div>
+              </div>
+            </div>
+
+            <!-- STEP 4 — Activate on Twitch as a Video Overlay -->
+            <div class="guide-step full">
+              <div class="guide-body">
+                <span class="guide-num" aria-hidden="true">4</span>
+                <h3>Turn on RiftSight on your Twitch channel</h3>
+                <p>
+                  A one-time step on Twitch’s side: open your <strong>Creator Dashboard → Extensions → My Extensions</strong>,
+                  activate <strong>RiftSight</strong>, and assign it to a <strong>Video Overlay</strong> slot.
+                </p>
+              </div>
+              <div class="shot-gallery cols-2">
+                <figure>
+                  <div class="frame"><img src="./assets/setup/activate-riftsight.png" alt="Twitch Extensions manager: activating RiftSight and assigning it to a Video Overlay slot" loading="lazy" /></div>
+                  <figcaption><b>Activate RiftSight</b> — from Extensions → My Extensions.</figcaption>
+                </figure>
+                <figure>
+                  <div class="frame"><img src="./assets/setup/riftsight-activated.png" alt="RiftSight activated as a video overlay on the channel" loading="lazy" /></div>
+                  <figcaption><b>Assign a slot</b> — set it as a Video Overlay.</figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <!-- STEP 5 — Configure the overlay (real screenshots) -->
+            <div class="guide-step full">
+              <div class="guide-body">
+                <span class="guide-num" aria-hidden="true">5</span>
+                <h3>Configure the overlay</h3>
+                <p>
+                  From the same Extensions area, open RiftSight’s <strong>Configure</strong> page (the gear icon). It’s
+                  a short, three-part setup:
+                </p>
+                <ul class="guide-substeps">
+                  <li><b>Where Rift Atlas appears</b> — pick <b>Full screen</b>, choose a preset, or drag the box to match your layout. Drop in an OBS screenshot to line it up by eye (it’s never uploaded).</li>
+                  <li><b>Stream delay</b> — match your broadcast delay (None / 2s / 5s / 10s / custom). Not sure? Start with <b>None</b> and adjust later.</li>
+                  <li><b>Card popup size</b> — Smaller / Default / Larger, with a live preview of the exact size viewers see.</li>
+                </ul>
+                <p class="mini">Advanced settings are collapsed by default — most streamers never need to open them.</p>
+              </div>
+              <div class="shot-gallery">
+                <figure>
+                  <div class="frame"><img src="./assets/setup/config-region.png" alt="Configure step: matching the box to where Rift Atlas appears on the stream, with green hitbox outlines lining up with each card" loading="lazy" /></div>
+                  <figcaption><b>Where Rift Atlas appears</b> — align the box to your layout.</figcaption>
+                </figure>
+                <figure>
+                  <div class="frame"><img src="./assets/setup/config-delay.png" alt="Configure step: choosing the stream delay preset" loading="lazy" /></div>
+                  <figcaption><b>Stream delay</b> — match your broadcast delay.</figcaption>
+                </figure>
+                <figure>
+                  <div class="frame"><img src="./assets/setup/config-popup.png" alt="Configure step: choosing the card popup size with a live preview" loading="lazy" /></div>
+                  <figcaption><b>Card popup size</b> — set how large previews appear.</figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <!-- STEP 6 — Go live & check -->
+            <div class="guide-step">
+              <div class="guide-body">
+                <span class="guide-num" aria-hidden="true">6</span>
+                <h3>Go live and check it’s working</h3>
+                <p>
+                  Start your stream as normal. From a <strong>separate device or account</strong>, open your channel
+                  and hover over a visible card — the full art should pop up. That’s it: visible cards sync to viewers
+                  automatically, and hidden information is never exposed.
+                </p>
+              </div>
+              <div class="guide-shot real">
+                <div class="fig"><img src="./assets/setup/hover-preview.png" alt="A live Rift Atlas stream with a viewer hovering a card and RiftSight showing the full card image" loading="lazy" /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== GOOD TO KNOW (icon legend + FAQ) =============================== -->
+      <section class="band" aria-labelledby="icon-title">
+        <div class="wrap wrap-narrow">
+          <div class="section-head">
+            <span class="kicker">Good to know</span>
+            <h2 id="icon-title">What the RiftSight icon is telling you</h2>
+            <p>A small colored dot on the toolbar icon shows the status at a glance.</p>
+          </div>
+          <div class="legend">
+            <div class="row"><span class="sdot" style="color:#6b7488;background:#6b7488" aria-hidden="true"></span><span class="txt"><b>Gray</b> — not connected to Twitch yet</span></div>
+            <div class="row"><span class="sdot" style="color:#ffc94d;background:#ffc94d" aria-hidden="true"></span><span class="txt"><b>Yellow</b> — connected, but not publishing</span></div>
+            <div class="row"><span class="sdot" style="color:#7be08a;background:#7be08a" aria-hidden="true"></span><span class="txt"><b>Green</b> — actively publishing; all working</span></div>
+            <div class="row"><span class="sdot" style="color:#ff7a7a;background:#ff7a7a" aria-hidden="true"></span><span class="txt"><b>Red</b> — trouble reaching RiftSight (it keeps retrying)</span></div>
+          </div>
+
+          <div class="section-head" style="margin-top: var(--space-8)">
+            <h2>Common questions</h2>
+          </div>
+          <div class="faq">
+            <details>
+              <summary>Do I need to click “Start publishing” every time I stream?</summary>
+              <p class="faq-body">No. Once you’ve clicked it, RiftSight remembers. It survives closing Rift Atlas, reloading, and restarting your browser. It pauses when you’re not in a game and resumes automatically when you are.</p>
+            </details>
+            <details>
+              <summary>Do my viewers need to install anything?</summary>
+              <p class="faq-body">No. Only you (the streamer) install the browser extension. Viewers just switch on the RiftSight overlay on your channel. Twitch handles the rest for them.</p>
+            </details>
+            <details>
+              <summary>How do I get an OBS screenshot (for the Configure step)?</summary>
+              <div class="faq-body">
+                <p>In OBS, right-click inside the <strong>Preview</strong> canvas and choose <strong>Save Preview Screenshot</strong> — <em>not</em> “Save Source Screenshot”, which only grabs the Rift Atlas capture by itself and skips any webcam, chat box, or overlays layered around it. Save Preview Screenshot writes a PNG of your full composited canvas, exactly matching your stream output pixel-for-pixel — perfect for aligning the box in step 5.</p>
+                <img src="./assets/setup/obs-screenshot.jpg" alt="OBS Preview canvas right-click menu with Save Preview Screenshot highlighted" loading="lazy" />
+              </div>
+            </details>
+            <details>
+              <summary>Which browsers work?</summary>
+              <p class="faq-body"><strong>For the streamer</strong>: Chrome or another Chromium browser (Edge, Brave).</p>
+              <p class="faq-body"><strong>For the viewer</strong>: Any browser Twitch supports. No install required.</p>
+            </details>
+            <details>
+              <summary>Something looks wrong, or a card isn’t showing correctly.</summary>
+              <p class="faq-body">Reach out in our Discord with as much detail as you can — which card, what you expected versus what you saw, and roughly when it happened.</p>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <!-- =============================== TROUBLESHOOTING / SUPPORT =============================== -->
+      <section class="band status-band" aria-labelledby="support-title">
+        <div class="wrap">
+          <div class="status-card">
+            <span class="status-pill"><span class="dot" aria-hidden="true"></span> Support</span>
+            <h2 class="status-heading" id="support-title">Stuck on a step?</h2>
+            <p>
+              Something not working, or a step looks different for you? Ask in our Discord — we help streamers get set
+              up and sort out issues fast. Prefer the technical reference? The full docs live on GitHub.
+            </p>
+            <a class="btn btn-primary" data-link="discord" data-requires="discord" href="#">Get help on Discord</a>
+            <p class="status-note"><a data-link="github" href="#">Technical documentation on GitHub →</a></p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- =============================== FOOTER =============================== -->
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="footer-top">
+          <span class="footer-brand">
+            <img src="./assets/riftsight-logo.png" alt="" width="26" height="26" />
+            RiftSight
+          </span>
+          <nav class="footer-links" aria-label="Footer">
+            <a href="./setup.html">Setup</a>
+            <a data-link="github" href="#">Source</a>
+            <a data-link="discord" data-requires="discord" href="#">Discord</a>
+            <a data-link="privacy" href="./privacy.html">Privacy</a>
+            <a data-link="terms" href="./eula.html">Terms</a>
+            <a data-link="supportEmail" href="mailto:riftsight.support@gmail.com">Contact</a>
+          </nav>
+        </div>
+        <p class="footer-disclaimer">
+          RiftSight is an independent, fan-made community project and is not affiliated with or endorsed by
+          Riot Games, UVS Games, Twitch, or Rift Atlas. Riftbound and all related card imagery are the property
+          of their respective owners.
+        </p>
+        <p class="footer-copy">© <span data-year>2026</span> RiftSight</p>
+      </div>
+    </footer>
+
+    <script src="./config.js"></script>
+    <script src="./site.js"></script>
+  </body>
+</html>
