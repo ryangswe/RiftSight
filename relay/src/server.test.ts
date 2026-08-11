@@ -200,6 +200,7 @@ describe("relay server", () => {
           landscape: false,
           localWidth: 0.1,
           localHeight: 0.1,
+          fromDialog: false,
         },
       ],
     };

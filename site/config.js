@@ -29,12 +29,13 @@ window.RIFTSIGHT_CONFIG = {
     // streamer onboarding becomes fully open/self-service.
     streamerForm: "https://docs.google.com/forms/d/11h1xxnj0oEG12t8qde-a37nQxFkwaSj04fd5DBb54_8/viewform",
 
-    // How the Chrome extension is distributed. While the Web Store listing is
-    // in review, we ship a downloadable ZIP hosted on the site. When the store
-    // listing is approved, set `chromeWebStore` and the install button on the
-    // setup page automatically becomes an "Add to Chrome" button — no redesign.
-    extensionZip: "./assets/riftsight-extension.zip",
-    chromeWebStore: null,
+    // How the Chrome extension is distributed. Now that the Web Store listing
+    // is public, we link straight to it — the install button on the setup page
+    // reads "Add to Chrome" and points here. `extensionZip` is retired (the
+    // site no longer hands out a raw ZIP); the button logic in site.js still
+    // falls back to it if ever set again, so the field is kept but null.
+    chromeWebStore: "https://chromewebstore.google.com/detail/riftsight/ldnfcdenjcdhpefhggbbableckklgfmi",
+    extensionZip: null,
     twitchExtension: null,
 
     // Community & support.
