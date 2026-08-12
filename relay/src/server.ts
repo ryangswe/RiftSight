@@ -180,6 +180,12 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     return session.producer !== null && session.producer.readyState === WebSocket.OPEN;
   }
 
+  /** Tells the producer how many viewers are currently subscribed — the only thing the relay ever sends back to a producer socket (see ViewerCountMessageSchema's own doc comment for why). A no-op if there's no open producer connection to tell; callers don't need to check isProducerConnectionOpen themselves first. */
+  function sendViewerCount(session: Session): void {
+    if (!isProducerConnectionOpen(session)) return;
+    session.producer!.send(JSON.stringify({ type: "viewer-count", count: session.viewers.size }));
+  }
+
   /** Builds the TTL sweep's synthesized clear broadcast — reuses the expiring state's own protocolVersion/sourceViewport (both required, non-optional schema fields) rather than inventing placeholder values, and bumps sequence by one so a viewer watching the raw stream sees a normal-looking next state, not a repeat. */
   function synthesizeEmptyState(sessionId: string, previous: OverlayState): OverlayState {
     return {
@@ -230,6 +236,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     }
     session.producer = ws;
     logEvent("producer_connected", { channelId: binding.twitchUserId, broadcasterId: binding.broadcasterId });
+    sendViewerCount(session);
   }
 
   const wss = new WebSocketServer({
@@ -260,6 +267,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     const session = getSession(sessionId);
     session.viewers.add(ws);
     logEvent("viewer_admitted", { sessionId, viewers: session.viewers.size });
+    sendViewerCount(session);
     // Belt-and-suspenders alongside sweepStaleSessions above: the sweep
     // only runs every TTL_SWEEP_INTERVAL_MS, so a state that just crossed
     // STATE_TTL_MS moments ago (with no live producer) could still be
@@ -331,9 +339,15 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       // multiple producers targeting the same *unauthenticated* session.
       // Authenticated producers are arbitrated earlier, at connection time,
       // by bindAuthenticatedProducer's replace-on-reconnect.
+      const isNewProducerBinding = session.producer !== ws;
       session.producer = ws;
       session.latestState = overlayState;
       session.lastUpdatedAt = Date.now();
+      // Only on a genuinely new binding (not every publish from an
+      // already-bound producer) — sendViewerCount is idempotent either
+      // way, this just avoids a redundant message on every single publish
+      // tick from a producer that's been connected the whole time.
+      if (isNewProducerBinding) sendViewerCount(session);
 
       const encoded = JSON.stringify({ type: "overlay-state", payload: overlayState });
       let delivered = 0;
@@ -439,6 +453,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         }
         if (session.viewers.delete(ws)) {
           logEvent("viewer_disconnected", { sessionId, viewers: session.viewers.size });
+          sendViewerCount(session);
         }
       }
     });

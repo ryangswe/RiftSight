@@ -155,3 +155,15 @@ export const ServerMessageSchema = z.object({
   type: z.literal("overlay-state"),
   payload: OverlayStateSchema,
 });
+
+// Relay -> producer. Lets the streamer's own extension know how many
+// viewers are currently subscribed to their session — the producer socket
+// was, until this, send-only (the extension never listened for anything
+// coming back). Sent whenever the relay's own viewer count for that
+// session changes, and once on producer connect/reconnect so a fresh
+// connection doesn't have to wait for the next change to learn the
+// current count.
+export const ViewerCountMessageSchema = z.object({
+  type: z.literal("viewer-count"),
+  count: z.number().int().nonnegative(),
+});

@@ -37,7 +37,7 @@
 // incoming message to an already-registered listener isn't subject to the
 // same throttling a page's own self-scheduled timers are.
 
-import { ProducerMessageSchema, RELAY_URL, type OverlayState } from "@riftsight/protocol";
+import { ProducerMessageSchema, RELAY_URL, parseViewerCountMessage, type OverlayState } from "@riftsight/protocol";
 import {
   checkProducerCredentialStatus,
   disconnect,
@@ -81,10 +81,31 @@ const PRODUCER_REPLACED_CLOSE_CODE = 4409;
 // Toolbar-icon status indicator — a small always-visible status color, so
 // a streamer can tell at a glance whether RiftSight needs attention
 // without opening the popup. Deliberately derived from state this file
-// already tracks (relay connection `status`, plus link state/publishing
-// intent read through their own modules) rather than adding a new state
-// machine — this is a pure projection of existing truth, not a new source
-// of it.
+// already tracks (relay connection `status`, link state, publishing
+// intent, and presence — all read through their own modules) rather than
+// adding a new state machine — this is a pure projection of existing
+// truth, not a new source of it.
+//
+// "publishing" (green) requires RiftAtlas presence to be "active", not
+// just publishing *intent* — a real incident showed why: intent alone
+// only means the streamer clicked the button at some point, and stays
+// true even if the extension's content script was never actually running
+// (e.g. RiftAtlas was already open in a tab before a fresh
+// install/reload, so the content script never got injected into it —
+// content scripts don't retroactively attach to already-open tabs). That
+// left the badge reporting green — Twitch linked, relay connected,
+// intent on — while nothing was actually being detected or published at
+// all, and the streamer had no way to tell short of opening the popup.
+// Gating on presence closes that specific gap: if intent is on but
+// presence isn't "active", the badge now falls to the same "connected-idle"
+// yellow as "haven't started yet" instead of falsely claiming success. This
+// still isn't a full guarantee: it says nothing about whether detection is
+// *correct* (a partial/silent detection bug — real example: RiftAtlas
+// changing the chain-zone card id format — leaves presence "active" and
+// the badge green while some cards are quietly missing), and nothing
+// about whether any viewer is actually receiving/rendering anything
+// downstream, since there's no feedback channel from viewer back to
+// producer today. Both are real, known gaps, not yet addressed here.
 //
 // Drawn as a small circle composited onto the base icon via
 // OffscreenCanvas + chrome.action.setIcon, NOT chrome.action's own
@@ -162,7 +183,7 @@ function updateBadge(): void {
     badgeStatus = "not-connected";
   } else if (status !== "connected") {
     badgeStatus = "error";
-  } else if (getPublishingIntent()) {
+  } else if (getPublishingIntent() && getCurrentPresenceStatus(Date.now()) === "active") {
     badgeStatus = "publishing";
   } else {
     badgeStatus = "connected-idle";
@@ -238,6 +259,16 @@ let statusCheckedThisStreak = false;
 // once a newer one exists; sending both back-to-back on reconnect would
 // just make the viewer briefly render outdated data.
 let latestUnsent: OverlayState | null = null;
+
+// The relay's own count of viewers currently subscribed to this session —
+// pushed by the relay, not polled; see ViewerCountMessageSchema. undefined
+// means "unknown" (no producer connection has ever told us), deliberately
+// distinct from 0 ("we were told, and it's genuinely nobody") — the popup
+// only shows a number once this has a real value, rather than flashing a
+// misleading "0 viewers" before the first message ever arrives. Reset to
+// undefined on every disconnect for the same reason: a stale last-known
+// count from a prior connection is no longer something we can vouch for.
+let latestViewerCount: number | undefined;
 
 function send(state: OverlayState): void {
   if (socket && socket.readyState === WebSocket.OPEN) {
@@ -401,10 +432,16 @@ function openSocket(url: string): void {
     }
   });
 
+  ws.addEventListener("message", (event) => {
+    const count = parseViewerCountMessage(String(event.data));
+    if (count !== undefined) latestViewerCount = count;
+  });
+
   ws.addEventListener("close", (event) => {
     socket = null;
     status = "disconnected";
     wasReplacedByAnotherProducer = event.code === PRODUCER_REPLACED_CLOSE_CODE;
+    latestViewerCount = undefined; // no longer connected — a stale last-known count isn't something we can vouch for
     updateBadge();
 
     // A "replaced" close is a real, already-known reason — never
@@ -440,7 +477,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "get-status") {
-    sendResponse({ status, hasUnsent: latestUnsent !== null, replaced: wasReplacedByAnotherProducer });
+    sendResponse({ status, hasUnsent: latestUnsent !== null, replaced: wasReplacedByAnotherProducer, viewerCount: latestViewerCount });
     return true;
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseServerMessage } from "./message-parsing.js";
+import { parseServerMessage, parseViewerCountMessage } from "./message-parsing.js";
 
 const validState = {
   protocolVersion: 1,
@@ -98,5 +98,29 @@ describe("parseServerMessage", () => {
     // return value here, so a rejection simply means the caller doesn't
     // touch the DOM at all that round, not that it clears anything.
     expect(parseServerMessage(serverMessage(validState))).toEqual(validState);
+  });
+});
+
+describe("parseViewerCountMessage", () => {
+  it("accepts a well-formed viewer-count message and returns the count", () => {
+    expect(parseViewerCountMessage(JSON.stringify({ type: "viewer-count", count: 3 }))).toBe(3);
+  });
+
+  it("accepts a zero count", () => {
+    expect(parseViewerCountMessage(JSON.stringify({ type: "viewer-count", count: 0 }))).toBe(0);
+  });
+
+  it("rejects malformed JSON without throwing", () => {
+    expect(() => parseViewerCountMessage("{not json")).not.toThrow();
+    expect(parseViewerCountMessage("{not json")).toBeUndefined();
+  });
+
+  it("rejects a negative or non-integer count", () => {
+    expect(parseViewerCountMessage(JSON.stringify({ type: "viewer-count", count: -1 }))).toBeUndefined();
+    expect(parseViewerCountMessage(JSON.stringify({ type: "viewer-count", count: 1.5 }))).toBeUndefined();
+  });
+
+  it("rejects an unrecognized message type", () => {
+    expect(parseViewerCountMessage(JSON.stringify({ type: "overlay-state", payload: {} }))).toBeUndefined();
   });
 });
