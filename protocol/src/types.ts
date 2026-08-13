@@ -6,6 +6,7 @@ import type {
   OwnerSchema,
   TwitchSubscribeMessageSchema,
   VisibilitySchema,
+  ViewerCountMessageSchema,
   ViewportSchema,
   ZoneSchema,
 } from "./schema.js";
@@ -18,3 +19,4 @@ export type Viewport = z.infer<typeof ViewportSchema>;
 export type OverlayCard = z.infer<typeof OverlayCardSchema>;
 export type OverlayState = z.infer<typeof OverlayStateSchema>;
 export type TwitchSubscribeMessage = z.infer<typeof TwitchSubscribeMessageSchema>;
+export type ViewerCountMessage = z.infer<typeof ViewerCountMessageSchema>;

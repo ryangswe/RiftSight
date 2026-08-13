@@ -82,6 +82,21 @@ function syncPublishToggleUI(): void {
   publishToggleButton.textContent = cachedPublishingIntent ? "Stop publishing" : "Start publishing";
 }
 
+/**
+ * The relay-reported viewer count, appended to the "Publishing." status
+ * line — the strongest signal this popup can show that things are working
+ * end to end, since it means someone else's browser is actually receiving
+ * data, not just that this extension believes it's sending. Undefined
+ * (never omit vs. "0 viewers" as if they're the same thing) means no
+ * producer connection has told us yet — nothing appended in that case,
+ * rather than a misleading "0 viewers" flash before the first real count
+ * arrives.
+ */
+function describeViewerCount(count: number | undefined): string {
+  if (count === undefined) return "";
+  return ` — ${count} viewer${count === 1 ? "" : "s"}`;
+}
+
 // Approximates content/inventory.ts's isPublishing()/publishedSnapshotCount()
 // via presence instead of a dedicated message — those two live purely in
 // publisher.ts's content-script-local state and were never exposed over
@@ -99,12 +114,12 @@ function updatePublishStatus(): void {
     return;
   }
 
-  safeSendMessage<{ status?: string; replaced?: boolean }>({ type: "get-status" })
+  safeSendMessage<{ status?: string; replaced?: boolean; viewerCount?: number }>({ type: "get-status" })
     .then((response) => {
       publishStatusEl.textContent = response?.replaced
         ? describeStreamerError("producer-replaced")
         : response?.status === "connected"
-          ? "Publishing. Relay: connected"
+          ? `Publishing. Relay: connected${describeViewerCount(response.viewerCount)}`
           : response?.status === "disconnected"
             ? describeStreamerError("relay-reconnecting")
             : idlePublishingMessage(lastKnownPresenceStatus);

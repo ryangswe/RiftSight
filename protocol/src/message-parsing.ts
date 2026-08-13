@@ -1,4 +1,4 @@
-import { ServerMessageSchema } from "./schema.js";
+import { ServerMessageSchema, ViewerCountMessageSchema } from "./schema.js";
 import type { OverlayState } from "./types.js";
 
 /**
@@ -27,4 +27,29 @@ export function parseServerMessage(raw: string): OverlayState | undefined {
   }
 
   return result.data.payload;
+}
+
+/**
+ * Producer-side counterpart to parseServerMessage — the only message shape
+ * the relay currently ever sends back to a producer socket. Same
+ * fail-closed contract: undefined for anything that isn't valid JSON or
+ * doesn't match the schema, with a concise (never raw-payload) console
+ * warning.
+ */
+export function parseViewerCountMessage(raw: string): number | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.warn("[protocol] dropped a non-JSON producer-bound message");
+    return undefined;
+  }
+
+  const result = ViewerCountMessageSchema.safeParse(parsed);
+  if (!result.success) {
+    console.warn("[protocol] rejected an invalid producer-bound message", result.error.issues);
+    return undefined;
+  }
+
+  return result.data.count;
 }

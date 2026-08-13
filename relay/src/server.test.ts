@@ -91,6 +91,50 @@ describe("relay server", () => {
     lateViewer.close();
   });
 
+  it("sends the producer a viewer-count message when a viewer subscribes", async () => {
+    server = await createRelayServer(0);
+    const url = `ws://localhost:${server.port}`;
+
+    const producer = new WebSocket(url);
+    await waitForOpen(producer);
+    producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("viewer-count-session", 1) }));
+    await wait(50); // let the initial publish (and its own count:0 message) settle before listening
+
+    const received = waitForMessage(producer);
+    const viewer = new WebSocket(url);
+    await waitForOpen(viewer);
+    viewer.send(JSON.stringify({ type: "subscribe", sessionId: "viewer-count-session" }));
+
+    const message = (await received) as { type: string; count: number };
+    expect(message).toEqual({ type: "viewer-count", count: 1 });
+
+    viewer.close();
+    producer.close();
+  });
+
+  it("sends the producer an updated viewer-count message when a viewer disconnects", async () => {
+    server = await createRelayServer(0);
+    const url = `ws://localhost:${server.port}`;
+
+    const producer = new WebSocket(url);
+    await waitForOpen(producer);
+    producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("viewer-count-disconnect", 1) }));
+    await wait(50);
+
+    const viewer = new WebSocket(url);
+    await waitForOpen(viewer);
+    viewer.send(JSON.stringify({ type: "subscribe", sessionId: "viewer-count-disconnect" }));
+    await wait(50);
+
+    const received = waitForMessage(producer);
+    viewer.close();
+
+    const message = (await received) as { type: string; count: number };
+    expect(message).toEqual({ type: "viewer-count", count: 0 });
+
+    producer.close();
+  });
+
   it("does not broadcast a message with an unsupported protocol version", async () => {
     server = await createRelayServer(0);
     const url = `ws://localhost:${server.port}`;
