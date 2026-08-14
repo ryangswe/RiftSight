@@ -82,6 +82,9 @@ const VIEWER_COUNT_HEARTBEAT_MS = 5_000;
 /** How stale a remote instance's viewer-count report may be before it stops counting toward the sum a local producer is told. Three missed heartbeats — generous enough that one delayed/dropped pub/sub message doesn't flap the streamer's count, short enough that a crashed replica's viewers disappear from the count within ~15s rather than forever. */
 const REMOTE_VIEWER_COUNT_FRESHNESS_MS = 15_000;
 
+/** How often this instance emits a `capacity_snapshot` log line — a regular sample of its own concurrency (sessions/viewers/producers) for a capacity dashboard (see docs/scaling-plan.md Stage 4). A minute is plenty of resolution for capacity-pressure trends and keeps it to ~1 line/min/instance; it's a periodic time-series sample (emitted even at zero, so a flat idle line is visible rather than an ambiguous gap), not an on-change event. */
+const CAPACITY_SNAPSHOT_INTERVAL_MS = 60_000;
+
 interface ProducerBinding {
   broadcasterId: number;
   twitchUserId: string;
@@ -150,6 +153,13 @@ export interface RelayConfig {
    */
   viewerCountFanout?: { heartbeatMs: number; freshnessMs: number };
   /**
+   * Overrides CAPACITY_SNAPSHOT_INTERVAL_MS. Test-only escape hatch, same
+   * shape as stateTtl/viewerCountFanout above — every real caller omits it
+   * and gets the real ~60s default; a test wanting to observe a snapshot
+   * without waiting a minute sets a small interval.
+   */
+  capacitySnapshot?: { intervalMs: number };
+  /**
    * Cross-instance live-state fan-out — see state-bus.ts. Omitted (every
    * real caller today, since index.ts only constructs one when REDIS_URL is
    * set, and every existing test) defaults to a fresh in-process
@@ -178,6 +188,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   const ttlSweepIntervalMs = config.stateTtl?.sweepIntervalMs ?? TTL_SWEEP_INTERVAL_MS;
   const viewerCountHeartbeatMs = config.viewerCountFanout?.heartbeatMs ?? VIEWER_COUNT_HEARTBEAT_MS;
   const remoteViewerCountFreshnessMs = config.viewerCountFanout?.freshnessMs ?? REMOTE_VIEWER_COUNT_FRESHNESS_MS;
+  const capacitySnapshotIntervalMs = config.capacitySnapshot?.intervalMs ?? CAPACITY_SNAPSHOT_INTERVAL_MS;
   const stateBus = config.stateBus ?? createLocalStateBus();
   // Per-attachRelayWebSocketServer-call identity, used three ways: to let
   // this instance's own StateBus subscription no-op on messages it just
@@ -394,6 +405,24 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       if (session.viewers.size > 0) publishLocalViewerCount(sessionId, session);
     }
   }, viewerCountHeartbeatMs);
+
+  /**
+   * Periodic capacity sample for an operator dashboard (Stage 4): this
+   * instance's own concurrency, distinguishable per replica by the
+   * instanceId every log line already carries. `viewers`/`producers` are
+   * summed across sessions rather than per-session so one line answers "how
+   * loaded is this replica right now"; `sessions` is the map size, which is
+   * also the memory-footprint signal the reaping sweep keeps bounded.
+   */
+  const capacitySnapshotInterval = setInterval(() => {
+    let viewers = 0;
+    let producers = 0;
+    for (const session of sessions.values()) {
+      viewers += session.viewers.size;
+      if (isProducerConnectionOpen(session)) producers += 1;
+    }
+    logEvent("capacity_snapshot", { sessions: sessions.size, viewers, producers });
+  }, capacitySnapshotIntervalMs);
 
   /**
    * Applies bus traffic that originated on a DIFFERENT instance — see
@@ -702,6 +731,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         // runner) alive/hanging past this close() resolving.
         clearInterval(ttlSweepInterval);
         clearInterval(viewerCountHeartbeatInterval);
+        clearInterval(capacitySnapshotInterval);
         // Only removes THIS server's own handler from the bus — a shared
         // injected bus (two createRelayServer calls sharing one
         // LocalStateBus, as the cross-instance tests do) keeps working for

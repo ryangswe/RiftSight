@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { createRelayServer, type RelayServer } from "./server.js";
 import { createLocalStateBus } from "./state-bus.js";
@@ -650,6 +650,73 @@ describe("relay server", () => {
       viewer.close();
       await waitForSessionCount(server, 0);
       expect(server.debugSessionCount()).toBe(0);
+    });
+  });
+
+  describe("capacity snapshot", () => {
+    /** Captures every capacity_snapshot log line while active, restoring console.log after. */
+    function captureCapacitySnapshots(): { snapshots: Record<string, unknown>[]; restore: () => void } {
+      const snapshots: Record<string, unknown>[] = [];
+      const spy = vi.spyOn(console, "log").mockImplementation((line?: unknown) => {
+        if (typeof line !== "string") return;
+        try {
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          if (parsed["event"] === "capacity_snapshot") snapshots.push(parsed);
+        } catch {
+          // non-JSON console.log (e.g. "[relay] listening ...") — ignore
+        }
+      });
+      return { snapshots, restore: () => spy.mockRestore() };
+    }
+
+    it("periodically logs this instance's session/viewer/producer counts, tagged with the instanceId", async () => {
+      const { snapshots, restore } = captureCapacitySnapshots();
+      try {
+        server = await createRelayServer(0, { capacitySnapshot: { intervalMs: 30 } });
+        const url = `ws://localhost:${server.port}`;
+
+        const producer = new WebSocket(url);
+        await waitForOpen(producer);
+        producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("capacity", 1) }));
+
+        const viewerA = new WebSocket(url);
+        await waitForOpen(viewerA);
+        viewerA.send(JSON.stringify({ type: "subscribe", sessionId: "capacity" }));
+        const viewerB = new WebSocket(url);
+        await waitForOpen(viewerB);
+        viewerB.send(JSON.stringify({ type: "subscribe", sessionId: "capacity" }));
+
+        await wait(150); // several snapshot intervals — assert on the steady-state last one
+        const last = snapshots[snapshots.length - 1];
+        expect(last).toMatchObject({ event: "capacity_snapshot", sessions: 1, viewers: 2, producers: 1 });
+        expect(typeof last!["instanceId"]).toBe("string"); // the replica-distinguishing field rides along on every line
+
+        viewerA.close();
+        viewerB.close();
+        producer.close();
+      } finally {
+        restore();
+      }
+    });
+
+    it("counts a session with viewers but no producer as zero producers", async () => {
+      const { snapshots, restore } = captureCapacitySnapshots();
+      try {
+        server = await createRelayServer(0, { capacitySnapshot: { intervalMs: 30 } });
+        const url = `ws://localhost:${server.port}`;
+
+        const viewer = new WebSocket(url);
+        await waitForOpen(viewer);
+        viewer.send(JSON.stringify({ type: "subscribe", sessionId: "viewer-only" }));
+
+        await wait(120);
+        const last = snapshots[snapshots.length - 1];
+        expect(last).toMatchObject({ event: "capacity_snapshot", sessions: 1, viewers: 1, producers: 0 });
+
+        viewer.close();
+      } finally {
+        restore();
+      }
     });
   });
 

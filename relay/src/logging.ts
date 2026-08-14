@@ -33,6 +33,12 @@ const ALLOWED_LOG_FIELDS = new Set([
   "linkId",
   "reason",
   "count",
+  // capacity_snapshot aggregates (see server.ts) — this instance's session
+  // count and its summed viewer/producer counts across all sessions. Plain
+  // integers, nothing session- or user-identifying. ("viewers" is already
+  // allowlisted above for the per-session count.)
+  "sessions",
+  "producers",
   "bytes",
   "cards",
   "sequence",

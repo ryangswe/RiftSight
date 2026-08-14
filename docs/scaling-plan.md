@@ -192,11 +192,15 @@ materialized.
 
 Structured JSON logging (`relay/src/logging.ts`) already exists and Railway
 aggregates logs across replicas automatically, so this mostly carries over
-unchanged. The instance-identifier field is **done** (every log line now
-carries an 8-char per-boot `instanceId` — see the operator runbook's log
-table). Still worth adding later: a basic dashboard/alert on concurrent
-viewer/producer counts so capacity pressure is visible before it becomes an
-incident rather than after.
+unchanged. Two pieces are now **done**: the instance-identifier field
+(every log line carries an 8-char per-boot `instanceId`) and the raw
+capacity feed — each instance emits a periodic `capacity_snapshot` log
+event (`sessions`/`viewers`/`producers`, ~60s, per-`instanceId`; see the
+operator runbook's log table). What remains is purely operator-side and
+platform-specific: standing up a dashboard/alert **on top of** that feed
+(e.g. a log-based metric on `capacity_snapshot.viewers` with a threshold
+alert) so capacity pressure is visible before it becomes an incident. No
+further relay code is needed for it.
 
 ## Stage 5 — Testing and rollout
 
