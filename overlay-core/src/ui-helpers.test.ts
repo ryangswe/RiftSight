@@ -1,4 +1,4 @@
-import { SOURCE_REGION_PRESETS } from "@riftsight/overlay-core";
+import { SOURCE_REGION_PRESETS } from "./source-region.js";
 import { describe, expect, it } from "vitest";
 import {
   DELAY_PRESETS_MS,

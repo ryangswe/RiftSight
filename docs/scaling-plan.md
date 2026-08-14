@@ -232,3 +232,14 @@ dependency on approval status. Given approval could still land in as few as
 those *finished* by then either — but that's fine, since single-instance
 keeps working fine for normal traffic in the meantime and nothing here
 blocks release.
+
+## Interaction with YouTube support (youtube-live milestone)
+
+The youtube-subscribe viewer path (see docs/youtube-release-notes.md)
+rides the same admitViewer/state-bus machinery this plan scaled: snapshot
+fallback covers late joiners on fresh replicas, viewer counts aggregate
+fleet-wide, and anonymous YouTube viewers count toward the same per-session
+caps and capacity_snapshot numbers. Nothing in the Stage 2+ operator
+checklist changes; the only new capacity consideration is that YouTube
+viewers connect as browser-extension sockets (one per viewer, ~20s pings)
+rather than Twitch-iframe sockets — same order of cost per viewer.

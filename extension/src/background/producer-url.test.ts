@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveProducerWsUrl } from "./producer-url.js";
+import { resolveProducerWsUrl, resolveViewerWsUrl } from "./producer-url.js";
 
 describe("resolveProducerWsUrl", () => {
   it("returns the fallback relay URL when there's no stored credential", () => {
@@ -32,5 +32,22 @@ describe("resolveProducerWsUrl", () => {
     expect(() => resolveProducerWsUrl({ backendUrl: "not a url", credential: "tok123", fallbackRelayUrl: "ws://localhost:8787" })).toThrow(
       /not a valid URL/
     );
+  });
+});
+
+describe("resolveViewerWsUrl", () => {
+  it("falls back to the local relay when no backend is configured (development)", () => {
+    expect(resolveViewerWsUrl({ backendUrl: "", fallbackRelayUrl: "ws://localhost:8787" })).toBe("ws://localhost:8787");
+  });
+
+  it("derives wss on the plain '/' path from an https backend origin — no credential, not /ws/producer", () => {
+    const url = resolveViewerWsUrl({ backendUrl: "https://beta.riftsight.example.com", fallbackRelayUrl: "ws://localhost:8787" });
+    expect(url).toBe("wss://beta.riftsight.example.com/");
+    expect(url).not.toContain("credential");
+    expect(url).not.toContain("/ws/producer");
+  });
+
+  it("throws on a malformed backend URL", () => {
+    expect(() => resolveViewerWsUrl({ backendUrl: "not a url", fallbackRelayUrl: "ws://x" })).toThrow();
   });
 });

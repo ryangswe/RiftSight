@@ -4,14 +4,27 @@
 // normal viewers never load this page at all. Same mock/real branching
 // convention as src/viewer/main.ts.
 import {
+  DEFAULT_OVERLAY_CONFIG,
   FULL_FRAME_SOURCE_REGION,
+  MAX_DELAY_MS,
+  OVERLAY_CONFIG_VERSION,
   SOURCE_REGION_PRESETS,
+  applyEdgeDrag,
   computeHitboxStyle,
   computeTooltipMaxSize,
+  describeTooltipScale,
   hitboxClassName,
   isValidSourceRegion,
   mapBoundsToSourceRegion,
   mapSizeToSourceRegion,
+  matchDelayPreset,
+  matchRegionPreset,
+  msToSeconds,
+  parseOverlayConfig,
+  secondsToMs,
+  serializeOverlayConfig,
+  type OverlayConfig,
+  type RegionEdge,
   type SourceRegion,
 } from "@riftsight/overlay-core";
 import type { OverlayCard } from "@riftsight/protocol";
@@ -19,23 +32,6 @@ import { MockOverlayStateSource } from "../platform/mock-state-source.js";
 import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";
 import { TwitchOverlayStateSource } from "../platform/twitch-state-source.js";
-import {
-  DEFAULT_OVERLAY_CONFIG,
-  MAX_DELAY_MS,
-  OVERLAY_CONFIG_VERSION,
-  parseOverlayConfig,
-  serializeOverlayConfig,
-  type OverlayConfig,
-} from "./overlay-config.js";
-import {
-  applyEdgeDrag,
-  describeTooltipScale,
-  matchDelayPreset,
-  matchRegionPreset,
-  msToSeconds,
-  secondsToMs,
-  type RegionEdge,
-} from "./ui-helpers.js";
 
 const isMock = window.__RIFTSIGHT_MOCK__ === true;
 const MOCK_STORAGE_KEY = "riftsight-mock-broadcaster-config";

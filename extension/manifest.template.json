@@ -20,8 +20,9 @@
   "background": {
     "service_worker": "dist/background/background.js"
   },
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "scripting"],
   "host_permissions": ["ws://localhost/*", "http://localhost:8788/*"],
+  "optional_host_permissions": ["*://www.youtube.com/*"],
   "content_scripts": [
     {
       "matches": ["*://play.riftatlas.com/*"],

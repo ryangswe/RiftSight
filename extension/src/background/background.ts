@@ -38,6 +38,7 @@
 // same throttling a page's own self-scheduled timers are.
 
 import { ProducerMessageSchema, RELAY_URL, parseViewerCountMessage, type OverlayState } from "@riftsight/protocol";
+import { parseOverlayConfig, toWireOverlayConfig, type OverlayConfig } from "@riftsight/overlay-core";
 import {
   checkProducerCredentialStatus,
   disconnect,
@@ -50,7 +51,10 @@ import {
 import { credentialNeedsReconnect, shouldCheckCredentialStatus } from "./connection-diagnostics.js";
 import { getCurrentPresenceStatus, isCurrentlyGoneForAutoStop, recordHeartbeat } from "./presence-tracker.js";
 import { getPublishingIntent, loadPersistedPublishingIntent, setPublishingIntent } from "./publishing-intent.js";
-import { resolveProducerWsUrl } from "./producer-url.js";
+import { resolveProducerWsUrl, resolveViewerWsUrl } from "./producer-url.js";
+import { ViewerRelayManager } from "./viewer-relay.js";
+import { syncYouTubeRegistration } from "./youtube-enable.js";
+import { YOUTUBE_VIEWER_PORT, type ViewerPortMessageFromContent, type ViewerPortMessageToContent } from "../shared/viewer-port.js";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -278,6 +282,124 @@ function send(state: OverlayState): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Broadcaster calibration (the calibration page writes it; see
+// calibration/main.ts) — attached to every outgoing producer state so it
+// reaches viewers through the relay (OverlayState.overlayConfig).
+// `undefined` means "never saved": nothing is attached in that case, so a
+// streamer who has never opened the calibration page publishes states
+// byte-identical to before this existed — deliberately NOT the parsed
+// defaults, which would (among other things) ship recommendedDelayMs: 0
+// and override viewers' own platform-default delay.
+// ---------------------------------------------------------------------------
+const STORAGE_KEY_OVERLAY_CONFIG = "riftsight.overlayConfig";
+
+let storedOverlayConfig: OverlayConfig | undefined;
+
+async function loadStoredOverlayConfig(): Promise<void> {
+  const stored = (await chrome.storage.local.get(STORAGE_KEY_OVERLAY_CONFIG)) as Record<string, unknown>;
+  const raw = stored[STORAGE_KEY_OVERLAY_CONFIG];
+  storedOverlayConfig = typeof raw === "string" ? parseOverlayConfig(raw) : undefined;
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !(STORAGE_KEY_OVERLAY_CONFIG in changes)) return;
+  const raw = changes[STORAGE_KEY_OVERLAY_CONFIG]?.newValue;
+  storedOverlayConfig = typeof raw === "string" ? parseOverlayConfig(raw) : undefined;
+});
+
+function withOverlayConfig(state: OverlayState): OverlayState {
+  if (!storedOverlayConfig) return state;
+  return { ...state, overlayConfig: toWireOverlayConfig(storedOverlayConfig) };
+}
+
+// ---------------------------------------------------------------------------
+// Viewer side: YouTube tabs connect long-lived ports; the manager owns one
+// relay socket per distinct channel. See shared/viewer-port.ts for the
+// contract and viewer-relay.ts for the refcounting.
+// ---------------------------------------------------------------------------
+/** Which channel each connected viewer port is currently watching (null = port open but not on a live watch page right now). */
+const viewerPortChannels = new Map<chrome.runtime.Port, string | null>();
+/** Reverse index: which ports to fan a channel's events out to. */
+const channelViewerPorts = new Map<string, Set<chrome.runtime.Port>>();
+
+function postToChannelPorts(channelId: string, message: ViewerPortMessageToContent): void {
+  const ports = channelViewerPorts.get(channelId);
+  if (!ports) return;
+  for (const port of ports) {
+    try {
+      port.postMessage(message);
+    } catch {
+      // Port died mid-post (tab closing) — its onDisconnect handler owns cleanup.
+    }
+  }
+}
+
+const viewerRelay = new ViewerRelayManager(
+  resolveViewerWsUrl({ backendUrl: __RIFTSIGHT_BACKEND_URL__, fallbackRelayUrl: RELAY_URL }),
+  // Development builds (no backend configured) speak the local relay's
+  // plain-subscribe dev path with the channel id as the session id — the
+  // whole pipeline stays live-testable against a scratch publisher without
+  // the DB mapping. Any configured backend gets the real youtube path.
+  (channelId) =>
+    __RIFTSIGHT_BACKEND_URL__ ? { type: "youtube-subscribe", channelId } : { type: "subscribe", sessionId: channelId },
+  {
+    onState: (channelId, state) => postToChannelPorts(channelId, { type: "overlay-state", state }),
+    onRejected: (channelId, reason) => postToChannelPorts(channelId, { type: "subscribe-rejected", reason }),
+    onStatusChange: (channelId, relayStatus) => postToChannelPorts(channelId, { type: "relay-status", status: relayStatus }),
+  }
+);
+
+/** Moves a port's watch from its previous channel (if any) to `next` (null = watching nothing), keeping the manager's refcounts and the reverse index in step. */
+function switchViewerPortChannel(port: chrome.runtime.Port, next: string | null): void {
+  const previous = viewerPortChannels.get(port) ?? null;
+  if (previous === next) return;
+
+  if (previous !== null) {
+    channelViewerPorts.get(previous)?.delete(port);
+    if (channelViewerPorts.get(previous)?.size === 0) channelViewerPorts.delete(previous);
+    viewerRelay.release(previous);
+  }
+
+  viewerPortChannels.set(port, next);
+  if (next === null) return;
+
+  let ports = channelViewerPorts.get(next);
+  if (!ports) {
+    ports = new Set();
+    channelViewerPorts.set(next, ports);
+  }
+  ports.add(port);
+
+  const { lastState } = viewerRelay.acquire(next);
+  // A channel that's already live hands the newcomer its current board
+  // immediately — same "don't wait for the next producer tick" behavior
+  // the relay's own admitViewer gives the socket itself.
+  if (lastState) {
+    try {
+      port.postMessage({ type: "overlay-state", state: lastState } satisfies ViewerPortMessageToContent);
+    } catch {
+      // port died — onDisconnect cleanup owns it
+    }
+  }
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== YOUTUBE_VIEWER_PORT) return;
+  viewerPortChannels.set(port, null);
+
+  port.onMessage.addListener((message: ViewerPortMessageFromContent) => {
+    if (message?.type === "watch-channel") {
+      switchViewerPortChannel(port, typeof message.channelId === "string" ? message.channelId : null);
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    switchViewerPortChannel(port, null);
+    viewerPortChannels.delete(port);
+  });
+});
+
 /**
  * The most recent real OverlayState this worker has forwarded from the
  * content script — used only to synthesize an explicit clear (see
@@ -469,11 +591,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "overlay-state") {
     const parsed = ProducerMessageSchema.safeParse(message);
     if (parsed.success) {
-      lastKnownState = parsed.data.payload;
+      // Calibration is attached HERE, the single choke point every
+      // published state passes through — the content script stays
+      // config-oblivious, and maybeAutoStopOnGoneReceived's synthesized
+      // clear inherits it automatically via lastKnownState.
+      const state = withOverlayConfig(parsed.data.payload);
+      lastKnownState = state;
       autoStoppedForCurrentGap = false;
-      send(parsed.data.payload);
+      send(state);
     }
     return false;
+  }
+
+  if (message?.type === "get-last-state") {
+    // Calibration page's live-preview feed — the last state this worker
+    // forwarded (config already attached). Same already-sanitized data
+    // every viewer receives; nothing here a viewer couldn't see.
+    sendResponse({ state: lastKnownState });
+    return true;
   }
 
   if (message?.type === "get-status") {
@@ -532,7 +667,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-void Promise.all([loadPersistedLinkState(), loadPersistedPublishingIntent()]).then(updateBadge);
+void Promise.all([loadPersistedLinkState(), loadPersistedPublishingIntent(), loadStoredOverlayConfig()]).then(updateBadge);
+
+// Registration must reconverge with permission state on every worker boot
+// AND on any permission change from either direction — the popup granting
+// it, or the user revoking it in chrome://extensions (onRemoved is the
+// only signal for that one). See youtube-enable.ts.
+void syncYouTubeRegistration();
+chrome.permissions.onAdded.addListener(() => void syncYouTubeRegistration());
+chrome.permissions.onRemoved.addListener(() => void syncYouTubeRegistration());
 
 // Explicit calls above cover every transition this file directly drives
 // (relay open/close, connect() starting, and the immediate result of a
@@ -576,6 +719,9 @@ chrome.alarms.create(RECONNECT_CHECK_ALARM_NAME, { periodInMinutes: RECONNECT_CH
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== RECONNECT_CHECK_ALARM_NAME) return;
   connect();
+  // Same wake, second job: give any rejected-but-still-watched viewer
+  // channels their once-a-minute retry (see ViewerRelayManager.reconcile).
+  viewerRelay.reconcile();
 });
 
 connect();

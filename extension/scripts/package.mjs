@@ -24,12 +24,15 @@ const packageDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const REQUIRED_FILES = [
   "manifest.json",
   "popup.html",
+  "calibration.html",
   "icons/icon16.png",
   "icons/icon48.png",
   "icons/icon128.png",
   "dist/background/background.js",
+  "dist/content/youtube-viewer.js",
   "dist/content/inventory.js",
   "dist/popup/main.js",
+  "dist/calibration/main.js",
 ];
 
 const missing = REQUIRED_FILES.filter((file) => !existsSync(path.join(packageDir, file)));

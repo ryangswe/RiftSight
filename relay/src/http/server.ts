@@ -13,10 +13,11 @@ import type { LinkHandoffStore } from "../auth/link-handoff.js";
 import type { TwitchOAuthConfig } from "../auth/twitch-oauth.js";
 import { handleAuthCallback, handleAuthStart } from "./routes/auth-twitch.js";
 import { handleLinkStatus, handleProducerCredentialStatus, handleRotateProducerCredential } from "./routes/producer-credential.js";
+import { handleClearYouTubeChannel, handleGetYouTubeChannel, handleSetYouTubeChannel } from "./routes/youtube-channel.js";
 import { handleHealth, handleReady } from "./routes/health.js";
 import { jsonResponse, type HttpRequest, type HttpResponse } from "./types.js";
 import { logEvent } from "../logging.js";
-import { createRateLimiter, CREDENTIAL_ROTATE_LIMIT, OAUTH_START_LIMIT, PRODUCER_STATUS_LIMIT } from "../rate-limit.js";
+import { createRateLimiter, CREDENTIAL_ROTATE_LIMIT, OAUTH_START_LIMIT, PRODUCER_STATUS_LIMIT, YOUTUBE_CHANNEL_LIMIT } from "../rate-limit.js";
 
 export interface HttpRouterDeps {
   db: DbClient;
@@ -75,6 +76,7 @@ export function createHttpRouter(deps: HttpRouterDeps): (req: IncomingMessage, r
   const oauthStartLimiter = createRateLimiter(OAUTH_START_LIMIT);
   const credentialRotateLimiter = createRateLimiter(CREDENTIAL_ROTATE_LIMIT);
   const producerStatusLimiter = createRateLimiter(PRODUCER_STATUS_LIMIT);
+  const youtubeChannelLimiter = createRateLimiter(YOUTUBE_CHANNEL_LIMIT);
 
   return (req, res) => {
     const httpRequest = toHttpRequest(req);
@@ -149,6 +151,21 @@ export function createHttpRouter(deps: HttpRouterDeps): (req: IncomingMessage, r
       void handleProducerCredentialStatus(httpRequest, deps.db).then((response) => {
         const body = response.status === 200 ? (JSON.parse(response.body) as { status: string }).status : undefined;
         logEvent("producer_status_check", { reason: body ?? "missing-bearer-credential", status: response.status });
+        sendHttpResponse(res, response);
+      });
+      return;
+    }
+
+    if (pathname === "/api/youtube-channel" && (httpRequest.method === "GET" || httpRequest.method === "POST" || httpRequest.method === "DELETE")) {
+      if (!youtubeChannelLimiter.tryConsume(remoteAddress)) {
+        logEvent("youtube_channel_request", { reason: "rate-limited", remoteAddress });
+        sendHttpResponse(res, RATE_LIMITED);
+        return;
+      }
+      const handler =
+        httpRequest.method === "GET" ? handleGetYouTubeChannel : httpRequest.method === "POST" ? handleSetYouTubeChannel : handleClearYouTubeChannel;
+      void handler(httpRequest, deps.db).then((response) => {
+        logEvent("youtube_channel_request", { method: httpRequest.method, status: response.status });
         sendHttpResponse(res, response);
       });
       return;

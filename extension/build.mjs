@@ -72,8 +72,10 @@ function writeManifest() {
 const options = {
   entryPoints: [
     path.join(packageDir, "src/content/inventory.ts"),
+    path.join(packageDir, "src/content/youtube-viewer.ts"),
     path.join(packageDir, "src/background/background.ts"),
     path.join(packageDir, "src/popup/main.ts"),
+    path.join(packageDir, "src/calibration/main.ts"),
   ],
   bundle: true,
   outdir: path.join(packageDir, "dist"),

@@ -1,4 +1,4 @@
-import { parseServerMessage, type OverlayState } from "@riftsight/protocol";
+import { parseServerMessage, parseViewerServerMessage, type OverlayState, type ViewerServerEvent } from "@riftsight/protocol";
 
 export type RelaySocketStatus = "connecting" | "connected" | "disconnected";
 
@@ -32,7 +32,19 @@ export class RelaySocket {
     private readonly relayUrl: string,
     private readonly buildSubscribeMessage: () => unknown,
     private readonly onStatusChange: (status: RelaySocketStatus) => void = () => {},
-    private readonly createSocket: (url: string) => WebSocketLike = (url) => new WebSocket(url)
+    private readonly createSocket: (url: string) => WebSocketLike = (url) => new WebSocket(url),
+    /**
+     * Opts this socket into the FULL viewer vocabulary
+     * (parseViewerServerMessage: state + subscribe-rejected + ping)
+     * instead of the legacy overlay-state-only parseServerMessage. State
+     * events still fan out to subscribe() listeners identically either
+     * way — this callback additionally receives every event, so a host
+     * that needs to react to a rejection (stand down instead of waiting
+     * forever) or observe pings can. Omitted (every pre-existing consumer:
+     * Twitch viewer, mock source), parsing behavior is byte-identical to
+     * before this parameter existed.
+     */
+    private readonly onServerEvent?: (event: ViewerServerEvent) => void
   ) {}
 
   connect(): void {
@@ -54,7 +66,17 @@ export class RelaySocket {
     });
 
     ws.addEventListener("message", (event) => {
-      const state = parseServerMessage(String((event as MessageEvent).data));
+      const raw = String((event as MessageEvent).data);
+      if (this.onServerEvent) {
+        const serverEvent = parseViewerServerMessage(raw);
+        if (!serverEvent) return;
+        if (serverEvent.kind === "state") {
+          for (const listener of this.listeners) listener(serverEvent.state);
+        }
+        this.onServerEvent(serverEvent);
+        return;
+      }
+      const state = parseServerMessage(raw);
       if (!state) return;
       for (const listener of this.listeners) listener(state);
     });

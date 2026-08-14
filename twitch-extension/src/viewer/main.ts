@@ -21,7 +21,7 @@ import {
   type SourceRegion,
 } from "@riftsight/overlay-core";
 import { TimeWindowBuffer, type OverlayState } from "@riftsight/protocol";
-import { MAX_DELAY_MS, parseOverlayConfig, type OverlayConfig } from "../config/overlay-config.js";
+import { MAX_DELAY_MS, parseOverlayConfig, type OverlayConfig } from "@riftsight/overlay-core";
 import { MockOverlayStateSource, type MockConnectionStatus } from "../platform/mock-state-source.js";
 import { getConfiguredRelayUrl } from "../platform/relay-url.js";
 import { buildPlatformContext } from "../platform/twitch-context.js";

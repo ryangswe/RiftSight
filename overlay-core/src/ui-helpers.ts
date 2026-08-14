@@ -1,4 +1,4 @@
-import type { SourceRegion } from "@riftsight/overlay-core";
+import type { SourceRegion } from "./source-region.js";
 
 // Pure UI-boundary helpers for the config page's redesigned controls — kept
 // separate from main.ts (thin DOM glue, not unit-tested, same convention as

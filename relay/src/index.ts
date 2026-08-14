@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { validateEnv } from "./env.js";
 import { createDbClient } from "./db/client.js";
+import { findBroadcasterByYouTubeChannel } from "./db/broadcasters.js";
 import { loadMigrations, runMigrations } from "./db/migrate.js";
 import { createStateStore } from "./auth/state-store.js";
 import { createLinkHandoffStore } from "./auth/link-handoff.js";
@@ -110,6 +111,15 @@ const { close: closeWebSocketServer } = attachRelayWebSocketServer(httpServer, {
   // requirements.
   producerAuth: { db, required: config.mode === "closed-beta" },
   stateBus: redisStateBus,
+  // The youtube-subscribe path's channel->session mapping, backed by the
+  // broadcaster row's streamer-claimed youtube_channel_id (see
+  // /api/youtube-channel). Wired in every mode — with no claims in the DB
+  // it simply resolves nothing, and the relay's own cache bounds the query
+  // rate (see YOUTUBE_RESOLUTION_CACHE_MS).
+  resolveYouTubeChannel: async (youtubeChannelId) => {
+    const broadcaster = await findBroadcasterByYouTubeChannel(db, youtubeChannelId);
+    return broadcaster ? broadcaster.twitchUserId : null;
+  },
 });
 
 httpServer.on("error", (err) => {

@@ -1054,3 +1054,227 @@ describe("relay server", () => {
     });
   });
 });
+
+describe("youtube-subscribe path", () => {
+  const CHANNEL = "UC" + "a".repeat(22);
+  const OTHER_CHANNEL = "UC" + "b".repeat(22);
+  const SESSION = "streamer-session";
+
+  function youtubeSubscribe(channelId: string): string {
+    return JSON.stringify({ type: "youtube-subscribe", channelId });
+  }
+
+  it("resolves a claimed channel to its broadcaster session and delivers state", async () => {
+    server = await createRelayServer(0, {
+      resolveYouTubeChannel: async (channelId) => (channelId === CHANNEL ? SESSION : null),
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+
+    const producer = new WebSocket(url);
+    await waitForOpen(producer);
+    producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState(SESSION, 1) }));
+    await wait(50);
+
+    const viewer = new WebSocket(url);
+    await waitForOpen(viewer);
+    const received = waitForMessageMatching<{ type: string; payload?: { sessionId: string } }>(viewer, (m) => m.type === "overlay-state");
+    viewer.send(youtubeSubscribe(CHANNEL));
+
+    const message = await received;
+    expect(message.payload?.sessionId).toBe(SESSION);
+
+    viewer.close();
+    producer.close();
+  });
+
+  it("rejects an unmapped channel with subscribe-rejected unknown-channel", async () => {
+    server = await createRelayServer(0, { resolveYouTubeChannel: async () => null });
+    const viewer = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    await waitForOpen(viewer);
+    const received = waitForMessageMatching<{ type: string; reason?: string }>(viewer, (m) => m.type === "subscribe-rejected");
+    viewer.send(youtubeSubscribe(CHANNEL));
+    expect((await received).reason).toBe("unknown-channel");
+    viewer.close();
+  });
+
+  it("rejects when no resolver is configured at all", async () => {
+    server = await createRelayServer(0);
+    const viewer = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    await waitForOpen(viewer);
+    const received = waitForMessageMatching<{ type: string; reason?: string }>(viewer, (m) => m.type === "subscribe-rejected");
+    viewer.send(youtubeSubscribe(CHANNEL));
+    expect((await received).reason).toBe("unknown-channel");
+    viewer.close();
+  });
+
+  it("rejects a malformed channel id with invalid-channel instead of silent schema failure", async () => {
+    server = await createRelayServer(0, { resolveYouTubeChannel: async () => SESSION });
+    const viewer = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    await waitForOpen(viewer);
+    const received = waitForMessageMatching<{ type: string; reason?: string }>(viewer, (m) => m.type === "subscribe-rejected");
+    viewer.send(youtubeSubscribe("@notachannelid"));
+    expect((await received).reason).toBe("invalid-channel");
+    viewer.close();
+  });
+
+  it("caches resolutions so a second viewer doesn't re-query", async () => {
+    let calls = 0;
+    server = await createRelayServer(0, {
+      resolveYouTubeChannel: async () => {
+        calls += 1;
+        return SESSION;
+      },
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+
+    for (let i = 0; i < 2; i += 1) {
+      const viewer = new WebSocket(url);
+      await waitForOpen(viewer);
+      viewer.send(youtubeSubscribe(CHANNEL));
+      await wait(50);
+      viewer.close();
+    }
+    expect(calls).toBe(1);
+  });
+
+  it("does not cache resolver errors — the next attempt asks again", async () => {
+    let calls = 0;
+    server = await createRelayServer(0, {
+      resolveYouTubeChannel: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("transient db blip");
+        return SESSION;
+      },
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+
+    const first = new WebSocket(url);
+    await waitForOpen(first);
+    const firstReply = waitForMessageMatching<{ type: string; reason?: string }>(first, (m) => m.type === "subscribe-rejected");
+    first.send(youtubeSubscribe(CHANNEL));
+    expect((await firstReply).reason).toBe("unknown-channel");
+    first.close();
+
+    const producer = new WebSocket(url);
+    await waitForOpen(producer);
+    producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState(SESSION, 1) }));
+    await wait(50);
+
+    const second = new WebSocket(url);
+    await waitForOpen(second);
+    const secondReply = waitForMessageMatching<{ type: string }>(second, (m) => m.type === "overlay-state");
+    second.send(youtubeSubscribe(CHANNEL));
+    await secondReply;
+    expect(calls).toBe(2);
+    second.close();
+    producer.close();
+  });
+
+  it("rejects with at-capacity once the per-session viewer cap is reached", async () => {
+    server = await createRelayServer(0, {
+      resolveYouTubeChannel: async () => SESSION,
+      maxViewersPerSession: 1,
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+
+    const first = new WebSocket(url);
+    await waitForOpen(first);
+    first.send(youtubeSubscribe(CHANNEL));
+    await wait(50);
+
+    const second = new WebSocket(url);
+    await waitForOpen(second);
+    const rejection = waitForMessageMatching<{ type: string; reason?: string }>(second, (m) => m.type === "subscribe-rejected");
+    second.send(youtubeSubscribe(OTHER_CHANNEL === CHANNEL ? CHANNEL : CHANNEL));
+    expect((await rejection).reason).toBe("at-capacity");
+
+    first.close();
+    second.close();
+  });
+
+  it("sends keepalive pings to youtube viewers but never to legacy viewers", async () => {
+    server = await createRelayServer(0, {
+      resolveYouTubeChannel: async () => SESSION,
+      viewerPing: { intervalMs: 40 },
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+
+    const legacyMessages: Array<{ type: string }> = [];
+    const legacy = new WebSocket(url);
+    await waitForOpen(legacy);
+    legacy.on("message", (raw: RawData) => legacyMessages.push(JSON.parse(raw.toString()) as { type: string }));
+    legacy.send(JSON.stringify({ type: "subscribe", sessionId: SESSION }));
+
+    const youtubeViewer = new WebSocket(url);
+    await waitForOpen(youtubeViewer);
+    const ping = waitForMessageMatching<{ type: string }>(youtubeViewer, (m) => m.type === "ping");
+    youtubeViewer.send(youtubeSubscribe(CHANNEL));
+    await ping; // received within a few 40ms intervals or the test times out
+
+    await wait(100); // several ping intervals' worth of chances for the legacy socket
+    expect(legacyMessages.some((m) => m.type === "ping")).toBe(false);
+
+    legacy.close();
+    youtubeViewer.close();
+  });
+
+  it("preserves overlayConfig through the TTL sweep's synthesized empty state", async () => {
+    server = await createRelayServer(0, {
+      stateTtl: { ttlMs: 80, sweepIntervalMs: 20 },
+    });
+    const url = `ws://127.0.0.1:${server.port}`;
+    const overlayConfig = { sourceRegion: { x: 0.1, y: 0.2, width: 0.5, height: 0.6 }, tooltipScale: 1.1 };
+
+    const viewer = new WebSocket(url);
+    await waitForOpen(viewer);
+    viewer.send(JSON.stringify({ type: "subscribe", sessionId: SESSION }));
+    await wait(50);
+
+    const producer = new WebSocket(url);
+    await waitForOpen(producer);
+    const firstDelivery = waitForMessageMatching<{ type: string }>(viewer, (m) => m.type === "overlay-state");
+    producer.send(JSON.stringify({ type: "overlay-state", payload: { ...sampleState(SESSION, 1), overlayConfig } }));
+    await firstDelivery;
+
+    const cleared = waitForMessageMatching<{ type: string; payload?: { cards: unknown[]; overlayConfig?: unknown } }>(
+      viewer,
+      (m) => m.type === "overlay-state" && (m as { payload?: { cards: unknown[] } }).payload?.cards.length === 0
+    );
+    producer.close(); // sweep only expires once the producer connection is gone
+
+    const message = await cleared;
+    expect(message.payload?.overlayConfig).toEqual(overlayConfig);
+    viewer.close();
+  });
+
+  it(
+    "closes connections over the per-IP rate limit with code 4429",
+    async () => {
+      server = await createRelayServer(0, {
+        wsConnectionLimit: { maxEvents: 2, windowMs: 60_000 },
+      });
+      const url = `ws://127.0.0.1:${server.port}`;
+
+      const first = new WebSocket(url);
+      const second = new WebSocket(url);
+      // try/finally so a mid-test failure can't leave sockets open and
+      // cascade into the afterEach server.close() hanging too.
+      try {
+        await waitForOpen(first);
+        await waitForOpen(second);
+
+        const third = new WebSocket(url);
+        const closeCode = await new Promise<number>((resolve) => third.on("close", (code: number) => resolve(code)));
+        expect(closeCode).toBe(4429);
+      } finally {
+        first.close();
+        second.close();
+      }
+    },
+    // Three sequential real-socket round trips — comfortably fast solo,
+    // but the default 5s proved marginal under full-suite parallel load
+    // (worker CPU contention), which is a scheduling artifact, not a
+    // behavior being tested.
+    15_000
+  );
+});

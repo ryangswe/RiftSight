@@ -49,6 +49,10 @@ const ALLOWED_LOG_FIELDS = new Set([
   // distinguishes interleaved replica logs in a shared stream (see
   // docs/scaling-plan.md Stage 4), never anything user- or session-derived.
   "instanceId",
+  // A streamer-claimed public YouTube channel id ("UC..." — printed on
+  // every YouTube watch page, never viewer-identifying) — logged by the
+  // youtube-subscribe resolution path and the /api/youtube-channel routes.
+  "youtubeChannelId",
   "path",
   "method",
   "status",

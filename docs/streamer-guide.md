@@ -123,3 +123,44 @@ No — just your browser, with RiftAtlas open and the RiftSight extension instal
 
 **What browsers does this work on?**
 For you as the streamer: Chrome or another Chromium-based browser (Edge, Brave), since the extension you install in Step 1 only comes in that format. For your viewers: any browser Twitch itself supports — they're just watching a normal Twitch extension, no install required.
+
+## Streaming on YouTube
+
+RiftSight also works for YouTube live streams — the difference is where the
+overlay lives. On Twitch, Twitch itself shows the overlay to every viewer
+with nothing to install. YouTube has no equivalent extension platform, so
+each YouTube viewer needs the RiftSight browser extension installed (the
+same one you use), with YouTube enabled in it. Your side stays almost
+identical: keep publishing from Rift Atlas exactly as today, plus a
+one-time setup.
+
+### One-time YouTube setup (streamer)
+
+1. **Claim your channel.** Open the RiftSight popup → YouTube section →
+   paste your channel ID (starts with `UC…`) or a
+   `youtube.com/channel/UC…` URL, then **Save channel**. Find your ID in
+   YouTube Studio under *Settings → Channel → Advanced settings*. Handles
+   (`@name`) don't work here — it has to be the `UC…` id. This claim is
+   what lets viewers' extensions find your game session from your watch
+   page. One channel per RiftSight account; saving a new one replaces the
+   old.
+2. **Calibrate the overlay.** Popup → **Calibrate overlay…** opens a
+   calibration page: drag the rectangle to where Rift Atlas sits in your
+   stream layout (same idea as the Twitch config page — while you're
+   publishing, your real card hitboxes preview live inside the
+   rectangle). Set a **recommended stream delay** matching your usual
+   YouTube latency (Normal latency is typically 8–15s, Low 4–8s) — it
+   seeds each viewer's delay control, and they can fine-tune from the
+   overlay's gear button. Click **Save calibration**; it publishes with
+   your next board update.
+
+Note the calibration page configures YouTube (and any future non-Twitch)
+viewers only — your Twitch Extension settings live where they always have.
+
+### What your YouTube viewers do
+
+They install the RiftSight extension, click **Enable RiftSight on
+YouTube** in its popup once, and open your live stream. The overlay
+appears automatically on live watch pages of your claimed channel and
+shows nothing anywhere else. VODs aren't supported yet — live streams
+only.

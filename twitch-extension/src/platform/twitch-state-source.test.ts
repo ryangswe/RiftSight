@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FakeSocket } from "./fake-socket.js";
+import { FakeSocket } from "@riftsight/overlay-core";
 import { TwitchOverlayStateSource } from "./twitch-state-source.js";
 
 afterEach(() => {

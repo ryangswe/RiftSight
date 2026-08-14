@@ -39,3 +39,32 @@ export function resolveProducerWsUrl(options: ResolveProducerWsUrlOptions): stri
   producerUrl.searchParams.set("credential", options.credential);
   return producerUrl.toString();
 }
+
+export interface ResolveViewerWsUrlOptions {
+  /** __RIFTSIGHT_BACKEND_URL__ — an http(s) origin, not already a ws(s) URL. */
+  backendUrl: string;
+  /** RELAY_URL from @riftsight/protocol — used when no backend origin is configured (development builds against a local relay). */
+  fallbackRelayUrl: string;
+}
+
+/**
+ * The viewer-side counterpart to resolveProducerWsUrl above, for the
+ * background's YouTube viewer sockets: same backend origin, but the plain
+ * "/" WebSocket path (viewer subscribe messages travel over the default
+ * endpoint, not /ws/producer) and no credential — viewers are anonymous by
+ * design. No configured backend means a development build: fall back to
+ * the local relay, where the dev-mode plain-subscribe path lives.
+ */
+export function resolveViewerWsUrl(options: ResolveViewerWsUrlOptions): string {
+  if (!options.backendUrl) return options.fallbackRelayUrl;
+
+  let backendOrigin: URL;
+  try {
+    backendOrigin = new URL(options.backendUrl);
+  } catch {
+    throw new Error(`RIFTSIGHT_BACKEND_URL is not a valid URL: "${options.backendUrl}"`);
+  }
+
+  const wsProtocol = backendOrigin.protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProtocol}//${backendOrigin.host}/`;
+}

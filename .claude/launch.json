@@ -30,6 +30,18 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": ["-c", "cd debug-viewer && npm run dev"],
       "port": 8788
+    },
+    {
+      "name": "yt-harness",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "http-server",
+        "/private/tmp/claude-501/-Users-rdclder-Workspace-RiftSight/23c18425-66bc-4010-8262-2ff7ac736380/scratchpad/yt-harness",
+        "-p",
+        "8099",
+        "-c-1"
+      ],
+      "port": 8099
     }
   ]
 }

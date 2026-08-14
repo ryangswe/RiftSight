@@ -1,6 +1,6 @@
 import { SubscribeMessageSchema, type OverlayState } from "@riftsight/protocol";
 import type { OverlayStateSource, ViewerPlatformContext } from "@riftsight/overlay-core";
-import { RelaySocket, type RelaySocketStatus, type WebSocketLike } from "./relay-socket.js";
+import { RelaySocket, type RelaySocketStatus, type WebSocketLike } from "@riftsight/overlay-core";
 
 export type MockConnectionStatus = RelaySocketStatus;
 

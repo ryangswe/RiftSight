@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseServerMessage, parseViewerCountMessage } from "./message-parsing.js";
+import { parseServerMessage, parseViewerCountMessage, parseViewerServerMessage } from "./message-parsing.js";
 
 const validState = {
   protocolVersion: 1,
@@ -122,5 +122,50 @@ describe("parseViewerCountMessage", () => {
 
   it("rejects an unrecognized message type", () => {
     expect(parseViewerCountMessage(JSON.stringify({ type: "overlay-state", payload: {} }))).toBeUndefined();
+  });
+});
+
+describe("parseViewerServerMessage", () => {
+  it("returns a state event for an overlay-state message", () => {
+    const event = parseViewerServerMessage(serverMessage(validState));
+    expect(event).toBeDefined();
+    expect(event?.kind).toBe("state");
+    if (event?.kind === "state") {
+      expect(event.state.sessionId).toBe("local-debug");
+    }
+  });
+
+  it("returns a rejected event with its reason", () => {
+    const event = parseViewerServerMessage(JSON.stringify({ type: "subscribe-rejected", reason: "unknown-channel" }));
+    expect(event).toEqual({ kind: "rejected", reason: "unknown-channel" });
+  });
+
+  it("returns a ping event", () => {
+    expect(parseViewerServerMessage(JSON.stringify({ type: "ping" }))).toEqual({ kind: "ping" });
+  });
+
+  it("fails closed on non-JSON, unknown types, and malformed payloads", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(parseViewerServerMessage("not json {")).toBeUndefined();
+      expect(parseViewerServerMessage(JSON.stringify({ type: "viewer-count", count: 3 }))).toBeUndefined();
+      expect(parseViewerServerMessage(serverMessage({ ...validState, protocolVersion: 2 }))).toBeUndefined();
+      expect(parseViewerServerMessage(JSON.stringify({ type: "subscribe-rejected", reason: "nope" }))).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("enforces the schema-level privacy boundary on the state payload, same as parseServerMessage", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const leaked = {
+        ...validState,
+        cards: [{ ...validState.cards[0], visibility: "hidden", cardId: "OGN-213" }],
+      };
+      expect(parseViewerServerMessage(serverMessage(leaked))).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

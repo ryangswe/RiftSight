@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RiftSight — Overlay Calibration</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0b0f16;
+        color: #e6e6e6;
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .wrap {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 24px 20px 48px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+      }
+      .subtitle {
+        color: #8b8b98;
+        margin: 0 0 20px;
+        font-size: 13px;
+      }
+      .section-title {
+        font-weight: 600;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #a78bfa;
+        margin: 22px 0 8px;
+      }
+      .hint {
+        font-size: 12px;
+        color: #8b8b98;
+        margin: 6px 0;
+      }
+      /* 16:9 stream-canvas preview — the same visual language as the
+         Twitch config page's calibration preview. */
+      #region-preview {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background:
+          linear-gradient(rgba(124, 58, 237, 0.08), rgba(124, 58, 237, 0.08)),
+          repeating-conic-gradient(#141926 0% 25%, #0e1220 0% 50%) 0 0 / 40px 40px;
+        border: 1px solid #241d3a;
+        border-radius: 6px;
+        overflow: hidden;
+        touch-action: none;
+      }
+      #region-rect {
+        position: absolute;
+        border: 2px solid #6cf;
+        background: rgba(102, 204, 255, 0.08);
+        cursor: move;
+        box-sizing: border-box;
+      }
+      .resize-handle {
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        background: #6cf;
+        border-radius: 50%;
+      }
+      .resize-handle.corner-tl { top: 0; left: 0; transform: translate(-50%, -50%); cursor: nwse-resize; }
+      .resize-handle.edge-t { top: 0; left: 50%; transform: translate(-50%, -50%); cursor: ns-resize; }
+      .resize-handle.corner-tr { top: 0; left: 100%; transform: translate(-50%, -50%); cursor: nesw-resize; }
+      .resize-handle.edge-r { top: 50%; left: 100%; transform: translate(-50%, -50%); cursor: ew-resize; }
+      .resize-handle.corner-br { top: 100%; left: 100%; transform: translate(-50%, -50%); cursor: nwse-resize; }
+      .resize-handle.edge-b { top: 100%; left: 50%; transform: translate(-50%, -50%); cursor: ns-resize; }
+      .resize-handle.corner-bl { top: 100%; left: 0; transform: translate(-50%, -50%); cursor: nesw-resize; }
+      .resize-handle.edge-l { top: 50%; left: 0; transform: translate(-50%, -50%); cursor: ew-resize; }
+      .preview-hitbox {
+        position: absolute;
+        box-sizing: border-box;
+        border: 1px solid rgba(102, 255, 102, 0.7);
+        background: rgba(102, 255, 102, 0.08);
+        pointer-events: none;
+      }
+      .preview-hitbox.hidden-card {
+        border-color: rgba(255, 102, 102, 0.7);
+        background: rgba(255, 102, 102, 0.08);
+      }
+      .controls-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin: 10px 0;
+      }
+      button {
+        cursor: pointer;
+        font: inherit;
+        border-radius: 4px;
+        padding: 6px 12px;
+        border: 1px solid #4c1d95;
+        background: #1c1730;
+        color: #e6e6e6;
+      }
+      button.primary {
+        background: linear-gradient(135deg, #7c3aed, #4c1d95);
+        border-color: transparent;
+        color: #fff;
+      }
+      button[aria-pressed="true"] {
+        border-color: #6cf;
+        color: #6cf;
+      }
+      label.inline {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      input[type="number"] {
+        width: 90px;
+        font: inherit;
+        padding: 4px 6px;
+        border-radius: 4px;
+        border: 1px solid #4c1d95;
+        background: #131022;
+        color: #e6e6e6;
+      }
+      input[type="range"] {
+        width: 240px;
+      }
+      #save-status {
+        color: #22c55e;
+        font-size: 13px;
+        margin-left: 10px;
+      }
+      #live-hint {
+        font-size: 12px;
+        color: #fbbf24;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Overlay calibration</h1>
+      <p class="subtitle">
+        These settings publish with your board state and apply to every non-Twitch viewer surface (YouTube today). Twitch viewers keep
+        using your Twitch Extension configuration.
+      </p>
+
+      <div class="section-title">Where Rift Atlas sits in your stream</div>
+      <p class="hint">
+        Drag the rectangle to match exactly where the Rift Atlas window appears in your final stream layout. While you're publishing,
+        your real card hitboxes preview inside it.
+      </p>
+      <div id="region-preview">
+        <div id="region-rect">
+          <div class="resize-handle corner-tl" data-edges="left top"></div>
+          <div class="resize-handle edge-t" data-edges="top"></div>
+          <div class="resize-handle corner-tr" data-edges="right top"></div>
+          <div class="resize-handle edge-r" data-edges="right"></div>
+          <div class="resize-handle corner-br" data-edges="right bottom"></div>
+          <div class="resize-handle edge-b" data-edges="bottom"></div>
+          <div class="resize-handle corner-bl" data-edges="left bottom"></div>
+          <div class="resize-handle edge-l" data-edges="left"></div>
+        </div>
+      </div>
+      <div class="controls-row" id="preset-row">
+        <button data-preset="fullFrame">Full frame</button>
+        <button data-preset="leftHalf">Left half</button>
+        <button data-preset="rightHalf">Right half</button>
+        <button data-preset="centered">Centered</button>
+        <span id="live-hint"></span>
+      </div>
+      <div class="controls-row">
+        <label class="inline">x <input type="number" id="region-x" step="0.001" min="0" max="1" /></label>
+        <label class="inline">y <input type="number" id="region-y" step="0.001" min="0" max="1" /></label>
+        <label class="inline">width <input type="number" id="region-w" step="0.001" min="0.02" max="1" /></label>
+        <label class="inline">height <input type="number" id="region-h" step="0.001" min="0.02" max="1" /></label>
+      </div>
+
+      <div class="section-title">Card popup size</div>
+      <div class="controls-row">
+        <input type="range" id="tooltip-scale" min="0.7" max="1.3" step="0.05" />
+        <span id="tooltip-scale-label"></span>
+      </div>
+
+      <div class="section-title">Recommended stream delay</div>
+      <p class="hint">
+        Seeds each YouTube viewer's delay control (they can still adjust it). Match your usual glass-to-glass latency — YouTube "Normal
+        latency" is typically 8–15s, "Low" 4–8s.
+      </p>
+      <div class="controls-row">
+        <label class="inline"><input type="number" id="delay-seconds" min="0" max="300" step="1" /> seconds</label>
+      </div>
+
+      <div class="section-title">Overlay</div>
+      <div class="controls-row">
+        <label class="inline"><input type="checkbox" id="overlay-enabled" /> Overlay enabled for viewers</label>
+      </div>
+
+      <div class="controls-row">
+        <button class="primary" id="save-button">Save calibration</button>
+        <span id="save-status"></span>
+      </div>
+    </div>
+    <script src="dist/calibration/main.js"></script>
+  </body>
+</html>

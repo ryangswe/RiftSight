@@ -122,4 +122,22 @@ describe("build.mjs manifest generation", () => {
     const manifest = readManifest();
     expect((manifest["action"] as { default_popup?: string })["default_popup"]).toBe("popup.html");
   });
+
+  it("youtube.com is an OPTIONAL host permission in every mode — never a required one", () => {
+    // The load-bearing property of the runtime-permission decision: an
+    // update adding YouTube support must never trip Chrome's
+    // new-required-permissions flow (which disables the extension for the
+    // installed base until re-approved). If youtube ever migrates into
+    // host_permissions, that guarantee is silently gone.
+    for (const env of [
+      { RIFTSIGHT_MODE: "development" },
+      { RIFTSIGHT_MODE: "closed-beta", RIFTSIGHT_BACKEND_URL: "https://beta.riftsight.example.com" },
+    ]) {
+      runBuild(env);
+      const manifest = readManifest();
+      expect(manifest["optional_host_permissions"]).toEqual(["*://www.youtube.com/*"]);
+      expect(manifest.host_permissions.some((p) => p.includes("youtube"))).toBe(false);
+      expect(manifest["permissions"]).toContain("scripting");
+    }
+  });
 });

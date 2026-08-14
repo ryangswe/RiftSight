@@ -25,6 +25,14 @@ import { LINK_STATUS_LABEL, type LinkState, type LinkStatus } from "../backgroun
 import { idlePublishingMessage, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
 import { describeStreamerError } from "../background/error-messages.js";
 import { safeSendMessage } from "../shared/messaging.js";
+import { enableYouTube, isYouTubeEnabled, YOUTUBE_ORIGIN } from "../background/youtube-enable.js";
+import {
+  clearYouTubeChannelClaim,
+  fetchClaimedYouTubeChannel,
+  saveYouTubeChannelClaim,
+  type YouTubeChannelFailure,
+} from "../background/youtube-channel-client.js";
+import { parseYouTubeChannelInput } from "../shared/youtube-channel-input.js";
 
 function requireElement<T extends Element>(id: string): T {
   const el = document.getElementById(id);
@@ -38,6 +46,13 @@ const disconnectButton = requireElement<HTMLButtonElement>("disconnect-button");
 const presenceStatusEl = requireElement<HTMLDivElement>("presence-status");
 const publishStatusEl = requireElement<HTMLDivElement>("publish-status");
 const publishToggleButton = requireElement<HTMLButtonElement>("publish-toggle");
+const youtubeStatusEl = requireElement<HTMLDivElement>("youtube-status");
+const youtubeEnableButton = requireElement<HTMLButtonElement>("youtube-enable-button");
+const youtubeChannelSection = requireElement<HTMLDivElement>("youtube-channel-section");
+const youtubeChannelInput = requireElement<HTMLInputElement>("youtube-channel-input");
+const youtubeChannelSaveButton = requireElement<HTMLButtonElement>("youtube-channel-save");
+const youtubeChannelClearButton = requireElement<HTMLButtonElement>("youtube-channel-clear");
+const youtubeChannelStatusEl = requireElement<HTMLDivElement>("youtube-channel-status");
 
 let cachedPublishingIntent = false;
 let lastKnownLinkStatus: LinkStatus = "not-connected";
@@ -152,9 +167,105 @@ publishToggleButton.addEventListener("click", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// YouTube section — permission enablement + the streamer's channel claim.
+// Unlike everything above, this talks to youtube-enable.ts and the backend
+// client DIRECTLY rather than via background messages: the permission
+// request legally requires a user gesture in an extension page (this
+// popup), and extension pages share chrome.storage/host-permission fetch
+// with the worker, so a message round trip would add contract surface for
+// nothing. The background's own permission listeners keep IT in sync with
+// whatever happens here.
+// ---------------------------------------------------------------------------
+
+const YOUTUBE_CLAIM_ERROR_TEXT: Record<YouTubeChannelFailure, string> = {
+  "not-linked": "Link your Twitch account first — the channel claim uses the same credential.",
+  "backend-not-configured": "No backend configured in this build (development mode).",
+  conflict: "That channel is already claimed by another RiftSight streamer.",
+  invalid: "That doesn't look like a valid channel ID.",
+  network: "Couldn't reach the RiftSight backend — try again in a moment.",
+};
+
+function refreshYouTubeClaim(): void {
+  void fetchClaimedYouTubeChannel().then((result) => {
+    if (result.ok && result.channelId) {
+      youtubeChannelStatusEl.textContent = `Claimed: ${result.channelId}`;
+      youtubeChannelClearButton.style.display = "inline-block";
+      if (!youtubeChannelInput.value) youtubeChannelInput.value = result.channelId;
+    } else if (result.ok) {
+      youtubeChannelStatusEl.textContent = "No channel claimed yet.";
+      youtubeChannelClearButton.style.display = "none";
+    } else if (result.error === "not-linked" || result.error === "backend-not-configured") {
+      youtubeChannelStatusEl.textContent = YOUTUBE_CLAIM_ERROR_TEXT[result.error];
+      youtubeChannelClearButton.style.display = "none";
+    } else {
+      youtubeChannelStatusEl.textContent = "Claim status unavailable right now.";
+    }
+  });
+}
+
+function updateYouTubeSection(): void {
+  void isYouTubeEnabled().then((enabled) => {
+    youtubeStatusEl.textContent = enabled
+      ? "Enabled — viewers with RiftSight see overlays on your YouTube live streams."
+      : "Not enabled in this browser.";
+    youtubeEnableButton.style.display = enabled ? "none" : "inline-block";
+    youtubeChannelSection.style.display = enabled ? "block" : "none";
+    if (enabled) refreshYouTubeClaim();
+  });
+}
+
+youtubeEnableButton.addEventListener("click", () => {
+  // Must run directly in this click handler — Chrome only honors
+  // permissions.request from a user gesture.
+  void chrome.permissions
+    .request({ origins: [YOUTUBE_ORIGIN] })
+    .then((granted) => (granted ? enableYouTube() : undefined))
+    .then(updateYouTubeSection)
+    .catch(() => {
+      youtubeStatusEl.textContent = "Couldn't request the YouTube permission.";
+    });
+});
+
+youtubeChannelSaveButton.addEventListener("click", () => {
+  const channelId = parseYouTubeChannelInput(youtubeChannelInput.value);
+  if (!channelId) {
+    youtubeChannelStatusEl.textContent =
+      "Paste your channel ID (starts with UC) or a youtube.com/channel/UC… URL — find it in YouTube Studio under Settings → Channel.";
+    return;
+  }
+  youtubeChannelStatusEl.textContent = "Saving…";
+  void saveYouTubeChannelClaim(channelId).then((result) => {
+    if (result.ok) {
+      youtubeChannelStatusEl.textContent = `Claimed: ${result.channelId ?? channelId}`;
+      youtubeChannelClearButton.style.display = "inline-block";
+    } else {
+      youtubeChannelStatusEl.textContent = YOUTUBE_CLAIM_ERROR_TEXT[result.error];
+    }
+  });
+});
+
+requireElement<HTMLButtonElement>("calibrate-button").addEventListener("click", () => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL("calibration.html") });
+});
+
+youtubeChannelClearButton.addEventListener("click", () => {
+  youtubeChannelStatusEl.textContent = "Clearing…";
+  void clearYouTubeChannelClaim().then((result) => {
+    if (result.ok) {
+      youtubeChannelStatusEl.textContent = "No channel claimed yet.";
+      youtubeChannelClearButton.style.display = "none";
+      youtubeChannelInput.value = "";
+    } else {
+      youtubeChannelStatusEl.textContent = YOUTUBE_CLAIM_ERROR_TEXT[result.error];
+    }
+  });
+});
+
 async function init(): Promise<void> {
   updateAccountSection();
   updatePresenceSection();
+  updateYouTubeSection();
   const intentResponse = (await safeSendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
     | { intent?: boolean }
     | undefined;

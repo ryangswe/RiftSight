@@ -20,7 +20,9 @@ import {
   ProducerMessageSchema,
   SubscribeMessageSchema,
   TwitchSubscribeMessageSchema,
+  YouTubeSubscribeMessageSchema,
   type OverlayState,
+  type SubscribeRejectedReason,
 } from "@riftsight/protocol";
 import { verifyTwitchJwt } from "./twitch-auth.js";
 import type { DbClient } from "./db/client.js";
@@ -36,6 +38,7 @@ import {
   MAX_MESSAGE_BYTES,
   MAX_PRODUCER_UPDATES_PER_SECOND,
   MAX_SUBSCRIBE_ATTEMPTS_PER_SOCKET,
+  WS_CONNECTION_LIMIT,
   type RateLimiter,
 } from "./rate-limit.js";
 
@@ -85,6 +88,15 @@ const REMOTE_VIEWER_COUNT_FRESHNESS_MS = 15_000;
 /** How often this instance emits a `capacity_snapshot` log line — a regular sample of its own concurrency (sessions/viewers/producers) for a capacity dashboard (see docs/scaling-plan.md Stage 4). A minute is plenty of resolution for capacity-pressure trends and keeps it to ~1 line/min/instance; it's a periodic time-series sample (emitted even at zero, so a flat idle line is visible rather than an ambiguous gap), not an on-change event. */
 const CAPACITY_SNAPSHOT_INTERVAL_MS = 60_000;
 
+/** Hard per-session viewer ceiling, per instance — memory/fan-out protection for the public youtube-subscribe path (which explicitly rejects with "at-capacity"), enforced identically-but-silently on the legacy/Twitch paths (those clients have no rejection vocabulary; silence there matches every other rejection they already get). At the fleet level the effective cap is N-replicas × this, which is fine — it exists to bound one instance's blast radius, not to meter the product. */
+const MAX_VIEWERS_PER_SESSION = 2_000;
+
+/** Application-level keepalive cadence for youtube-path viewer sockets only (see protocol's PingMessageSchema for the MV3 service-worker rationale). Well under Chrome's ~30s worker idle-reap so a quiet board never lets the extension's socket die, and cheap: one tiny frame per viewer per interval. */
+const VIEWER_PING_INTERVAL_MS = 20_000;
+
+/** How long one youtube-channel resolution (hit OR authoritative miss) is served from memory before the DB is asked again. Bounds DB load under a viewer connection storm on one channel (the popular-streamer case this milestone exists for) while keeping "streamer just claimed their channel" latency to a refresh's wait. Resolver ERRORS are deliberately not cached — a transient DB blip shouldn't blank a channel for a whole window. */
+const YOUTUBE_RESOLUTION_CACHE_MS = 30_000;
+
 interface ProducerBinding {
   broadcasterId: number;
   twitchUserId: string;
@@ -110,6 +122,8 @@ const CLOSE_CODE = {
   TOO_MANY_INVALID_MESSAGES: 4400,
   /** Too many subscribe/twitch-subscribe attempts on one socket. */
   TOO_MANY_SUBSCRIBE_ATTEMPTS: 4401,
+  /** This client IP opened more WebSocket connections per window than WS_CONNECTION_LIMIT allows. */
+  CONNECTION_RATE_LIMITED: 4429,
 } as const;
 
 export interface RelayServer {
@@ -172,6 +186,40 @@ export interface RelayConfig {
    * whoever constructed it does.
    */
   stateBus?: StateBus;
+  /**
+   * Resolves a (schema-validated) YouTube channel id to the broadcaster
+   * session key it should subscribe to, or null for "no such mapping" —
+   * the youtube-subscribe path is refused outright ("unknown-channel")
+   * when this is omitted, which is every mode that has no DB to resolve
+   * against. index.ts wires it to db/broadcasters.ts's
+   * findBroadcasterByYouTubeChannel; tests inject counters/fakes.
+   * Results (including null) are cached for YOUTUBE_RESOLUTION_CACHE_MS;
+   * thrown errors are treated as "unknown-channel" for the one request
+   * but never cached.
+   */
+  resolveYouTubeChannel?: (youtubeChannelId: string) => Promise<string | null>;
+  /** Overrides MAX_VIEWERS_PER_SESSION. Test-only escape hatch, same shape as stateTtl above. */
+  maxViewersPerSession?: number;
+  /** Overrides VIEWER_PING_INTERVAL_MS. Test-only escape hatch. */
+  viewerPing?: { intervalMs: number };
+  /** Overrides WS_CONNECTION_LIMIT (per-client-IP upgrade acceptances per window). Test-only escape hatch. */
+  wsConnectionLimit?: { maxEvents: number; windowMs: number };
+}
+
+/**
+ * The client identity the per-IP connection limiter keys on: the first
+ * X-Forwarded-For hop when present (behind Railway's proxy every socket's
+ * remoteAddress is the LB, which would lump all real viewers into one
+ * bucket), else the socket address (direct/local connections, tests).
+ * XFF is client-forgeable when the relay is reached directly — accepted:
+ * a forger can only spread themselves across buckets, i.e. evade their own
+ * throttle, not collapse anyone else's, and the per-socket/-session limits
+ * behind this are unaffected.
+ */
+function clientIpOf(req: IncomingMessage): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
+  return first || req.socket.remoteAddress || "unknown";
 }
 
 /**
@@ -189,6 +237,9 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   const viewerCountHeartbeatMs = config.viewerCountFanout?.heartbeatMs ?? VIEWER_COUNT_HEARTBEAT_MS;
   const remoteViewerCountFreshnessMs = config.viewerCountFanout?.freshnessMs ?? REMOTE_VIEWER_COUNT_FRESHNESS_MS;
   const capacitySnapshotIntervalMs = config.capacitySnapshot?.intervalMs ?? CAPACITY_SNAPSHOT_INTERVAL_MS;
+  const maxViewersPerSession = config.maxViewersPerSession ?? MAX_VIEWERS_PER_SESSION;
+  const viewerPingIntervalMs = config.viewerPing?.intervalMs ?? VIEWER_PING_INTERVAL_MS;
+  const wsConnectionLimiter = createRateLimiter(config.wsConnectionLimit ?? WS_CONNECTION_LIMIT);
   const stateBus = config.stateBus ?? createLocalStateBus();
   // Per-attachRelayWebSocketServer-call identity, used three ways: to let
   // this instance's own StateBus subscription no-op on messages it just
@@ -220,6 +271,10 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   // otherwise share a channel.
   const pendingProducerAuth = new WeakMap<IncomingMessage, ProducerBinding>();
   const connectionStates = new WeakMap<WebSocket, ConnectionState>();
+  /** Sockets admitted via youtube-subscribe — the only ones that receive the application-level keepalive ping (see VIEWER_PING_INTERVAL_MS); legacy/Twitch viewers never see a message shape their parser doesn't know. Entries are removed on socket close. */
+  const youtubePingTargets = new Set<WebSocket>();
+  /** youtube channel id -> last resolution (sessionId, or null for an authoritative "no mapping") and when it was resolved — see YOUTUBE_RESOLUTION_CACHE_MS. */
+  const youtubeResolutionCache = new Map<string, { sessionId: string | null; at: number }>();
 
   function getSession(sessionId: string): Session {
     const existing = sessions.get(sessionId);
@@ -301,7 +356,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     stateBus.publish({ kind: "viewer-count", sessionId, originInstanceId: instanceId, count: session.viewers.size });
   }
 
-  /** Builds the TTL sweep's synthesized clear broadcast — reuses the expiring state's own protocolVersion/sourceViewport (both required, non-optional schema fields) rather than inventing placeholder values, and bumps sequence by one so a viewer watching the raw stream sees a normal-looking next state, not a repeat. */
+  /** Builds the TTL sweep's synthesized clear broadcast — reuses the expiring state's own protocolVersion/sourceViewport (both required, non-optional schema fields) rather than inventing placeholder values, and bumps sequence by one so a viewer watching the raw stream sees a normal-looking next state, not a repeat. overlayConfig is carried forward too — a quiet board clears its CARDS, not the broadcaster's calibration; dropping it here would silently de-calibrate every non-Twitch viewer until the next real update (the exact trap protocol's OverlayStateSchema doc comment warns synthesizers about). */
   function synthesizeEmptyState(sessionId: string, previous: OverlayState): OverlayState {
     return {
       protocolVersion: previous.protocolVersion,
@@ -310,6 +365,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       capturedAt: Date.now(),
       sourceViewport: previous.sourceViewport,
       cards: [],
+      overlayConfig: previous.overlayConfig,
     };
   }
 
@@ -414,6 +470,16 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
    * loaded is this replica right now"; `sessions` is the map size, which is
    * also the memory-footprint signal the reaping sweep keeps bounded.
    */
+  // Keepalive for youtube-path sockets only — see youtubePingTargets. Sent
+  // regardless of board activity; a dead socket's send is a no-op and the
+  // close handler prunes the set.
+  const viewerPingInterval = setInterval(() => {
+    const encoded = JSON.stringify({ type: "ping" });
+    for (const viewer of youtubePingTargets) {
+      if (viewer.readyState === WebSocket.OPEN) viewer.send(encoded);
+    }
+  }, viewerPingIntervalMs);
+
   const capacitySnapshotInterval = setInterval(() => {
     let viewers = 0;
     let producers = 0;
@@ -505,6 +571,16 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     return session.latestState !== null && (isProducerConnectionOpen(session) || Date.now() - session.lastUpdatedAt <= stateTtlMs);
   }
 
+  /** One instance's per-session viewer ceiling — see MAX_VIEWERS_PER_SESSION. Checked by every subscribe path before admitViewer; only the youtube path can SAY so to the client (subscribe-rejected), the legacy/Twitch paths reject with the same silence as their other refusals. */
+  function sessionAtCapacity(session: Session): boolean {
+    return session.viewers.size >= maxViewersPerSession;
+  }
+
+  /** Explicit refusal for the youtube path only — the one viewer vocabulary that includes subscribe-rejected (see protocol's SubscribeRejectedMessageSchema). Never sent to legacy/Twitch sockets: their parsers would just warn-and-drop it. */
+  function sendSubscribeRejected(ws: WebSocket, reason: SubscribeRejectedReason): void {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "subscribe-rejected", reason }));
+  }
+
   // Shared by both the plain (local-debug) and Twitch-authenticated
   // subscribe paths once each has independently decided the request is
   // trusted — this function itself does no authorization, it only admits.
@@ -512,6 +588,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   // (viewers.add and the counted log/viewer-count send) happens
   // synchronously before the first await, so a producer update arriving
   // mid-load still reaches this viewer via broadcastToLocalViewers.
+  // Capacity is the caller's check (sessionAtCapacity), not repeated here —
+  // callers need the answer BEFORE deciding how to refuse.
   async function admitViewer(ws: WebSocket, sessionId: string): Promise<void> {
     const session = getSession(sessionId);
     session.viewers.add(ws);
@@ -552,6 +630,56 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     session.latestState = snapshot;
     session.lastUpdatedAt = Date.now();
     ws.send(JSON.stringify({ type: "overlay-state", payload: snapshot }));
+  }
+
+  /**
+   * Cached channel->session resolution for the youtube path. A cache
+   * entry (hit or authoritative null) is served for
+   * YOUTUBE_RESOLUTION_CACHE_MS; resolver errors fail this one request
+   * closed ("unknown-channel" to the client) without being cached, so a
+   * transient DB blip doesn't blank a channel for a whole window.
+   */
+  async function resolveYouTubeSession(youtubeChannelId: string): Promise<string | null> {
+    const resolver = config.resolveYouTubeChannel;
+    if (!resolver) return null;
+    const cached = youtubeResolutionCache.get(youtubeChannelId);
+    if (cached && Date.now() - cached.at <= YOUTUBE_RESOLUTION_CACHE_MS) return cached.sessionId;
+    try {
+      const sessionId = await resolver(youtubeChannelId);
+      youtubeResolutionCache.set(youtubeChannelId, { sessionId, at: Date.now() });
+      return sessionId;
+    } catch {
+      logEvent("viewer_rejected", { reason: "youtube-resolution-failed", youtubeChannelId });
+      return null;
+    }
+  }
+
+  /**
+   * The youtube-subscribe admission flow: resolve the public channel id to
+   * a broadcaster session (streamer-claimed mapping — see
+   * /api/youtube-channel), refuse explicitly when there's no mapping or
+   * the session is full, otherwise admit through the exact same
+   * admitViewer every other path uses (snapshot fallback included) and
+   * start keepalive pings for this socket. The viewer stays anonymous
+   * throughout — nothing about them is read or stored beyond the socket
+   * itself.
+   */
+  async function admitYouTubeViewer(ws: WebSocket, youtubeChannelId: string): Promise<void> {
+    const sessionId = await resolveYouTubeSession(youtubeChannelId);
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (sessionId === null) {
+      logEvent("viewer_rejected", { reason: config.resolveYouTubeChannel ? "unknown-youtube-channel" : "youtube-resolver-not-configured", youtubeChannelId });
+      sendSubscribeRejected(ws, "unknown-channel");
+      return;
+    }
+    const session = getSession(sessionId);
+    if (sessionAtCapacity(session)) {
+      logEvent("viewer_rejected", { reason: "session-at-capacity", sessionId, youtubeChannelId });
+      sendSubscribeRejected(ws, "at-capacity");
+      return;
+    }
+    youtubePingTargets.add(ws);
+    await admitViewer(ws, sessionId);
   }
 
   function markInvalid(ws: WebSocket, state: ConnectionState, reason: string, extra: Record<string, string | number> = {}): void {
@@ -649,6 +777,10 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         logEvent("viewer_rejected", { reason: "local-debug-disabled", sessionId: subscribeMessage.data.sessionId });
         return;
       }
+      if (sessionAtCapacity(getSession(subscribeMessage.data.sessionId))) {
+        logEvent("viewer_rejected", { reason: "session-at-capacity", sessionId: subscribeMessage.data.sessionId });
+        return;
+      }
       state.invalidMessageCount = 0;
       void admitViewer(ws, subscribeMessage.data.sessionId);
       return;
@@ -683,8 +815,43 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         return;
       }
 
+      if (sessionAtCapacity(getSession(channelId))) {
+        logEvent("viewer_rejected", { reason: "session-at-capacity", sessionId: channelId });
+        return;
+      }
       state.invalidMessageCount = 0;
       void admitViewer(ws, channelId);
+      return;
+    }
+
+    const youtubeSubscribeMessage = YouTubeSubscribeMessageSchema.safeParse(parsed);
+    if (youtubeSubscribeMessage.success) {
+      state.subscribeAttempts += 1;
+      if (state.subscribeAttempts > MAX_SUBSCRIBE_ATTEMPTS_PER_SOCKET) {
+        logEvent("connection_disconnected", { reason: "too-many-subscribe-attempts", count: state.subscribeAttempts });
+        ws.close(CLOSE_CODE.TOO_MANY_SUBSCRIBE_ATTEMPTS, "too-many-subscribe-attempts");
+        return;
+      }
+      state.invalidMessageCount = 0;
+      void admitYouTubeViewer(ws, youtubeSubscribeMessage.data.channelId);
+      return;
+    }
+
+    // A youtube-subscribe whose channelId flunks the UC... pattern fails
+    // the schema parse above, but unlike other malformed traffic the
+    // client is a well-meaning viewer extension that deserves an explicit
+    // answer (a typo'd claim/odd page shouldn't look like a dead relay).
+    // Still counted as a subscribe attempt so a channel-guessing socket
+    // burns its attempt budget, not the invalid-message one.
+    if (typeof parsed === "object" && parsed !== null && (parsed as { type?: unknown }).type === "youtube-subscribe") {
+      state.subscribeAttempts += 1;
+      if (state.subscribeAttempts > MAX_SUBSCRIBE_ATTEMPTS_PER_SOCKET) {
+        logEvent("connection_disconnected", { reason: "too-many-subscribe-attempts", count: state.subscribeAttempts });
+        ws.close(CLOSE_CODE.TOO_MANY_SUBSCRIBE_ATTEMPTS, "too-many-subscribe-attempts");
+        return;
+      }
+      logEvent("viewer_rejected", { reason: "invalid-youtube-channel-id" });
+      sendSubscribeRejected(ws, "invalid-channel");
       return;
     }
 
@@ -692,6 +859,17 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   }
 
   wss.on("connection", (ws, req) => {
+    // Connection-level throttle, before any per-socket bookkeeping — a
+    // client IP churning connections gets each new socket closed
+    // immediately with a distinct code, bounding both socket count and
+    // the handler work a storm can cause. See WS_CONNECTION_LIMIT and
+    // clientIpOf for the X-Forwarded-For keying rationale.
+    if (!wsConnectionLimiter.tryConsume(clientIpOf(req))) {
+      logEvent("connection_disconnected", { reason: "connection-rate-limited", remoteAddress: clientIpOf(req) });
+      ws.close(CLOSE_CODE.CONNECTION_RATE_LIMITED, "connection-rate-limited");
+      return;
+    }
+
     const state: ConnectionState = {
       producerBinding: undefined,
       invalidMessageCount: 0,
@@ -708,6 +886,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
 
     ws.on("message", (raw) => handleMessage(ws, raw, state));
     ws.on("close", () => {
+      youtubePingTargets.delete(ws);
       for (const [sessionId, session] of sessions) {
         if (session.producer === ws) {
           session.producer = null;
@@ -731,6 +910,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         // runner) alive/hanging past this close() resolving.
         clearInterval(ttlSweepInterval);
         clearInterval(viewerCountHeartbeatInterval);
+        clearInterval(viewerPingInterval);
         clearInterval(capacitySnapshotInterval);
         // Only removes THIS server's own handler from the bus — a shared
         // injected bus (two createRelayServer calls sharing one

@@ -1,4 +1,4 @@
-import type { NormalizedBounds } from "@riftsight/protocol";
+import type { NormalizedBounds, SourceRegion } from "@riftsight/protocol";
 
 // Maps RiftAtlas-relative card bounds into wherever RiftAtlas actually
 // sits within the final Twitch stream canvas — a broadcaster-calibrated
@@ -8,12 +8,15 @@ import type { NormalizedBounds } from "@riftsight/protocol";
 // contain/cover/crop-edge/letterbox/perspective correction). Values are
 // normalized [0,1] fractions of the stream canvas, same convention as
 // NormalizedBounds itself.
-export interface SourceRegion {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+//
+// The SourceRegion TYPE now lives in @riftsight/protocol (it travels on
+// the wire inside OverlayState.overlayConfig, so protocol owns its schema
+// — see SourceRegionSchema). This module re-exports it and remains the
+// home of everything that ISN'T wire shape: presets, validation with the
+// friendly-fallback contract, and the coordinate mapping helpers.
+// (protocol can't import from overlay-core — that would be a dependency
+// cycle — which is why the type moved down rather than the helpers up.)
+export type { SourceRegion } from "@riftsight/protocol";
 
 export const FULL_FRAME_SOURCE_REGION: SourceRegion = { x: 0, y: 0, width: 1, height: 1 };
 

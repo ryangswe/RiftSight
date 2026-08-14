@@ -35,3 +35,22 @@ Let the streamer (or whoever invited you) know, with as much of this as you can:
 - Roughly when it happened
 
 Thanks for helping test!
+
+## Watching on YouTube
+
+Unlike Twitch (where the overlay is built into the channel), YouTube needs
+the RiftSight browser extension in *your* browser:
+
+1. Install the RiftSight extension from the Chrome Web Store.
+2. Open its popup and click **Enable RiftSight on YouTube** — Chrome asks
+   once for permission to run on youtube.com.
+3. Open a live stream from a streamer who uses RiftSight. The overlay
+   attaches automatically; hover cards like on Twitch.
+
+The gear button (top-right of the video, appears on hover) has your
+personal settings: overlay on/off, card outlines, and a **delay slider** —
+if popups feel ahead of or behind the video, nudge the delay until they
+line up (YouTube's latency varies by channel and by your connection). On
+streams without RiftSight, and on regular videos/VODs, the extension shows
+nothing at all — it only activates on live watch pages of channels their
+streamer has claimed.

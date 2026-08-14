@@ -1,4 +1,4 @@
-import { FULL_FRAME_SOURCE_REGION, parseSourceRegion, type SourceRegion } from "@riftsight/overlay-core";
+import { FULL_FRAME_SOURCE_REGION, parseSourceRegion, type SourceRegion } from "./source-region.js";
 
 // The broadcaster-configurable overlay settings, and their defaults.
 // Deliberately minimal (see the milestone's "minimal broadcaster
@@ -116,4 +116,31 @@ export function parseOverlayConfig(content: string | undefined): OverlayConfig {
 
 export function serializeOverlayConfig(config: OverlayConfig): string {
   return JSON.stringify(config);
+}
+
+/**
+ * Projects the locally-stored broadcaster OverlayConfig into the subset
+ * that rides the wire inside OverlayState.overlayConfig (see protocol's
+ * OverlayWireConfigSchema). Two deliberate translations: debugOutlines is
+ * NEVER published (it's a broadcaster's own-screen debugging aid on
+ * Twitch; on the wire it would flip outlines on for every viewer of the
+ * channel), and delayMs becomes recommendedDelayMs — on platforms with no
+ * broadcaster-authoritative delay channel (YouTube), the broadcaster's
+ * number is a default seeding each viewer's own delay control, not a
+ * mandate.
+ */
+export function toWireOverlayConfig(config: OverlayConfig): {
+  sourceRegion: SourceRegion;
+  sourceAspectRatio?: number;
+  tooltipScale: number;
+  overlayEnabled: boolean;
+  recommendedDelayMs: number;
+} {
+  return {
+    sourceRegion: config.sourceRegion,
+    ...(config.sourceAspectRatio !== undefined ? { sourceAspectRatio: config.sourceAspectRatio } : {}),
+    tooltipScale: config.tooltipScale,
+    overlayEnabled: config.overlayEnabled,
+    recommendedDelayMs: config.delayMs,
+  };
 }

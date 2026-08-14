@@ -74,6 +74,22 @@
         border-top: 1px solid #241d3a;
         margin: 10px 0;
       }
+      input[type="text"] {
+        font: inherit;
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 6px;
+        padding: 6px 8px;
+        border-radius: 4px;
+        border: 1px solid #4c1d95;
+        background: #131022;
+        color: #e6e6e6;
+      }
+      .hint {
+        font-size: 11px;
+        color: #8b8b98;
+        margin: 4px 0 6px;
+      }
     </style>
   </head>
   <body>
@@ -95,6 +111,19 @@
       <div class="section-title">Publishing</div>
       <div id="publish-status" class="status-line">Not publishing.</div>
       <button id="publish-toggle" class="primary">Start publishing</button>
+
+      <hr />
+      <div class="section-title">YouTube</div>
+      <div id="youtube-status" class="status-line">Checking…</div>
+      <button id="youtube-enable-button" style="display: none">Enable RiftSight on YouTube</button>
+      <div id="youtube-channel-section" style="display: none">
+        <div class="hint">Streaming on YouTube? Claim your channel so viewers' overlays find your games.</div>
+        <input id="youtube-channel-input" type="text" placeholder="Channel ID (UC…) or /channel/ URL" />
+        <button id="youtube-channel-save">Save channel</button>
+        <button id="youtube-channel-clear" style="display: none">Clear</button>
+        <div id="youtube-channel-status" class="status-line"></div>
+        <button id="calibrate-button">Calibrate overlay…</button>
+      </div>
     </div>
     <script src="dist/popup/main.js"></script>
   </body>

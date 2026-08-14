@@ -93,6 +93,51 @@ export const ViewportSchema = z.object({
   devicePixelRatio: z.number().finite().positive(),
 });
 
+// Same floating-point tolerance rationale as overlay-core's
+// isValidSourceRegion (which this schema is the wire-level twin of): a
+// region built from repeated 1/3 divisions can land at 1.0000000000000002
+// and must not be rejected over a sub-pixel rounding artifact.
+const SOURCE_REGION_EPSILON = 1e-6;
+
+// Where the game client sits within the final stream canvas, as normalized
+// [0,1] fractions — the broadcaster-calibrated rectangle previously known
+// only to the Twitch config page (see overlay-core/src/source-region.ts,
+// which re-exports this type and keeps the presets/mapping helpers). It
+// lives in protocol because it now travels on the wire inside
+// OverlayState.overlayConfig, so it needs runtime validation at the same
+// process boundaries as everything else here.
+export const SourceRegionSchema = z
+  .object({
+    x: z.number().finite().nonnegative(),
+    y: z.number().finite().nonnegative(),
+    width: z.number().finite().positive(),
+    height: z.number().finite().positive(),
+  })
+  .refine(
+    (region) =>
+      region.x + region.width <= 1 + SOURCE_REGION_EPSILON && region.y + region.height <= 1 + SOURCE_REGION_EPSILON,
+    { message: "sourceRegion must fit within the [0,1] frame" }
+  );
+
+// Broadcaster overlay calibration riding along with the state itself —
+// the non-Twitch replacement for Twitch's configuration service, set by
+// the streamer's extension and consumed by any viewer surface that has no
+// platform-provided config channel (YouTube content script today). Every
+// field is optional with viewer-side defaults: an absent field means "use
+// your default", so producers publishing before this existed (or Twitch
+// viewers that strip the unknown key — zod object schemas here strip, not
+// reject) are unaffected in both directions. `recommendedDelayMs` is a
+// broadcaster *hint* seeding the viewer's own delay control, never a
+// mandate — on YouTube the viewer owns their delay (there is no platform
+// latency signal), unlike Twitch where delayMs is broadcaster-authoritative.
+export const OverlayWireConfigSchema = z.object({
+  sourceRegion: SourceRegionSchema.optional(),
+  sourceAspectRatio: z.number().finite().positive().optional(),
+  tooltipScale: z.number().finite().positive().optional(),
+  overlayEnabled: z.boolean().optional(),
+  recommendedDelayMs: z.number().finite().nonnegative().optional(),
+});
+
 export const OverlayStateSchema = z.object({
   protocolVersion: z.literal(PROTOCOL_VERSION),
   sessionId: SessionIdSchema,
@@ -121,6 +166,14 @@ export const OverlayStateSchema = z.object({
   // card only when the hovered point also falls inside this rect, since
   // that's the only region actually painted over on top of the board.
   blockingRegion: NormalizedBoundsSchema.optional(),
+  // Broadcaster calibration riding with the state — see
+  // OverlayWireConfigSchema. Optional end to end: producers that don't
+  // publish it and viewers that don't read it behave exactly as before.
+  // CAUTION for relay-side code: anything that synthesizes a fresh
+  // OverlayState from scratch (the TTL sweep's synthesizeEmptyState) must
+  // copy this field forward from the prior state, or a quiet board would
+  // silently de-calibrate every non-Twitch viewer.
+  overlayConfig: OverlayWireConfigSchema.optional(),
 });
 
 // Producer (extension background) -> relay.
@@ -150,11 +203,59 @@ export const TwitchSubscribeMessageSchema = z.object({
   token: z.string().min(1),
 });
 
+// Canonical YouTube channel-id shape ("UC" + 22 URL-safe base64 chars).
+// Validated wire-side before the relay does any DB work, and reused by the
+// extension popup to validate streamer input at entry time.
+export const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{22}$/;
+
+// Viewer -> relay, YouTube path. Unauthenticated by design: the viewer is
+// anonymous and the channelId is not a secret (it's printed on every watch
+// page) — the relay resolves it to a broadcaster session via the
+// streamer-claimed mapping and serves the same already-sanitized public
+// state every other viewer path gets. Abuse control is rate limiting and
+// capacity caps (relay-side), not identity.
+export const YouTubeSubscribeMessageSchema = z.object({
+  type: z.literal("youtube-subscribe"),
+  channelId: z.string().regex(YOUTUBE_CHANNEL_ID_PATTERN, { message: "not a canonical YouTube channel id" }),
+});
+
+// Relay -> viewer, new-path-only explicit rejection. Legacy paths keep
+// their silent-drop behavior (Twitch viewers never receive this); the
+// YouTube path sends it so an injected overlay can quietly stand down
+// instead of waiting forever on a channel with no RiftSight session.
+export const SubscribeRejectedReasonSchema = z.enum(["unknown-channel", "at-capacity", "invalid-channel"]);
+
+export const SubscribeRejectedMessageSchema = z.object({
+  type: z.literal("subscribe-rejected"),
+  reason: SubscribeRejectedReasonSchema,
+});
+
+// Relay -> viewer application-level keepalive, sent only on the YouTube
+// path. Exists for MV3 service-worker lifetime: Chrome keeps an
+// extension's service worker alive while WebSocket *messages* flow, and a
+// quiet board can otherwise go minutes between states, letting the worker
+// (and the socket with it) be reaped mid-stream. Viewers ignore it beyond
+// parsing; no pong is expected.
+export const PingMessageSchema = z.object({
+  type: z.literal("ping"),
+});
+
 // Relay -> viewer.
 export const ServerMessageSchema = z.object({
   type: z.literal("overlay-state"),
   payload: OverlayStateSchema,
 });
+
+// The full relay -> viewer vocabulary for NEW (non-Twitch) hosts, parsed
+// via parseViewerServerMessage. The Twitch viewer keeps using
+// parseServerMessage/ServerMessageSchema unchanged — it never receives the
+// two new shapes, and not touching its parser keeps this milestone free of
+// any shipped Twitch-frontend change.
+export const ViewerServerMessageSchema = z.discriminatedUnion("type", [
+  ServerMessageSchema,
+  SubscribeRejectedMessageSchema,
+  PingMessageSchema,
+]);
 
 // Relay -> producer. Lets the streamer's own extension know how many
 // viewers are currently subscribed to their session — the producer socket

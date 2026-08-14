@@ -1,4 +1,4 @@
-import { FULL_FRAME_SOURCE_REGION, SOURCE_REGION_PRESETS } from "@riftsight/overlay-core";
+import { FULL_FRAME_SOURCE_REGION, SOURCE_REGION_PRESETS } from "./source-region.js";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OVERLAY_CONFIG,
@@ -7,6 +7,7 @@ import {
   MIN_TOOLTIP_SCALE,
   parseOverlayConfig,
   serializeOverlayConfig,
+  toWireOverlayConfig,
 } from "./overlay-config.js";
 
 describe("parseOverlayConfig", () => {
@@ -144,5 +145,35 @@ describe("serializeOverlayConfig", () => {
     expect(roundTripped.sourceRegion).toEqual(SOURCE_REGION_PRESETS.rightHalf);
     expect(roundTripped.delayMs).toBe(DEFAULT_OVERLAY_CONFIG.delayMs);
     expect(roundTripped.debugOutlines).toBe(DEFAULT_OVERLAY_CONFIG.debugOutlines);
+  });
+});
+
+describe("toWireOverlayConfig", () => {
+  it("projects the wire subset, renaming delayMs to recommendedDelayMs", () => {
+    const wire = toWireOverlayConfig({
+      overlayEnabled: true,
+      delayMs: 8000,
+      debugOutlines: true,
+      sourceAspectRatio: 16 / 9,
+      sourceRegion: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+      tooltipScale: 1.2,
+    });
+    expect(wire).toEqual({
+      sourceRegion: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+      sourceAspectRatio: 16 / 9,
+      tooltipScale: 1.2,
+      overlayEnabled: true,
+      recommendedDelayMs: 8000,
+    });
+  });
+
+  it("never carries debugOutlines onto the wire", () => {
+    const wire = toWireOverlayConfig({ ...DEFAULT_OVERLAY_CONFIG, debugOutlines: true });
+    expect("debugOutlines" in wire).toBe(false);
+  });
+
+  it("omits sourceAspectRatio when undefined rather than sending an explicit undefined", () => {
+    const wire = toWireOverlayConfig(DEFAULT_OVERLAY_CONFIG);
+    expect("sourceAspectRatio" in wire).toBe(false);
   });
 });
