@@ -2,6 +2,8 @@
 
 RiftSight is a browser extension and Twitch overlay for [RiftAtlas](https://riftatlas.com) (a fan-made Riftbound TCG web client) which allows viewers to hover over cards during a RiftAtlas to see their details in real-time.
 
+> RiftSight was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.
+
 ## Architecture
 
 A streamer's browser extension reads card state directly off RiftAtlas's own page, relays it through RiftSight's backend, and a Twitch Extension iframe renders it as hover cards for every viewer — while card art itself is fetched by each viewer's browser straight from RiftAtlas's own CDN, never touching RiftSight's infrastructure at all.
@@ -506,7 +508,7 @@ Every message below is deliberately short and non-technical — full diagnostics
 |---|---|
 | RiftSight backend unreachable (OAuth linking) | *"RiftSight backend unavailable — try again shortly"* (`LINK_STATUS_LABEL`) |
 | Twitch authorization denied or expired | The OAuth tab shows "Could not connect — Twitch authorization was denied. You can close this tab and try again from the extension." |
-| Twitch account not on the beta allowlist | The OAuth tab shows "Not in the closed beta — this Twitch account is not part of the RiftSight closed beta yet." |
+| Twitch account not on the beta allowlist | The OAuth tab shows "Not in the beta yet — this Twitch account isn't part of the RiftSight beta yet." |
 | Producer credential expired/revoked | *"Producer credential expired — reconnect to Twitch"* (`LINK_STATUS_LABEL`) |
 | Another RiftSight connection publishing to the same channel | *"Another RiftSight connection took over publishing for your channel..."* (`error-messages.ts`'s `producer-replaced`) |
 | Producer WebSocket lost, reconnecting | *"Lost connection to the RiftSight backend — reconnecting automatically."* (`relay-reconnecting`) |
