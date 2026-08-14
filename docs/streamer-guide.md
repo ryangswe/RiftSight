@@ -1,6 +1,6 @@
 # RiftSight — Streamer Setup Guide
 
-Welcome to the RiftSight closed beta! This guide is everything you need to get set up. No coding, terminal, or technical knowledge required.
+Welcome to the RiftSight beta! This guide is everything you need to get set up. No coding, terminal, or technical knowledge required.
 
 RiftSight lets your viewers hover over cards visible on your stream to see the full card art, live. You just need to install one browser extension and turn on one Twitch extension. RiftSight handles the rest automatically.
 

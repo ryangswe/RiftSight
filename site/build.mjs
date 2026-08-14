@@ -32,7 +32,10 @@ await esbuild({
 console.log("[site] bundled assets/demo.bundle.js");
 
 // Top-level files that must exist and get copied verbatim.
-const REQUIRED_FILES = ["index.html", "setup.html", "config.js", "site.js", "site.css", "privacy.html", "eula.html"];
+// riot.txt is Riot's domain-ownership verification token, which must stay
+// publicly served at https://riftsight.gg/riot.txt — kept "required" so a
+// deploy can't silently drop it.
+const REQUIRED_FILES = ["index.html", "setup.html", "config.js", "site.js", "site.css", "privacy.html", "eula.html", "riot.txt"];
 const missing = REQUIRED_FILES.filter((f) => !existsSync(path.join(pkgDir, f)));
 if (missing.length > 0) {
   console.error(`[site] missing required file(s): ${missing.join(", ")}`);

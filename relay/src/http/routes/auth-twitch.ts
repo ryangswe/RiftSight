@@ -91,7 +91,7 @@ export async function handleAuthCallback(req: HttpRequest, deps: AuthCallbackDep
   const allowed = await isAllowed(deps.db, identity.userId);
   if (!allowed) {
     if (linkId) deps.linkHandoff.markRejected(linkId);
-    return resultPage(403, "Not in the closed beta", "This Twitch account is not part of the RiftSight closed beta yet. Reach out if you'd like access.");
+    return resultPage(403, "Not in the beta yet", "This Twitch account isn't part of the RiftSight beta yet. Reach out if you'd like access.");
   }
 
   const broadcaster = await upsertBroadcaster(deps.db, identity.userId, identity.login);
