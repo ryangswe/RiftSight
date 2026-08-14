@@ -39,6 +39,10 @@ const ALLOWED_LOG_FIELDS = new Set([
   "viewers",
   "durationMs",
   "remoteAddress",
+  // A short (8-char) prefix of a relay instance's per-boot random id —
+  // distinguishes interleaved replica logs in a shared stream (see
+  // docs/scaling-plan.md Stage 4), never anything user- or session-derived.
+  "instanceId",
   "path",
   "method",
   "status",

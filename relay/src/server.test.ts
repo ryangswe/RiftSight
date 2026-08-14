@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import { createRelayServer, type RelayServer } from "./server.js";
 import { createLocalStateBus } from "./state-bus.js";
 
@@ -28,6 +28,27 @@ function waitForOpen(ws: WebSocket): Promise<void> {
 function waitForMessage(ws: WebSocket): Promise<unknown> {
   return new Promise((resolve) => {
     ws.once("message", (raw) => resolve(JSON.parse(raw.toString())));
+  });
+}
+
+/**
+ * Resolves with the first incoming message the predicate accepts, ignoring
+ * anything before it. For asserting on one specific expected message (e.g.
+ * a viewer-count with a particular value) when an earlier message could
+ * still be in flight — under parallel-suite CPU load, a fixed pre-listen
+ * wait() is not enough to guarantee earlier traffic has fully flushed, and
+ * waitForMessage would then resolve with the late straggler instead
+ * (observed as real flakes in the two viewer-count tests below).
+ */
+function waitForMessageMatching<T>(ws: WebSocket, predicate: (message: T) => boolean): Promise<T> {
+  return new Promise((resolve) => {
+    const listener = (raw: RawData): void => {
+      const parsed = JSON.parse(raw.toString()) as T;
+      if (!predicate(parsed)) return;
+      ws.off("message", listener);
+      resolve(parsed);
+    };
+    ws.on("message", listener);
   });
 }
 
@@ -100,12 +121,15 @@ describe("relay server", () => {
     producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("viewer-count-session", 1) }));
     await wait(50); // let the initial publish (and its own count:0 message) settle before listening
 
-    const received = waitForMessage(producer);
+    const received = waitForMessageMatching<{ type: string; count: number }>(
+      producer,
+      (m) => m.type === "viewer-count" && m.count === 1 // ignore the initial count:0 from the producer's own binding, which can still be in flight — see waitForMessageMatching
+    );
     const viewer = new WebSocket(url);
     await waitForOpen(viewer);
     viewer.send(JSON.stringify({ type: "subscribe", sessionId: "viewer-count-session" }));
 
-    const message = (await received) as { type: string; count: number };
+    const message = await received;
     expect(message).toEqual({ type: "viewer-count", count: 1 });
 
     viewer.close();
@@ -126,10 +150,13 @@ describe("relay server", () => {
     viewer.send(JSON.stringify({ type: "subscribe", sessionId: "viewer-count-disconnect" }));
     await wait(50);
 
-    const received = waitForMessage(producer);
+    const received = waitForMessageMatching<{ type: string; count: number }>(
+      producer,
+      (m) => m.type === "viewer-count" && m.count === 0 // ignore a still-in-flight count:1 from the viewer's own admit — see waitForMessageMatching
+    );
     viewer.close();
 
-    const message = (await received) as { type: string; count: number };
+    const message = await received;
     expect(message).toEqual({ type: "viewer-count", count: 0 });
 
     producer.close();
@@ -478,16 +505,20 @@ describe("relay server", () => {
 
       const viewer = new WebSocket(url);
       await waitForOpen(viewer);
-      let viewerReceivedAnything = false;
-      viewer.on("message", () => {
-        viewerReceivedAnything = true;
+      // Assert on message CONTENT, not arrival: the only message this
+      // viewer may legitimately receive is the admit-time send of the real
+      // state (sequence 1) — which under parallel-suite CPU load can be
+      // delivered later than any fixed settle wait (an observed flake). A
+      // spurious TTL clear is unambiguous regardless of timing: it's
+      // synthesized with the NEXT sequence (2).
+      const receivedSequences: number[] = [];
+      viewer.on("message", (raw) => {
+        receivedSequences.push((JSON.parse(raw.toString()) as { payload: { sequence: number } }).payload.sequence);
       });
       viewer.send(JSON.stringify({ type: "subscribe", sessionId: "quiet-but-connected" }));
-      await wait(50); // the initial admit-time send of the existing state
 
-      viewerReceivedAnything = false; // only care about anything AFTER this point — no synthesized clear should ever arrive
-      await wait(250); // comfortably past ttlMs and several sweep ticks, producer still open, still silent
-      expect(viewerReceivedAnything).toBe(false);
+      await wait(300); // comfortably past ttlMs and several sweep ticks, producer still open, still silent
+      expect(receivedSequences).toEqual([1]); // the admit-time state and nothing else — no sequence-2 synthesized clear
 
       // A brand-new viewer joining during this same quiet-but-connected
       // window must still receive the accurate (just old) state — not be
@@ -558,8 +589,14 @@ describe("relay server", () => {
       servers = [];
     });
 
-    async function createInstance(stateTtl?: { ttlMs: number; sweepIntervalMs: number }, stateBus = createLocalStateBus()) {
-      const instance = await createRelayServer(0, { stateBus, stateTtl });
+    async function createInstance(
+      config?: {
+        stateTtl?: { ttlMs: number; sweepIntervalMs: number };
+        viewerCountFanout?: { heartbeatMs: number; freshnessMs: number };
+      },
+      stateBus = createLocalStateBus()
+    ) {
+      const instance = await createRelayServer(0, { stateBus, ...config });
       servers.push(instance);
       return { instance, stateBus };
     }
@@ -608,11 +645,190 @@ describe("relay server", () => {
       producer.close();
     });
 
+    it("a viewer joining an instance started AFTER the producer published (fresh replica) receives the state via the snapshot store", async () => {
+      // Pub/sub alone can't cover this: instance C didn't exist when the
+      // state message crossed the bus, so its only path to the current
+      // board is StateBus.loadSnapshot — the rolling-deploy case where a
+      // viewer routed to a just-started replica must not see a blank
+      // overlay until the producer's next update.
+      const bus = createLocalStateBus();
+      const { instance: instanceA } = await createInstance(undefined, bus);
+
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("fresh-replica", 9) }));
+      await wait(50);
+
+      // Only NOW does instance C come up, sharing the same bus (= same
+      // Redis in a real deployment) — it has never seen any message for
+      // this session.
+      const { instance: instanceC } = await createInstance(undefined, bus);
+      const viewer = new WebSocket(`ws://localhost:${instanceC.port}`);
+      await waitForOpen(viewer);
+      const received = waitForMessage(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "fresh-replica" }));
+
+      const message = (await received) as { payload: { sequence: number } };
+      expect(message.payload.sequence).toBe(9);
+
+      viewer.close();
+      producer.close();
+    });
+
+    it("tells a producer on instance A the fleet-wide viewer count, tracking remote joins and leaves", async () => {
+      const bus = createLocalStateBus();
+      const { instance: instanceA } = await createInstance(undefined, bus);
+      const { instance: instanceB } = await createInstance(undefined, bus);
+
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("count-sum", 1) }));
+      await wait(50);
+
+      const viewerOnA = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(viewerOnA);
+      viewerOnA.send(JSON.stringify({ type: "subscribe", sessionId: "count-sum" }));
+
+      const viewerB1 = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewerB1);
+      viewerB1.send(JSON.stringify({ type: "subscribe", sessionId: "count-sum" }));
+      const viewerB2 = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewerB2);
+      const sawSumOfThree = waitForMessageMatching<{ type: string; count: number }>(
+        producer,
+        (m) => m.type === "viewer-count" && m.count === 3
+      );
+      viewerB2.send(JSON.stringify({ type: "subscribe", sessionId: "count-sum" }));
+
+      // 1 local (instance A) + 2 remote (instance B) — the whole point of
+      // the fan-out: without it the streamer's popup would show only the
+      // local ~1/N slice (here, 1).
+      await sawSumOfThree;
+
+      // A remote leave propagates the same way: B publishes its new local
+      // count on the disconnect, A recomputes 1 local + 1 remote.
+      const sawSumOfTwo = waitForMessageMatching<{ type: string; count: number }>(
+        producer,
+        (m) => m.type === "viewer-count" && m.count === 2
+      );
+      viewerB1.close();
+      await sawSumOfTwo;
+
+      viewerOnA.close();
+      viewerB2.close();
+      producer.close();
+    });
+
+    it("prunes a silent instance's viewer count after the freshness window (crashed replica ages out instead of counting forever)", async () => {
+      const bus = createLocalStateBus();
+      const { instance: instanceA } = await createInstance(
+        // Heartbeat deliberately huge: this test is about what happens when
+        // heartbeats STOP, and instance A ignores its own publishes anyway.
+        { stateTtl: { ttlMs: 10_000, sweepIntervalMs: 30 }, viewerCountFanout: { heartbeatMs: 60_000, freshnessMs: 150 } },
+        bus
+      );
+
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("count-prune", 1) }));
+      await wait(50);
+
+      const localViewer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(localViewer);
+      localViewer.send(JSON.stringify({ type: "subscribe", sessionId: "count-prune" }));
+
+      // A "remote instance" that reports 7 viewers once and then goes
+      // silent — exactly what a crashed/partitioned replica looks like on
+      // the bus (its socket-close handlers never got to publish a zero).
+      const sawEight = waitForMessageMatching<{ type: string; count: number }>(
+        producer,
+        (m) => m.type === "viewer-count" && m.count === 8
+      );
+      bus.publish({ kind: "viewer-count", sessionId: "count-prune", originInstanceId: "dead-instance", count: 7 });
+      await sawEight;
+
+      // No further reports from "dead-instance": once its last report ages
+      // past freshnessMs, the sweep prunes it and re-tells the producer —
+      // back to the 1 genuinely-connected local viewer.
+      const sawPrunedCount = waitForMessageMatching<{ type: string; count: number }>(
+        producer,
+        (m) => m.type === "viewer-count" && m.count === 1
+      );
+      await sawPrunedCount;
+
+      localViewer.close();
+      producer.close();
+    });
+
+    it("re-publishes its local viewer count as a heartbeat while nonzero, and reports the zero when the last viewer leaves", async () => {
+      const bus = createLocalStateBus();
+      const { instance: instanceA } = await createInstance(
+        { viewerCountFanout: { heartbeatMs: 40, freshnessMs: 10_000 } },
+        bus
+      );
+
+      const received: { sessionId: string; count: number }[] = [];
+      bus.subscribe((message) => {
+        if (message.kind === "viewer-count" && message.sessionId === "heartbeat-session") {
+          received.push({ sessionId: message.sessionId, count: message.count });
+        }
+      });
+
+      const viewer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "heartbeat-session" }));
+
+      // Several heartbeat periods: expect the admit-time publish plus at
+      // least one periodic re-publish (generous margin — timers stretch
+      // under parallel-suite load).
+      await wait(300);
+      expect(received.length).toBeGreaterThanOrEqual(2);
+      expect(received.every((m) => m.count === 1)).toBe(true);
+
+      viewer.close();
+      await wait(150);
+      // The leave publishes a zero; with zero local viewers the heartbeat
+      // then goes quiet, so the zero stays the final word.
+      expect(received[received.length - 1]).toEqual({ sessionId: "heartbeat-session", count: 0 });
+    });
+
+    it("does not materialize sessions from bus traffic it has no local stake in (a later viewer is served by the snapshot, or nothing once it expired)", async () => {
+      // Instance A publishes with a tiny TTL; instance B (large TTL) has no
+      // viewer or producer for the session when the state crosses the bus.
+      // If B had materialized a local copy from that message, a viewer
+      // joining B inside B's OWN generous TTL window would be handed that
+      // copy. Correct behavior: B kept nothing, and by join time the
+      // snapshot has expired too (its TTL is A's, the publisher's), so the
+      // viewer receives no state at all.
+      const bus = createLocalStateBus();
+      const { instance: instanceA } = await createInstance({ stateTtl: { ttlMs: 100, sweepIntervalMs: 10_000 } }, bus);
+      const { instance: instanceB } = await createInstance({ stateTtl: { ttlMs: 60_000, sweepIntervalMs: 10_000 } }, bus);
+
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("no-materialize", 1) }));
+      await wait(200); // well past A's 100ms TTL — the snapshot is expired by now
+
+      const viewer = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewer);
+      let receivedAnything = false;
+      viewer.on("message", () => {
+        receivedAnything = true;
+      });
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "no-materialize" }));
+      await wait(100);
+
+      expect(receivedAnything).toBe(false);
+
+      viewer.close();
+      producer.close();
+    });
+
     it("a viewer on instance B receives the TTL-expiry clear when the producer (on instance A) disconnects", async () => {
       const bus = createLocalStateBus();
       const stateTtl = { ttlMs: 80, sweepIntervalMs: 20 };
-      const { instance: instanceA } = await createInstance(stateTtl, bus);
-      const { instance: instanceB } = await createInstance(stateTtl, bus);
+      const { instance: instanceA } = await createInstance({ stateTtl }, bus);
+      const { instance: instanceB } = await createInstance({ stateTtl }, bus);
 
       const viewer = new WebSocket(`ws://localhost:${instanceB.port}`);
       await waitForOpen(viewer);
@@ -637,50 +853,60 @@ describe("relay server", () => {
       viewer.close();
     });
 
-    it("an instance that no longer holds a session's producer does not independently re-fire the TTL sweep once a different instance has claimed it", async () => {
-      // Direct proof of the hasLocalProducerAuthority/producer-claimed
-      // fix: without it, instance A — which never re-learns the producer
-      // moved to B — would treat "producer === null locally" as "gone",
-      // and once B's own producer goes quiet past the TTL, A would
-      // independently synthesize and broadcast its own spurious clear.
+    it("expires purely per-instance: bus silence past the TTL clears a remote instance's viewers while the producer's own instance keeps serving", async () => {
+      // Direct proof of the local-expiry design (which replaced the earlier
+      // cross-instance "authority" coordination): each instance judges
+      // staleness only for its own copy, from its own lastUpdatedAt and its
+      // own view of the producer connection. Instance A holds the (quiet
+      // but open) producer, so A must keep its state and never clear its
+      // viewers. Instance B only ever saw the state via the bus — with no
+      // producer socket of its own, bus silence past the TTL is all B has,
+      // so B's sweep clears B's viewers locally. Nothing crosses the bus
+      // for expiry, so B's clear must never leak to A's viewers either.
       const bus = createLocalStateBus();
-      const stateTtl = { ttlMs: 80, sweepIntervalMs: 20 };
-      const { instance: instanceA } = await createInstance(stateTtl, bus);
-      const { instance: instanceB } = await createInstance(stateTtl, bus);
+      const stateTtl = { ttlMs: 120, sweepIntervalMs: 20 };
+      const { instance: instanceA } = await createInstance({ stateTtl }, bus);
+      const { instance: instanceB } = await createInstance({ stateTtl }, bus);
 
-      const viewer = new WebSocket(`ws://localhost:${instanceB.port}`);
-      await waitForOpen(viewer);
-      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "migrate-session" }));
+      const viewerA = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(viewerA);
+      viewerA.send(JSON.stringify({ type: "subscribe", sessionId: "local-expiry" }));
+      const viewerB = new WebSocket(`ws://localhost:${instanceB.port}`);
+      await waitForOpen(viewerB);
+      viewerB.send(JSON.stringify({ type: "subscribe", sessionId: "local-expiry" }));
       await wait(50);
 
-      const producerA = new WebSocket(`ws://localhost:${instanceA.port}`);
-      await waitForOpen(producerA);
-      const firstReceived = waitForMessage(viewer);
-      producerA.send(JSON.stringify({ type: "overlay-state", payload: sampleState("migrate-session", 1) }));
-      await firstReceived;
-      producerA.close();
-      await wait(30); // let the close propagate before the new producer claims it
+      const producer = new WebSocket(`ws://localhost:${instanceA.port}`);
+      await waitForOpen(producer);
+      const firstOnA = waitForMessage(viewerA);
+      const firstOnB = waitForMessage(viewerB);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("local-expiry", 1) }));
+      await Promise.all([firstOnA, firstOnB]);
 
-      const producerB = new WebSocket(`ws://localhost:${instanceB.port}`);
-      await waitForOpen(producerB);
-      const secondReceived = waitForMessage(viewer);
-      producerB.send(JSON.stringify({ type: "overlay-state", payload: sampleState("migrate-session", 2) }));
-      await secondReceived; // this also lets A's "producer-claimed" handling settle before the quiet window below
-
-      const receivedSequences: number[] = [];
-      viewer.on("message", (raw) => {
-        const parsed = JSON.parse(raw.toString()) as { payload: { sequence: number } };
-        receivedSequences.push(parsed.payload.sequence);
+      const messagesOnA: { cards: unknown[]; sequence: number }[] = [];
+      const messagesOnB: { cards: unknown[]; sequence: number }[] = [];
+      viewerA.on("message", (raw) => {
+        messagesOnA.push((JSON.parse(raw.toString()) as { payload: { cards: unknown[]; sequence: number } }).payload);
+      });
+      viewerB.on("message", (raw) => {
+        messagesOnB.push((JSON.parse(raw.toString()) as { payload: { cards: unknown[]; sequence: number } }).payload);
       });
 
-      // producerB stays open and silent (a static board) well past the TTL —
-      // if A still thought it owned this session, its sweep would fire here.
-      await wait(250);
+      // The producer stays open and silent (a static board) well past the
+      // TTL — long enough for several sweep ticks on both instances.
+      await wait(350);
 
-      expect(receivedSequences).toEqual([]);
+      // B cleared its own viewers exactly once (latestState nulled, so its
+      // sweep can't re-fire) ...
+      expect(messagesOnB).toHaveLength(1);
+      expect(messagesOnB[0]!.cards).toEqual([]);
+      expect(messagesOnB[0]!.sequence).toBe(2);
+      // ... while A, still holding the open producer socket, never cleared.
+      expect(messagesOnA).toEqual([]);
 
-      viewer.close();
-      producerB.close();
+      viewerA.close();
+      viewerB.close();
+      producer.close();
     });
   });
 });

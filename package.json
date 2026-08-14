@@ -15,6 +15,7 @@
     "dev": "concurrently -n extension,relay,viewer -c blue,green,magenta \"npm run watch -w extension\" \"npm run dev -w relay\" \"npm run dev -w debug-viewer\"",
     "typecheck": "npm run typecheck -ws --if-present",
     "test": "vitest run",
+    "test:redis": "vitest run relay/src/multi-instance.redis.test.ts",
     "build": "npm run build -ws --if-present",
     "dev:twitch:build": "npm run build --prefix twitch-extension",
     "dev:twitch:assets": "npx http-server twitch-extension -p 8443 -c-1",

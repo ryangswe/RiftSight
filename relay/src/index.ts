@@ -29,17 +29,23 @@ console.log(`[relay] starting in "${config.mode}" mode`);
 
 const db = createDbClient(config.dbUrl);
 
-// Applied at every boot, not just via the standalone `npm run migrate`
-// command — runMigrations() only ever applies pending (not-yet-recorded)
-// migrations, so this is a safe no-op once a deploy's already current, and
-// it means a fresh single-instance beta deployment can't accidentally
-// start against an un-migrated database. The standalone command (see
-// scripts/migrate.ts, documented in the deployment docs) remains the
-// explicit "I want to migrate without starting the server" path.
-const migrations = await loadMigrations();
-const { applied } = await runMigrations(db, migrations);
-if (applied.length > 0) {
-  console.log(`[relay] applied migrations: ${applied.join(", ")}`);
+// Applied at every boot by default, not just via the standalone `npm run
+// migrate` command — runMigrations() only ever applies pending
+// (not-yet-recorded) migrations, so this is a safe no-op once a deploy's
+// already current, and it means a fresh single-instance beta deployment
+// can't accidentally start against an un-migrated database. Multi-replica
+// deployments set RIFTSIGHT_MIGRATE_ON_BOOT=false (see RelayEnvConfig.
+// migrateOnBoot for the boot-race rationale) and run the standalone
+// command (scripts/migrate.ts, documented in the deployment docs) once
+// against the shared database instead.
+if (config.migrateOnBoot) {
+  const migrations = await loadMigrations();
+  const { applied } = await runMigrations(db, migrations);
+  if (applied.length > 0) {
+    console.log(`[relay] applied migrations: ${applied.join(", ")}`);
+  }
+} else {
+  console.log("[relay] RIFTSIGHT_MIGRATE_ON_BOOT=false — skipping boot-time migrations (run `npm run migrate -w relay` once per deploy instead)");
 }
 
 // Only wired up once all three OAuth env vars are present — see

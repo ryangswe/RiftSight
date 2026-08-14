@@ -49,6 +49,17 @@ export interface RelayEnvConfig {
   twitchOAuthRedirectUri: string | undefined;
   /** A redis:// URL enabling cross-instance live-state fan-out (see state-bus.ts/redis-state-bus.ts) — optional in every mode, including closed-beta. Unset means single-instance behavior, unchanged from before this existed: a fresh in-process LocalStateBus per server, which never leaves the process. */
   redisUrl: string | undefined;
+  /**
+   * Whether index.ts applies pending DB migrations at every boot (today's
+   * behavior, the right default for a single instance: a fresh deployment
+   * can never start against an un-migrated database). Set
+   * RIFTSIGHT_MIGRATE_ON_BOOT=false for multi-replica deployments, where N
+   * replicas booting simultaneously would race the same migration
+   * statements against the shared database (docs/railway-deployment.md
+   * documents this explicitly) — run `npm run migrate -w relay` once
+   * against the database instead, before or between deploys.
+   */
+  migrateOnBoot: boolean;
 }
 
 export interface EnvValidationSuccess {
@@ -138,6 +149,9 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
   const twitchApiClientSecret = env["TWITCH_API_CLIENT_SECRET"] || undefined;
   const twitchOAuthRedirectUri = env["TWITCH_OAUTH_REDIRECT_URI"] || undefined;
   const redisUrl = env["REDIS_URL"] || undefined;
+  // Same explicit-opt-out shape as ALLOW_LOCAL_DEBUG below: anything other
+  // than the literal "false" (including unset) keeps the safe default.
+  const migrateOnBoot = env["RIFTSIGHT_MIGRATE_ON_BOOT"] !== "false";
 
   // Closed-beta hard-fails on any missing required secret instead of the
   // warn-only behavior every other mode keeps — booting with a feature
@@ -197,6 +211,7 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
       twitchApiClientSecret,
       twitchOAuthRedirectUri,
       redisUrl,
+      migrateOnBoot,
     },
     warnings,
   };

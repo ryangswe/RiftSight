@@ -195,6 +195,17 @@ Check `viewer_rejected`'s `reason`. `channel-id-mismatch` means the viewer's Twi
 
 `/ready` returns `503`. Check the database file's mount is actually present (a persistent-volume misconfiguration on your platform), and that `RIFTSIGHT_DB_PATH` points at it correctly — the `startup_summary` log line's `databaseConfigured`/`databasePersistentPath` fields are the fastest way to confirm the backend's own view of its configuration without needing filesystem access to the host.
 
+### Redis unavailable (multi-replica deployments only)
+
+Only applies when `REDIS_URL` is set (see [docs/scaling-plan.md](scaling-plan.md)); single-instance deployments have no Redis to lose. **A Redis outage never crashes or restarts the relay** — every Redis operation is fire-and-forget or degrade-to-nothing by design, and connection errors are logged (`redis_error`, `redis_reconnecting`) rather than thrown. What degrades while Redis is down, per instance:
+
+- Viewers keep receiving updates **from a producer connected to the same instance** — the local path never touches Redis.
+- Cross-instance fan-out pauses: a viewer on a different instance than the producer stops receiving updates, and after the staleness TTL of silence that instance clears its viewers' overlays (the same `state_ttl_expired` mechanism as a vanished producer — correct behavior, since from that instance's view the state really is unverifiable).
+- Streamer viewer counts drop toward each instance's local count as other instances' reports age out (~15s).
+- A freshly restarted instance can't load state snapshots, so viewers landing there see a blank overlay until the producer's next update.
+
+Everything above self-heals when Redis returns — ioredis reconnects and re-subscribes on its own; the next producer update repopulates state and snapshots fleet-wide. No manual intervention beyond fixing/restarting Redis itself. A burst of `redis_error` lines during a blip is expected; continuous `redis_reconnecting` for minutes means Redis itself (or its network path) needs attention.
+
 ### Stale RiftAtlas state
 
 A viewer sees hitboxes that don't match what's actually happening in the stream. First check whether the streamer's RiftSight extension is still actually detecting RiftAtlas (the extension's own Account/status section should say so) — if RiftAtlas was closed or the tab navigated away, the extension clears the retained overlay automatically within a bounded period. If it doesn't clear on its own, the backend's own freshness TTL is the defense-in-depth backstop for a producer that's genuinely gone (crashed, force-quit, network dropped mid-close) without ever sending that explicit clear — **but only once the producer's WebSocket connection has actually closed.** A still-connected producer whose board simply hasn't changed in a while (a slow turn, a paused session) is never treated as stale, however long it's been quiet — the TTL means "the producer disappeared," not "nothing changed recently." If a viewer is seeing genuinely wrong (not just old) hitboxes while the streamer's extension shows an active, connected producer, that's worth escalating as a bug rather than assumed to be TTL-related.
@@ -219,7 +230,11 @@ Every event below is emitted via `relay/src/logging.ts`'s `logEvent()` — struc
 | `validation_failure` | A WebSocket message failed schema/size validation. |
 | `connection_disconnected` | A socket was force-closed (too many invalid messages, too many subscribe attempts, a chronically slow viewer). |
 | `state_broadcast` | A producer's state was accepted and forwarded to its subscribed viewers. |
-| `state_ttl_expired` | A session's producer connection closed without ever sending an explicit clear, and its retained state then sat unrefreshed past the staleness TTL — an empty-cards clear was synthesized and broadcast to that session's already-connected viewers. Only fires once the producer WebSocket is actually gone (a still-connected, merely quiet producer never triggers this). Expected occasionally (a crashed extension, a force-quit browser); frequent occurrences for one broadcaster are worth investigating. |
+| `state_ttl_expired` | A session's retained state sat unrefreshed past the staleness TTL — an empty-cards clear was synthesized and broadcast to that session's locally-connected viewers. On the instance holding the producer socket, this only fires once that socket is actually gone (a still-connected, merely quiet producer never triggers it). On a multi-replica deployment, an instance that does NOT hold the producer judges by bus silence instead, so each instance fires its own copy of this event on its own timer. Expected occasionally (a crashed extension, a force-quit browser); frequent occurrences for one broadcaster are worth investigating. |
+| `redis_error` | A Redis operation or connection failed (multi-replica only — see "Redis unavailable" above). `reason` names the client role or operation. Logged and dropped, never fatal. |
+| `redis_reconnecting` | ioredis is retrying a dropped Redis connection (multi-replica only). Bursts during a blip are normal; continuous occurrences mean Redis itself needs attention. |
+
+Every log line also carries an `instanceId` field (an 8-character per-boot identifier) so interleaved logs from multiple replicas are distinguishable — on a single-instance deployment it simply changes on each restart.
 
 ## Secrets — never copy these into logs or support messages
 

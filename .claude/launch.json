@@ -12,6 +12,24 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["http-server", "site", "-p", "4321", "-c-1"],
       "port": 4321
+    },
+    {
+      "name": "relay-a",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd relay && REDIS_URL=redis://127.0.0.1:16500 RELAY_PORT=8791 npx tsx src/index.ts"],
+      "port": 8791
+    },
+    {
+      "name": "relay-b",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd relay && REDIS_URL=redis://127.0.0.1:16500 RELAY_PORT=8787 npx tsx src/index.ts"],
+      "port": 8787
+    },
+    {
+      "name": "debug-viewer",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd debug-viewer && npm run dev"],
+      "port": 8788
     }
   ]
 }

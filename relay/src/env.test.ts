@@ -109,6 +109,21 @@ describe("validateEnv", () => {
     if (result.ok) expect(result.config.redisUrl).toBe("redis://localhost:6379");
   });
 
+  it("defaults migrateOnBoot to true when RIFTSIGHT_MIGRATE_ON_BOOT is unset — single-instance boot-time migration stays the default", () => {
+    const result = validateEnv(env());
+    if (result.ok) expect(result.config.migrateOnBoot).toBe(true);
+  });
+
+  it("RIFTSIGHT_MIGRATE_ON_BOOT=false disables boot-time migration (the multi-replica posture)", () => {
+    const result = validateEnv(env({ RIFTSIGHT_MIGRATE_ON_BOOT: "false" }));
+    if (result.ok) expect(result.config.migrateOnBoot).toBe(false);
+  });
+
+  it("only the literal \"false\" disables boot-time migration — any other value keeps the safe default", () => {
+    const result = validateEnv(env({ RIFTSIGHT_MIGRATE_ON_BOOT: "no" }));
+    if (result.ok) expect(result.config.migrateOnBoot).toBe(true);
+  });
+
   it("defaults dbUrl to a local file path when unset", () => {
     const result = validateEnv(env());
     if (result.ok) expect(result.config.dbUrl).toBe("file:./data/riftsight.db");

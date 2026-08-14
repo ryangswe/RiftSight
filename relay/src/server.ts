@@ -25,7 +25,7 @@ import {
 import { verifyTwitchJwt } from "./twitch-auth.js";
 import type { DbClient } from "./db/client.js";
 import { authenticateProducerUpgrade, isProducerUpgradePath } from "./ws/producer-auth.js";
-import { logEvent } from "./logging.js";
+import { logEvent as emitLogEvent, type LogFields } from "./logging.js";
 import { createLocalStateBus, type StateBus } from "./state-bus.js";
 import {
   createRateLimiter,
@@ -43,26 +43,8 @@ interface Session {
   producer: WebSocket | null;
   viewers: Set<WebSocket>;
   latestState: OverlayState | null;
-  /** Set whenever latestState is — either a real producer update or the synthesized empty-cards state the TTL sweep below broadcasts. Drives both admitViewer's "don't hand a new viewer stale hitboxes" gate and the sweep's own "has this crossed STATE_TTL_MS" check. */
+  /** Set whenever latestState is — either a real producer update or the synthesized empty-cards state the TTL sweep below broadcasts. Refreshed by local producer writes AND by state received over the StateBus, which is what lets each instance expire its own copy on its own timer (see sweepStaleSessions) with no cross-instance coordination. Drives both admitViewer's "don't hand a new viewer stale hitboxes" gate and the sweep's own "has this crossed STATE_TTL_MS" check. */
   lastUpdatedAt: number;
-  /**
-   * True only once THIS instance has genuinely held this session's producer
-   * socket — decoupled from `producer`/`latestState` because, once state can
-   * arrive via a shared StateBus instead of only a local producer write, an
-   * instance that has never held the producer would otherwise have
-   * `producer === null` and `latestState !== null` simultaneously, a
-   * combination that (pre-StateBus) could only mean "this instance's
-   * producer disconnected." Without this gate, every instance without the
-   * producer would independently judge a perfectly healthy session stale
-   * once it's been quiet past STATE_TTL_MS (a static board is a normal,
-   * frequent case), each firing its own spurious empty-state clear — see
-   * sweepStaleSessions' use of this field. Set true when this instance
-   * claims the producer socket (see the "producer-claimed" StateBus
-   * message); set false when a *different* instance claims it instead —
-   * producer sockets aren't sticky to one instance, so authority has to be
-   * explicitly handed off, not inferred.
-   */
-  hasLocalProducerAuthority: boolean;
 }
 
 /**
@@ -93,6 +75,12 @@ const STATE_TTL_MS = 45_000;
 
 /** How often the sweep below checks every session against STATE_TTL_MS. A fraction of the TTL itself so the worst-case delay between "state crossed the TTL" and "already-connected viewers get cleared" stays well inside the TTL's own already-generous window, without sweeping so often it's needless overhead for what's normally an idle check over a small Map. */
 const TTL_SWEEP_INTERVAL_MS = 5_000;
+
+/** How often this instance re-publishes its local viewer count for every session it holds viewers for, even when nothing changed — the liveness signal that lets OTHER instances treat silence as this instance being gone (see REMOTE_VIEWER_COUNT_FRESHNESS_MS). Only sessions with a nonzero local count heartbeat: a zero is published once on the change itself and then aging-out keeps it zero everywhere. */
+const VIEWER_COUNT_HEARTBEAT_MS = 5_000;
+
+/** How stale a remote instance's viewer-count report may be before it stops counting toward the sum a local producer is told. Three missed heartbeats — generous enough that one delayed/dropped pub/sub message doesn't flap the streamer's count, short enough that a crashed replica's viewers disappear from the count within ~15s rather than forever. */
+const REMOTE_VIEWER_COUNT_FRESHNESS_MS = 15_000;
 
 interface ProducerBinding {
   broadcasterId: number;
@@ -154,6 +142,12 @@ export interface RelayConfig {
    */
   stateTtl?: { ttlMs: number; sweepIntervalMs: number };
   /**
+   * Overrides VIEWER_COUNT_HEARTBEAT_MS/REMOTE_VIEWER_COUNT_FRESHNESS_MS.
+   * Test-only escape hatch, exactly like stateTtl above — every real
+   * caller omits it and gets the real ~5s/15s defaults.
+   */
+  viewerCountFanout?: { heartbeatMs: number; freshnessMs: number };
+  /**
    * Cross-instance live-state fan-out — see state-bus.ts. Omitted (every
    * real caller today, since index.ts only constructs one when REDIS_URL is
    * set, and every existing test) defaults to a fresh in-process
@@ -180,14 +174,32 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   const allowLocalDebug = config.allowLocalDebug ?? true;
   const stateTtlMs = config.stateTtl?.ttlMs ?? STATE_TTL_MS;
   const ttlSweepIntervalMs = config.stateTtl?.sweepIntervalMs ?? TTL_SWEEP_INTERVAL_MS;
+  const viewerCountHeartbeatMs = config.viewerCountFanout?.heartbeatMs ?? VIEWER_COUNT_HEARTBEAT_MS;
+  const remoteViewerCountFreshnessMs = config.viewerCountFanout?.freshnessMs ?? REMOTE_VIEWER_COUNT_FRESHNESS_MS;
   const stateBus = config.stateBus ?? createLocalStateBus();
-  // Per-attachRelayWebSocketServer-call identity — used only to let this
-  // instance's own StateBus subscription no-op on messages it just
-  // published itself (see broadcastToLocalViewers' doc comment for why
-  // local delivery stays a direct call rather than round-tripping through
-  // the bus even for the origin instance). Never logged/exposed elsewhere.
+  // Per-attachRelayWebSocketServer-call identity, used three ways: to let
+  // this instance's own StateBus subscription no-op on messages it just
+  // published itself (see broadcastToLocalViewers' doc comment), as the
+  // originInstanceId keying other instances' remoteViewerCounts tables,
+  // and (as a short prefix) on every log line so interleaved replica logs
+  // are distinguishable.
   const instanceId = randomUUID();
+  // See logging.ts's ALLOWED_LOG_FIELDS note on "instanceId" — every log
+  // line from this attach carries the short id; shadowing the import keeps
+  // all the existing call sites below untouched.
+  const logEvent = (event: string, fields: LogFields = {}): void => emitLogEvent(event, { ...fields, instanceId: instanceId.slice(0, 8) });
   const sessions = new Map<string, Session>();
+  /**
+   * sessionId -> (remote instanceId -> that instance's last self-reported
+   * viewer count and when it arrived). Fed by "viewer-count" bus messages;
+   * read by sendViewerCount to tell a locally-connected producer the
+   * fleet-wide total rather than only this instance's own socket count
+   * (which under N replicas would show the streamer ~1/N of the real
+   * audience). Entries older than remoteViewerCountFreshnessMs are ignored
+   * on read and pruned by the sweep — silence means the reporting instance
+   * is gone (see VIEWER_COUNT_HEARTBEAT_MS), and its viewers with it.
+   */
+  const remoteViewerCounts = new Map<string, Map<string, { count: number; at: number }>>();
   // Set during verifyClient (upgrade time), consumed once in the
   // "connection" handler for the same request — this is how the resolved
   // identity crosses from the async pre-accept check into the now-accepted
@@ -204,7 +216,6 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       viewers: new Set(),
       latestState: null,
       lastUpdatedAt: Date.now(),
-      hasLocalProducerAuthority: false,
     };
     sessions.set(sessionId, created);
     return created;
@@ -253,10 +264,28 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     return session.producer !== null && session.producer.readyState === WebSocket.OPEN;
   }
 
-  /** Tells the producer how many viewers are currently subscribed — the only thing the relay ever sends back to a producer socket (see ViewerCountMessageSchema's own doc comment for why). A no-op if there's no open producer connection to tell; callers don't need to check isProducerConnectionOpen themselves first. */
-  function sendViewerCount(session: Session): void {
+  /** This instance's local sockets plus every OTHER instance's last fresh self-report — the number a streamer should actually see under N replicas. Stale remote entries are skipped (not trusted) here and physically pruned by the sweep. */
+  function totalViewerCount(sessionId: string, session: Session): number {
+    let total = session.viewers.size;
+    const remote = remoteViewerCounts.get(sessionId);
+    if (remote) {
+      const now = Date.now();
+      for (const { count, at } of remote.values()) {
+        if (now - at <= remoteViewerCountFreshnessMs) total += count;
+      }
+    }
+    return total;
+  }
+
+  /** Tells the producer how many viewers are currently subscribed fleet-wide (see totalViewerCount) — the only thing the relay ever sends back to a producer socket (see ViewerCountMessageSchema's own doc comment for why). A no-op if there's no open producer connection to tell; callers don't need to check isProducerConnectionOpen themselves first. Wire protocol to the extension is unchanged — only what the count means grew. */
+  function sendViewerCount(sessionId: string, session: Session): void {
     if (!isProducerConnectionOpen(session)) return;
-    session.producer!.send(JSON.stringify({ type: "viewer-count", count: session.viewers.size }));
+    session.producer!.send(JSON.stringify({ type: "viewer-count", count: totalViewerCount(sessionId, session) }));
+  }
+
+  /** Reports this instance's OWN local socket count for the session to the rest of the fleet — on every local change (admit/disconnect) and from the heartbeat below. Deliberately the raw local count, never totalViewerCount: publishing sums of sums would double-count every other instance's viewers back at them. */
+  function publishLocalViewerCount(sessionId: string, session: Session): void {
+    stateBus.publish({ kind: "viewer-count", sessionId, originInstanceId: instanceId, count: session.viewers.size });
   }
 
   /** Builds the TTL sweep's synthesized clear broadcast — reuses the expiring state's own protocolVersion/sourceViewport (both required, non-optional schema fields) rather than inventing placeholder values, and bumps sequence by one so a viewer watching the raw stream sees a normal-looking next state, not a repeat. */
@@ -281,60 +310,105 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
    */
   function sweepStaleSessions(): void {
     const now = Date.now();
+    // Prune remote viewer-count entries whose reporting instance has gone
+    // silent past the freshness window (crashed, partitioned, or simply no
+    // longer running) — totalViewerCount already ignores them on read, but
+    // leaving them in the map would grow it forever across dead instances,
+    // and a locally-connected producer should also be TOLD its audience
+    // shrank, not just have the next incidental recount reflect it.
+    for (const [sessionId, remote] of remoteViewerCounts) {
+      let pruned = false;
+      for (const [remoteInstanceId, entry] of remote) {
+        if (now - entry.at > remoteViewerCountFreshnessMs) {
+          remote.delete(remoteInstanceId);
+          pruned = true;
+        }
+      }
+      if (remote.size === 0) remoteViewerCounts.delete(sessionId);
+      if (pruned) {
+        const session = sessions.get(sessionId);
+        if (session) sendViewerCount(sessionId, session);
+      }
+    }
     for (const [sessionId, session] of sessions) {
       if (!session.latestState) continue;
-      // Only the instance that has/had this session's producer may judge
-      // staleness — see Session.hasLocalProducerAuthority's doc comment for
-      // why every other instance's session.producer being null carries no
-      // information once state can arrive via the bus.
-      if (!session.hasLocalProducerAuthority) continue;
       if (isProducerConnectionOpen(session)) continue; // still connected — a static board is not staleness
       if (now - session.lastUpdatedAt <= stateTtlMs) continue;
 
+      // Expiry is purely local: this instance expires only ITS OWN copy and
+      // tells only ITS OWN viewers — nothing is published to the bus. Every
+      // other instance runs the same sweep against its own lastUpdatedAt
+      // (refreshed by bus-received state), so a genuinely dead session ages
+      // out everywhere within one TTL without any coordination, and a
+      // crashed instance can't strand the fleet holding stale state (the
+      // failure mode of the earlier cross-instance "authority" design this
+      // replaced). Known tradeoff: an instance that does NOT hold the
+      // producer socket can't see that the producer is merely quiet-but-
+      // connected (a static board), so its viewers get a clear after
+      // STATE_TTL_MS of bus silence while the producer's own instance
+      // correctly keeps serving — recoverable (the next real update
+      // repopulates everyone), unlike stale-forever.
       const emptyState = synthesizeEmptyState(sessionId, session.latestState);
       session.latestState = null;
       logEvent("state_ttl_expired", { sessionId, viewers: session.viewers.size });
       broadcastToLocalViewers(session, emptyState);
-      stateBus.publish({ kind: "state-expired", sessionId, originInstanceId: instanceId, emptyState });
     }
   }
 
   const ttlSweepInterval = setInterval(sweepStaleSessions, ttlSweepIntervalMs);
 
+  // The liveness half of the viewer-count contract (see
+  // VIEWER_COUNT_HEARTBEAT_MS): re-publish every session this instance
+  // holds viewers for, so other instances' freshness windows keep being
+  // refreshed exactly as long as — and no longer than — this instance is
+  // actually alive and holding sockets.
+  const viewerCountHeartbeatInterval = setInterval(() => {
+    for (const [sessionId, session] of sessions) {
+      if (session.viewers.size > 0) publishLocalViewerCount(sessionId, session);
+    }
+  }, viewerCountHeartbeatMs);
+
   /**
-   * Applies a state update that originated on a DIFFERENT instance — see
+   * Applies bus traffic that originated on a DIFFERENT instance — see
    * broadcastToLocalViewers' doc comment for why this instance's own
-   * originated updates are never round-tripped back through here. "state"
-   * and "state-expired" are kept as separate message kinds (rather than
-   * encoding an expiry as a "state" message with an empty-cards payload)
-   * specifically so a receiving instance's own latestState reliably becomes
-   * null on expiry — sweepStaleSessions' own re-fire guard (`if
-   * (!session.latestState) continue`) depends on that, and storing the
-   * empty state AS latestState would silently break it.
+   * originated updates are never round-tripped back through here. Note
+   * there is deliberately no expiry message kind to handle: TTL expiry is
+   * purely local (see sweepStaleSessions).
+   *
+   * Only sessions that already exist locally (a viewer or producer here
+   * created them) are touched — `sessions.get`, never getSession. Without
+   * that, every instance would materialize a Session (holding a full
+   * OverlayState) for every session fleet-wide and never delete it,
+   * unbounded memory for state nobody here is looking at. An instance
+   * with no local stake needs none of this traffic: a viewer arriving
+   * later is covered by the snapshot store (see admitViewer), and
+   * viewer counts for a session with no local producer inform nobody.
    */
   const unsubscribeFromStateBus = stateBus.subscribe((message) => {
     if (message.originInstanceId === instanceId) return; // already applied locally at the point of origin
-    const session = getSession(message.sessionId);
-    if (message.kind === "producer-claimed") {
-      session.hasLocalProducerAuthority = false;
+    const session = sessions.get(message.sessionId);
+    if (!session) return;
+    if (message.kind === "viewer-count") {
+      let remote = remoteViewerCounts.get(message.sessionId);
+      if (!remote) {
+        remote = new Map();
+        remoteViewerCounts.set(message.sessionId, remote);
+      }
+      remote.set(message.originInstanceId, { count: message.count, at: Date.now() });
+      // Recompute immediately so a locally-connected producer's popup
+      // tracks remote joins/leaves at change speed, not sweep speed.
+      sendViewerCount(message.sessionId, session);
       return;
     }
-    if (message.kind === "state") {
-      session.latestState = message.state;
-      session.lastUpdatedAt = Date.now();
-      const delivered = broadcastToLocalViewers(session, message.state);
-      logEvent("state_broadcast", {
-        sessionId: message.sessionId,
-        sequence: message.state.sequence,
-        cards: message.state.cards.length,
-        viewers: delivered,
-      });
-      return;
-    }
-    // message.kind === "state-expired"
-    session.latestState = null;
-    logEvent("state_ttl_expired", { sessionId: message.sessionId, viewers: session.viewers.size });
-    broadcastToLocalViewers(session, message.emptyState);
+    session.latestState = message.state;
+    session.lastUpdatedAt = Date.now();
+    const delivered = broadcastToLocalViewers(session, message.state);
+    logEvent("state_broadcast", {
+      sessionId: message.sessionId,
+      sequence: message.state.sequence,
+      cards: message.state.cards.length,
+      viewers: delivered,
+    });
   });
 
   function bindAuthenticatedProducer(ws: WebSocket, state: ConnectionState, binding: ProducerBinding): void {
@@ -345,10 +419,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       session.producer.close(CLOSE_CODE.PRODUCER_REPLACED, "replaced-by-new-producer-connection");
     }
     session.producer = ws;
-    session.hasLocalProducerAuthority = true;
-    stateBus.publish({ kind: "producer-claimed", sessionId: binding.twitchUserId, originInstanceId: instanceId });
     logEvent("producer_connected", { channelId: binding.twitchUserId, broadcasterId: binding.broadcasterId });
-    sendViewerCount(session);
+    sendViewerCount(binding.twitchUserId, session);
   }
 
   const wss = new WebSocketServer({
@@ -372,25 +444,58 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       : undefined,
   });
 
+  /** admitViewer's freshness gate over this instance's own copy, shared with the snapshot-fallback re-check below. A live producer connection always means the state is trusted, however long ago it last actually changed — see isProducerConnectionOpen's doc comment. */
+  function hasFreshLocalState(session: Session): boolean {
+    return session.latestState !== null && (isProducerConnectionOpen(session) || Date.now() - session.lastUpdatedAt <= stateTtlMs);
+  }
+
   // Shared by both the plain (local-debug) and Twitch-authenticated
   // subscribe paths once each has independently decided the request is
   // trusted — this function itself does no authorization, it only admits.
-  function admitViewer(ws: WebSocket, sessionId: string): void {
+  // Async only for the snapshot fallback at the bottom; admission itself
+  // (viewers.add and the counted log/viewer-count send) happens
+  // synchronously before the first await, so a producer update arriving
+  // mid-load still reaches this viewer via broadcastToLocalViewers.
+  async function admitViewer(ws: WebSocket, sessionId: string): Promise<void> {
     const session = getSession(sessionId);
     session.viewers.add(ws);
     logEvent("viewer_admitted", { sessionId, viewers: session.viewers.size });
-    sendViewerCount(session);
+    sendViewerCount(sessionId, session);
+    publishLocalViewerCount(sessionId, session);
     // Belt-and-suspenders alongside sweepStaleSessions above: the sweep
     // only runs every TTL_SWEEP_INTERVAL_MS, so a state that just crossed
     // STATE_TTL_MS moments ago (with no live producer) could still be
     // sitting in latestState when a new viewer connects — this check means
     // a newly-admitted viewer never receives truly stale hitboxes
-    // regardless of sweep timing. A live producer connection always means
-    // the state is trusted, however long ago it last actually changed —
-    // see isProducerConnectionOpen's doc comment.
-    if (session.latestState && (isProducerConnectionOpen(session) || Date.now() - session.lastUpdatedAt <= stateTtlMs)) {
+    // regardless of sweep timing.
+    if (hasFreshLocalState(session)) {
       ws.send(JSON.stringify({ type: "overlay-state", payload: session.latestState }));
+      return;
     }
+    // No fresh local copy — the case a freshly started/restarted instance
+    // is in for EVERY session (routine during rolling deploys, where a
+    // viewer routed here would otherwise stare at a blank overlay until
+    // the producer's next real update). The bus's snapshot store holds the
+    // producer's last publish, TTL-bounded, so a hit here is fresh by
+    // definition. loadSnapshot never rejects (see the StateBus contract).
+    const snapshot = await stateBus.loadSnapshot(sessionId);
+    // Re-check after the await: a real producer update (local or bus) that
+    // landed while the load was in flight is newer than any snapshot and
+    // was already sent to this viewer by broadcastToLocalViewers — sending
+    // the snapshot on top would regress the viewer to older state.
+    if (hasFreshLocalState(session)) return;
+    if (snapshot === null || ws.readyState !== WebSocket.OPEN) return;
+    // Seed this instance's own copy so (a) the next viewer admits without
+    // a round trip, and (b) the local TTL sweep takes ownership of
+    // clearing what was just delivered — without this, a snapshot-served
+    // overlay on an instance that never hears from the bus again would
+    // linger on the viewer's screen forever. lastUpdatedAt = now (not the
+    // producer's original publish time, which this instance can't know)
+    // stretches worst-case staleness to snapshot-TTL + sweep-TTL — two
+    // recoverable TTL windows, accepted over adding clocks to the wire.
+    session.latestState = snapshot;
+    session.lastUpdatedAt = Date.now();
+    ws.send(JSON.stringify({ type: "overlay-state", payload: snapshot }));
   }
 
   function markInvalid(ws: WebSocket, state: ConnectionState, reason: string, extra: Record<string, string | number> = {}): void {
@@ -453,17 +558,13 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       // by bindAuthenticatedProducer's replace-on-reconnect.
       const isNewProducerBinding = session.producer !== ws;
       session.producer = ws;
-      if (isNewProducerSocket) {
-        session.hasLocalProducerAuthority = true;
-        stateBus.publish({ kind: "producer-claimed", sessionId: overlayState.sessionId, originInstanceId: instanceId });
-      }
       session.latestState = overlayState;
       session.lastUpdatedAt = Date.now();
       // Only on a genuinely new binding (not every publish from an
       // already-bound producer) — sendViewerCount is idempotent either
       // way, this just avoids a redundant message on every single publish
       // tick from a producer that's been connected the whole time.
-      if (isNewProducerBinding) sendViewerCount(session);
+      if (isNewProducerBinding) sendViewerCount(overlayState.sessionId, session);
 
       const delivered = broadcastToLocalViewers(session, overlayState);
       logEvent("state_broadcast", {
@@ -474,6 +575,9 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         bytes,
       });
       stateBus.publish({ kind: "state", sessionId: overlayState.sessionId, originInstanceId: instanceId, state: overlayState });
+      // Same TTL as the sweep: the snapshot must never outlive what this
+      // instance itself would be willing to hand a late-joining viewer.
+      stateBus.saveSnapshot(overlayState.sessionId, overlayState, stateTtlMs);
       return;
     }
 
@@ -490,7 +594,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         return;
       }
       state.invalidMessageCount = 0;
-      admitViewer(ws, subscribeMessage.data.sessionId);
+      void admitViewer(ws, subscribeMessage.data.sessionId);
       return;
     }
 
@@ -524,7 +628,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       }
 
       state.invalidMessageCount = 0;
-      admitViewer(ws, channelId);
+      void admitViewer(ws, channelId);
       return;
     }
 
@@ -555,7 +659,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         }
         if (session.viewers.delete(ws)) {
           logEvent("viewer_disconnected", { sessionId, viewers: session.viewers.size });
-          sendViewerCount(session);
+          sendViewerCount(sessionId, session);
+          publishLocalViewerCount(sessionId, session);
         }
       }
     });
@@ -568,6 +673,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         // setInterval keeps the Node process (and, in tests, the test
         // runner) alive/hanging past this close() resolving.
         clearInterval(ttlSweepInterval);
+        clearInterval(viewerCountHeartbeatInterval);
         // Only removes THIS server's own handler from the bus — a shared
         // injected bus (two createRelayServer calls sharing one
         // LocalStateBus, as the cross-instance tests do) keeps working for

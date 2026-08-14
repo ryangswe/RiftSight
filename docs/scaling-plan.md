@@ -4,16 +4,30 @@ Written ahead of need, while the Twitch Extension is in Review, for once
 multiple simultaneous large-viewership streamers make the current
 single-instance backend a real risk, not a hypothetical one.
 
-**Status: Stage 1's code is done** (`relay/src/state-bus.ts`,
-`relay/src/redis-state-bus.ts`, the `server.ts` refactor, `REDIS_URL` wiring
-in `env.ts`/`index.ts` — see the implementation plan at the time,
-`/Users/rdclder/.claude/plans/foamy-prancing-beaver.md`, for the exact design
-rationale). It's fully opt-in and inert until `REDIS_URL` is actually set —
-today's single-instance deployment is unaffected. **Stages 2–4 below are
-still just planned, not built**: nothing has actually been provisioned
-(no Redis, no Turso, no extra Railway replicas), so the backend still runs
-exactly as it did before this stage, just with the cross-instance code path
-now sitting there ready for Stage 2 to turn on.
+**Status: Stage 1 is done and verified** — code, unit/integration tests, a
+real-Redis multi-instance harness (`relay/src/multi-instance.redis.test.ts`,
+`npm run test:redis`), and a live two-instance browser verification (two
+relay processes + local Redis + the debug viewer). It's fully opt-in and
+inert until `REDIS_URL` is actually set — today's single-instance
+deployment is unaffected (the full relay suite passes unmodified with no
+`REDIS_URL`, which is the byte-identical-behavior proof). Everything
+executable from a development machine is done, including the
+`RIFTSIGHT_MIGRATE_ON_BOOT` boot-gating and the documentation sweep.
+**What remains is exclusively operator/provisioning work** — nothing has
+been provisioned (no Redis add-on, no Turso, no staging service, no extra
+Railway replicas), deliberately held until the in-flight Twitch Extension
+review lands: see "Stage 2+ operator checklist" below for the exact
+sequence.
+
+An earlier revision of this doc claimed Stage 1 done with "604/604 tests
+passing" while the tree it described didn't compile (a bad merge had left
+an undeclared identifier on the producer path) — a post-merge audit caught
+that plus several real design gaps (a crash-stale expiry-authority design,
+no restart snapshot, viewer counts not fanned out, no ioredis error
+handling, unbounded cross-fleet session materialization). All of those are
+fixed and re-verified in the current tree; the "What Stage 1 actually
+consists of" section below reflects the design as built, not as first
+attempted.
 
 ## The actual problem
 
@@ -69,61 +83,98 @@ map and its `Set<WebSocket>` of viewers only exist within one process — a
 viewer connected to instance B has no way to see a producer update that
 arrived on instance A.
 
-Built via a `StateBus` abstraction (`relay/src/state-bus.ts`,
-`relay/src/redis-state-bus.ts`) plus a `server.ts` refactor — see the
-implementation plan for the exact design (in particular a real
-correctness bug found only during planning: an instance with no local
-producer for a session must never independently judge it TTL-stale, since
-`session.producer === null` stops meaning "gone" once state can arrive via
-the bus — fixed with `hasLocalProducerAuthority` + a `"producer-claimed"`
-handoff message). Verified: 604/604 tests passing (13 new), every
-pre-existing relay test unmodified and green (proving the no-`REDIS_URL`
-default is byte-for-byte unchanged), and a live boot with `REDIS_URL` unset
-confirmed identical startup behavior. No real Redis was available to verify
-against in this sandbox — `RedisStateBus` is tested against a fake client
-double instead; genuine Redis behavior is unverified until Stage 2
-provisions one for real.
+**What Stage 1 actually consists of, as built:**
 
-What it *was*: add a pub/sub layer (Redis is the obvious choice — cheap, a
-supported Railway add-on, and a pub/sub API simple enough not to need much
-new abstraction) so that:
-- Each instance keeps holding its own locally-connected producer and viewer
-  `WebSocket`s exactly as today (sockets still can't cross processes — that
-  doesn't change).
-- When an instance receives a validated state update from *its* producer, it
-  publishes the already-sanitized `OverlayState` to a Redis channel keyed by
-  session/channel ID, instead of (or alongside) writing directly into a
-  local map.
-- Every instance subscribes to channels for sessions it has local viewers
-  for, and forwards each message to its own locally-connected `viewers` set
-  — same fan-out logic that exists today, just fed from a subscription
-  instead of a local write.
-- This removes any need for sticky routing: a producer or viewer can land on
-  *any* instance behind the load balancer, since pub/sub — not which
-  process happens to hold which socket — is what carries state across.
+- **`StateBus` abstraction** (`relay/src/state-bus.ts`,
+  `relay/src/redis-state-bus.ts`): one fixed Redis pub/sub channel carrying
+  two message kinds — sanitized `OverlayState` fan-out and per-instance
+  viewer-count reports — plus a TTL-bounded latest-state snapshot
+  (`SET riftsight:state:<sessionId> <json> PX <ttl>` / `GET`). The local
+  in-process implementation remains the default everywhere `REDIS_URL` is
+  unset, byte-identical to pre-Stage-1 behavior.
+- **Purely-local TTL expiry.** Each instance expires its own copy of a
+  session's state on its own timer (from `lastUpdatedAt`, refreshed by both
+  local producer writes and bus-received state) and tells only its own
+  viewers — no cross-instance expiry coordination at all. An earlier design
+  coordinated expiry through an authority flag and a claim message; it was
+  scrapped because an instance crash lost the flag forever (stale state on
+  every other instance) and the claim had no fencing (split-brain). Known
+  accepted tradeoff: an instance without the producer socket can't tell
+  quiet-but-connected from gone, so its viewers get a clear after a TTL of
+  bus silence — recoverable on the next real update, unlike stale-forever.
+- **Restart/rolling-deploy snapshot.** A viewer admitted on an instance
+  with no fresh local copy is served from the Redis snapshot — without
+  this, every viewer routed to a freshly started replica saw a blank
+  overlay until the producer's next update.
+- **Cross-instance viewer counts.** Each instance publishes its own local
+  count per session (on change + ~5s heartbeat while nonzero); a producer
+  is told the fleet-wide sum, with silent instances' reports aging out in
+  ~15s (a crashed replica's viewers leave the count instead of freezing in
+  it). Without this, N replicas would show a streamer ~1/N of their real
+  audience.
+- **Bounded memory.** Bus traffic only applies to sessions the receiving
+  instance already has a local stake in — no instance materializes state
+  for sessions it has no viewers or producer for.
+- **Redis failure hardening.** Error listeners on both clients, every
+  publish/SET caught-and-logged, subscribe failures logged not fatal:
+  Redis down degrades (local viewers keep working) rather than crashing
+  the relay. See the operator runbook's "Redis unavailable" section for
+  the observable behavior.
+- **Boot-migration gating** (`RIFTSIGHT_MIGRATE_ON_BOOT=false`) so N
+  replicas can't race migrations — see docs/railway-deployment.md §7.
+- **Replica-distinguishable logs**: every log line carries an 8-char
+  per-boot `instanceId` (the Stage 4 quick win, done early).
 
-Secondary pieces that ride along with this:
-- The stale-session TTL sweep (`sweepStaleSessions`) is naturally
-  per-producer-connection already (a producer's socket is only ever held by
-  one instance at a time), so this likely needs no redesign — worth
-  confirming during implementation, not assuming.
-- Keep a **graceful no-Redis fallback**: if `REDIS_URL` (or equivalent) is
-  unset, behave exactly as today (single process, local map, no pub/sub) —
-  matching this codebase's existing pattern of optional-env-var-gated
-  features (`TWITCH_EXTENSION_CLIENT_ID`, `ALLOW_LOCAL_DEBUG`). This keeps
-  local dev and small deployments simple, and gives a clean rollback path if
-  multi-instance mode ever needs to be disabled in a hurry.
+**Verified**: full suite green (666 tests; the no-`REDIS_URL` relay tests
+unmodified, proving the single-instance default unchanged), a real-Redis
+harness (`npm run test:redis`) spawning its own `redis-server` and
+covering fan-out, fresh-instance snapshot recovery, viewer-count
+aggregation, and independent per-instance TTL expiry, and a live
+two-instance browser session verifying the same four behaviors end-to-end
+(including a mid-session relay restart recovering via snapshot, and a
+killed instance's viewer count pruning out after ~15s).
 
-## Stage 2 — Infra changes
+## Stage 2+ operator checklist (the deferred provisioning work)
 
-- Bump `railway.json`'s `numReplicas` above 1, provision the Redis add-on.
-- **Open question worth a spike before committing further**: does Railway's
-  own load balancer correctly distribute long-lived WebSocket connections
-  across replicas, and drain connections gracefully on a rolling deploy
-  rather than dropping them? Needs verifying against Railway's actual
-  behavior, not assumed — if it doesn't handle WS well, that changes the
-  provider conversation independent of everything else in this plan.
-- Provision the Turso database (Stage 0) and do the one-time data copy.
+Everything below is account/console/infra work, deliberately deferred
+until the Twitch Extension review lands (backend changes never trigger
+re-review, but a stable prod during review is the safe posture). Do the
+steps in order; none of the production steps should be done piecemeal.
+
+1. **Provision Turso** (Stage 0): create the database
+   (`turso db create riftsight` or the dashboard), get the `libsql://…`
+   URL + auth token. Run migrations against it once from a local machine:
+   `cd relay && RIFTSIGHT_DB_PATH='libsql://…' npm run migrate`. Copy the
+   current allowlist/broadcaster/credential rows from the Railway volume's
+   SQLite file (backup per docs/railway-deployment.md §11, then restore
+   the rows into Turso — plain SQLite-dialect SQL, wire-compatible).
+2. **Provision Redis**: Railway project canvas → Create → Database →
+   Redis; reference its connection string as `REDIS_URL` on the relay
+   service (Railway variables support `${{Redis.REDIS_URL}}`-style
+   references).
+3. **Cut the relay service over**: set `RIFTSIGHT_DB_PATH` to the
+   `libsql://…` URL, set `RIFTSIGHT_MIGRATE_ON_BOOT=false`, remove
+   `deploy.requiredMountPath: "/data"` from `railway.json` (a code-adjacent
+   edit that takes effect on deploy — bundled here deliberately, since the
+   mount physically prevents a second replica), detach the volume, deploy,
+   and confirm `/ready` + a producer/viewer session against the remote DB
+   at **one replica** first.
+4. **Staging spike for the Stage-2 open question**: create a second
+   Railway service from the same repo (staging), same env but staging
+   Turso/Redis, bump its `numReplicas` to 2–3, and verify Railway's load
+   balancer actually distributes long-lived WebSocket connections across
+   replicas and drains them gracefully on a rolling deploy rather than
+   dropping them mid-stream. This is the one genuinely unverifiable-
+   locally behavior — if Railway handles WS poorly, that changes the
+   provider conversation independent of everything else here. The
+   `instanceId` log field is how you confirm connections actually spread.
+5. **Bump production `numReplicas`** only after the spike passes. Keep the
+   same public hostname (see "Does this need another Twitch review cycle?"
+   — changing it would trigger one).
+
+**Rollback path at every step**: unset `REDIS_URL` and return to one
+replica — the no-Redis default is the pre-Stage-1 behavior, kept working
+by the entire existing test suite.
 
 ## Stage 3 — Rate limiting: accept the tradeoff, don't rebuild it yet
 
@@ -141,20 +192,22 @@ materialized.
 
 Structured JSON logging (`relay/src/logging.ts`) already exists and Railway
 aggregates logs across replicas automatically, so this mostly carries over
-unchanged. Worth adding: an instance identifier field to log lines (nothing
-currently distinguishes which replica logged what), and a basic
-dashboard/alert on concurrent viewer/producer counts so capacity pressure is
-visible before it becomes an incident rather than after.
+unchanged. The instance-identifier field is **done** (every log line now
+carries an 8-char per-boot `instanceId` — see the operator runbook's log
+table). Still worth adding later: a basic dashboard/alert on concurrent
+viewer/producer counts so capacity pressure is visible before it becomes an
+incident rather than after.
 
 ## Stage 5 — Testing and rollout
 
-- A new local multi-instance test harness: two relay processes plus a local
-  Redis, confirming a producer connected to instance A correctly reaches a
-  viewer connected to instance B. Likely an extension of the existing
-  `server.test.ts` integration-test pattern rather than a new framework.
+- The local multi-instance test harness is **done**
+  (`relay/src/multi-instance.redis.test.ts`, `npm run test:redis` — spawns
+  its own `redis-server`, skips cleanly where the binary is absent), and a
+  live two-instance browser verification has been performed — see the
+  Stage 1 "Verified" note.
 - Roll out to a separate staging Railway service first, specifically to
   observe real multi-replica WS load-balancing behavior (the Stage 2 open
-  question) before touching production.
+  question) before touching production — step 4 of the operator checklist.
 - Keep the Stage 1 no-Redis fallback as the rollback path if anything goes
   wrong post-launch.
 
