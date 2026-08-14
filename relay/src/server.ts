@@ -112,6 +112,8 @@ const CLOSE_CODE = {
 export interface RelayServer {
   port: number;
   close(): Promise<void>;
+  /** Test/diagnostic-only: how many sessions this instance currently holds in memory. Exposed so tests can prove the reaping sweep actually shrinks the sessions map back to baseline (the map is otherwise closure-private); every real caller ignores it. */
+  debugSessionCount(): number;
 }
 
 export interface RelayConfig {
@@ -170,7 +172,7 @@ export interface RelayConfig {
  * own private server). Returns only a close() — there's no "port" to
  * report here since this function never bound one itself.
  */
-export function attachRelayWebSocketServer(httpServer: HttpServer, config: RelayConfig = {}): { close(): Promise<void> } {
+export function attachRelayWebSocketServer(httpServer: HttpServer, config: RelayConfig = {}): { close(): Promise<void>; debugSessionCount(): number } {
   const allowLocalDebug = config.allowLocalDebug ?? true;
   const stateTtlMs = config.stateTtl?.ttlMs ?? STATE_TTL_MS;
   const ttlSweepIntervalMs = config.stateTtl?.sweepIntervalMs ?? TTL_SWEEP_INTERVAL_MS;
@@ -331,6 +333,31 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       }
     }
     for (const [sessionId, session] of sessions) {
+      // Reap any session this instance no longer has a local stake in — no
+      // local producer socket AND no local viewers. This is the cleanup
+      // half of the no-materialization rule (see the StateBus subscribe
+      // handler): that rule refuses to CREATE a Session for bus traffic
+      // nothing here is watching, and this removes one that has BECOME
+      // stakeless. Without it, `sessions` only ever grew — one entry per
+      // distinct channel id this process ever saw, each pinned in memory
+      // holding a full `latestState` that the bus kept refreshing for an
+      // audience that had already left (a producer on another instance
+      // keeps publishing; this instance keeps applying it to zero local
+      // viewers). Dropping it is safe precisely because state is no longer
+      // process-local truth: a returning local viewer reconstructs the
+      // session and reloads the current board from the snapshot store (see
+      // admitViewer), and the bus handler ignores traffic for a session it
+      // no longer holds. Deleting the current key mid-iteration is safe for
+      // a Map. Note `latestState` is intentionally NOT part of the
+      // condition: with zero local consumers, retained state serves nobody,
+      // so its freshness is irrelevant to whether this instance should keep
+      // the entry.
+      if (session.producer === null && session.viewers.size === 0) {
+        sessions.delete(sessionId);
+        remoteViewerCounts.delete(sessionId); // no local producer to report a count to; a bus report would re-create this lazily if one ever reappears
+        logEvent("session_reaped", { sessionId });
+        continue;
+      }
       if (!session.latestState) continue;
       if (isProducerConnectionOpen(session)) continue; // still connected — a static board is not staleness
       if (now - session.lastUpdatedAt <= stateTtlMs) continue;
@@ -667,6 +694,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   });
 
   return {
+    debugSessionCount: () => sessions.size,
     close: () =>
       new Promise<void>((resolve, reject) => {
         // Must be cleared here, not left running — an un-cleared
@@ -697,7 +725,7 @@ export function createRelayServer(port: number, config: RelayConfig = {}): Promi
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
     });
-    const { close: closeWs } = attachRelayWebSocketServer(httpServer, config);
+    const { close: closeWs, debugSessionCount } = attachRelayWebSocketServer(httpServer, config);
 
     httpServer.on("error", reject);
     httpServer.listen(port, () => {
@@ -706,6 +734,7 @@ export function createRelayServer(port: number, config: RelayConfig = {}): Promi
       console.log(`[relay] listening on ws://localhost:${boundPort}`);
       resolve({
         port: boundPort,
+        debugSessionCount,
         close: async () => {
           await closeWs();
           await new Promise<void>((res, rej) => {

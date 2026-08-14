@@ -576,6 +576,83 @@ describe("relay server", () => {
     });
   });
 
+  describe("session reaping (bounded memory)", () => {
+    // Directly proves the sweep shrinks the in-memory sessions map back to
+    // baseline once a session has no local stake — the fix for the map
+    // otherwise growing one permanent entry per distinct channel id the
+    // process ever saw. debugSessionCount() is the seam (the map is
+    // closure-private) — see RelayServer.debugSessionCount.
+    async function waitForSessionCount(s: RelayServer, expected: number, timeoutMs = 1000): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      while (s.debugSessionCount() !== expected) {
+        if (Date.now() > deadline) break;
+        await wait(20);
+      }
+    }
+
+    it("reaps a session once its producer and all its viewers are gone", async () => {
+      server = await createRelayServer(0, { stateTtl: { ttlMs: 40, sweepIntervalMs: 20 } });
+      const url = `ws://localhost:${server.port}`;
+      expect(server.debugSessionCount()).toBe(0);
+
+      const producer = new WebSocket(url);
+      await waitForOpen(producer);
+      const viewer = new WebSocket(url);
+      await waitForOpen(viewer);
+      const received = waitForMessage(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "reap-me" }));
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("reap-me", 1) }));
+      await received;
+      expect(server.debugSessionCount()).toBe(1);
+
+      producer.close();
+      viewer.close();
+
+      // No local producer and no local viewers → the next sweep drops it,
+      // and (crucially) it does NOT come back on subsequent sweeps.
+      await waitForSessionCount(server, 0);
+      expect(server.debugSessionCount()).toBe(0);
+      await wait(60); // a couple more sweep ticks
+      expect(server.debugSessionCount()).toBe(0);
+    });
+
+    it("does NOT reap a session whose producer is still connected, even with zero viewers", async () => {
+      server = await createRelayServer(0, { stateTtl: { ttlMs: 40, sweepIntervalMs: 20 } });
+      const url = `ws://localhost:${server.port}`;
+
+      const producer = new WebSocket(url);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("held-by-producer", 1) }));
+      await wait(50);
+      expect(server.debugSessionCount()).toBe(1);
+
+      await wait(120); // several sweep ticks, producer still connected, no viewers ever
+      expect(server.debugSessionCount()).toBe(1);
+
+      producer.close();
+      await waitForSessionCount(server, 0);
+      expect(server.debugSessionCount()).toBe(0);
+    });
+
+    it("does NOT reap a session that still has a viewer, even with no producer", async () => {
+      server = await createRelayServer(0, { stateTtl: { ttlMs: 10_000, sweepIntervalMs: 20 } });
+      const url = `ws://localhost:${server.port}`;
+
+      const viewer = new WebSocket(url);
+      await waitForOpen(viewer);
+      viewer.send(JSON.stringify({ type: "subscribe", sessionId: "held-by-viewer" }));
+      await wait(50);
+      expect(server.debugSessionCount()).toBe(1);
+
+      await wait(120); // several sweep ticks, viewer still subscribed, no producer
+      expect(server.debugSessionCount()).toBe(1);
+
+      viewer.close();
+      await waitForSessionCount(server, 0);
+      expect(server.debugSessionCount()).toBe(0);
+    });
+  });
+
   describe("cross-instance fan-out (shared StateBus)", () => {
     // These simulate two horizontally-scaled relay instances by giving two
     // separate createRelayServer calls the same LocalStateBus — proving the
