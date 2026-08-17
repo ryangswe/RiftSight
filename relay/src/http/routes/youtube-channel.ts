@@ -20,7 +20,7 @@
 import { YOUTUBE_CHANNEL_ID_PATTERN } from "@riftsight/protocol";
 import type { DbClient } from "../../db/client.js";
 import { validateProducerCredential } from "../../db/producer-credentials.js";
-import { clearYouTubeChannel, getBroadcasterById, setYouTubeChannel } from "../../db/broadcasters.js";
+import { clearPlatformIdentity, getIdentityForBroadcaster, setPlatformIdentity } from "../../db/identities.js";
 import { jsonResponse, type HttpRequest, type HttpResponse } from "../types.js";
 
 function extractBearerToken(req: HttpRequest): string | undefined {
@@ -40,8 +40,8 @@ async function authenticate(req: HttpRequest, db: DbClient): Promise<{ broadcast
 export async function handleGetYouTubeChannel(req: HttpRequest, db: DbClient): Promise<HttpResponse> {
   const auth = await authenticate(req, db);
   if ("status" in auth) return auth;
-  const broadcaster = await getBroadcasterById(db, auth.broadcasterId);
-  return jsonResponse(200, { channelId: broadcaster?.youtubeChannelId ?? null });
+  const identity = await getIdentityForBroadcaster(db, auth.broadcasterId, "youtube");
+  return jsonResponse(200, { channelId: identity?.externalId ?? null, displayName: identity?.displayName ?? null });
 }
 
 export async function handleSetYouTubeChannel(req: HttpRequest, db: DbClient): Promise<HttpResponse> {
@@ -53,7 +53,7 @@ export async function handleSetYouTubeChannel(req: HttpRequest, db: DbClient): P
     return jsonResponse(400, { error: "channelId must be a canonical YouTube channel id (UC + 22 characters)" });
   }
 
-  const outcome = await setYouTubeChannel(db, auth.broadcasterId, channelId);
+  const outcome = await setPlatformIdentity(db, auth.broadcasterId, "youtube", channelId, null);
   if (outcome === "conflict") {
     return jsonResponse(409, { error: "that YouTube channel is already claimed by another broadcaster" });
   }
@@ -63,6 +63,6 @@ export async function handleSetYouTubeChannel(req: HttpRequest, db: DbClient): P
 export async function handleClearYouTubeChannel(req: HttpRequest, db: DbClient): Promise<HttpResponse> {
   const auth = await authenticate(req, db);
   if ("status" in auth) return auth;
-  await clearYouTubeChannel(db, auth.broadcasterId);
+  await clearPlatformIdentity(db, auth.broadcasterId, "youtube");
   return jsonResponse(200, { channelId: null });
 }

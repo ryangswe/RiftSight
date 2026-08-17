@@ -1,23 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDbClient, type DbClient } from "./client.js";
-import { runMigrations } from "./migrate.js";
+import { loadMigrations, runMigrations } from "./migrate.js";
 import { addToAllowlist, isAllowed, listAllowlist, removeFromAllowlist } from "./allowlist.js";
 
 let db: DbClient;
 
 beforeEach(async () => {
   db = createDbClient(":memory:");
-  await runMigrations(db, [
-    {
-      version: 1,
-      name: "init",
-      sql: `CREATE TABLE twitch_allowlist (
-        twitch_user_id TEXT PRIMARY KEY,
-        added_at TEXT NOT NULL,
-        note TEXT
-      );`,
-    },
-  ]);
+  await runMigrations(db, await loadMigrations());
 });
 
 afterEach(() => {

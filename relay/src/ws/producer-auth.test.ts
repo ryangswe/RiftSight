@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDbClient, type DbClient } from "../db/client.js";
-import { runMigrations } from "../db/migrate.js";
+import { loadMigrations, runMigrations } from "../db/migrate.js";
 import { addToAllowlist } from "../db/allowlist.js";
-import { upsertBroadcaster } from "../db/broadcasters.js";
+import { linkOrCreateBroadcasterWithIdentity } from "../db/identities.js";
 import { issueProducerCredential } from "../db/producer-credentials.js";
 import { authenticateProducerUpgrade, extractProducerCredential, isProducerUpgradePath } from "./producer-auth.js";
 
@@ -35,42 +35,10 @@ describe("authenticateProducerUpgrade", () => {
 
   beforeEach(async () => {
     db = createDbClient(":memory:");
-    await runMigrations(db, [
-      {
-        version: 1,
-        name: "init",
-        sql: `
-          CREATE TABLE broadcasters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            twitch_user_id TEXT NOT NULL UNIQUE,
-            twitch_login TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          );
-          CREATE TABLE twitch_allowlist (
-            twitch_user_id TEXT PRIMARY KEY,
-            added_at TEXT NOT NULL,
-            note TEXT
-          );
-        `,
-      },
-      {
-        version: 2,
-        name: "producer_credentials",
-        sql: `
-          CREATE TABLE producer_credentials (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            broadcaster_id INTEGER NOT NULL REFERENCES broadcasters(id),
-            token_hash TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            revoked_at TEXT
-          );
-        `,
-      },
-    ]);
+    await runMigrations(db, await loadMigrations());
     await addToAllowlist(db, "141981764");
-    const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
-    broadcasterId = broadcaster.id;
+    const broadcaster = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "141981764", "juicykaraage");
+    broadcasterId = broadcaster.broadcasterId;
   });
 
   afterEach(() => {
@@ -80,7 +48,7 @@ describe("authenticateProducerUpgrade", () => {
   it("authenticates a valid credential and resolves the broadcaster's channel id", async () => {
     const token = await issueProducerCredential(db, broadcasterId);
     const result = await authenticateProducerUpgrade({ url: `/ws/producer?credential=${token}` } as never, db);
-    expect(result).toEqual({ authenticated: true, broadcasterId, twitchUserId: "141981764" });
+    expect(result).toEqual({ authenticated: true, broadcasterId });
   });
 
   it("rejects a missing credential", async () => {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDbClient, type DbClient } from "../../db/client.js";
 import { runMigrations } from "../../db/migrate.js";
 import { addToAllowlist } from "../../db/allowlist.js";
-import { upsertBroadcaster } from "../../db/broadcasters.js";
+import { linkOrCreateBroadcasterWithIdentity } from "../../db/identities.js";
 import { issueProducerCredential, revokeAllCredentialsForBroadcaster, validateProducerCredential } from "../../db/producer-credentials.js";
 import { removeFromAllowlist } from "../../db/allowlist.js";
 import { createLinkHandoffStore, type LinkHandoffStore } from "../../auth/link-handoff.js";
@@ -20,7 +20,7 @@ let broadcasterId: number;
 beforeEach(async () => {
   db = createDbClient(":memory:");
   const migrations = await Promise.all(
-    ["0001_init.sql", "0002_producer_credentials.sql", "0003_producer_credential_lifecycle.sql"].map(async (file, index) => ({
+    ["0001_init.sql", "0002_producer_credentials.sql", "0003_producer_credential_lifecycle.sql", "0004_youtube_channels.sql", "0005_platform_identities.sql"].map(async (file, index) => ({
       version: index + 1,
       name: file,
       sql: await readFile(path.join(migrationsDir, file), "utf8"),
@@ -30,8 +30,8 @@ beforeEach(async () => {
   linkHandoff = createLinkHandoffStore();
 
   await addToAllowlist(db, "141981764");
-  const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
-  broadcasterId = broadcaster.id;
+  const broadcaster = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "141981764", "juicykaraage");
+  broadcasterId = broadcaster.broadcasterId;
 });
 
 afterEach(() => {

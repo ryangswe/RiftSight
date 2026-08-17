@@ -1,9 +1,9 @@
 import { Response } from "node-fetch";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDbClient, type DbClient } from "../../db/client.js";
-import { runMigrations } from "../../db/migrate.js";
+import { loadMigrations, runMigrations } from "../../db/migrate.js";
 import { addToAllowlist } from "../../db/allowlist.js";
-import { getBroadcasterByTwitchUserId } from "../../db/broadcasters.js";
+import { findIdentity } from "../../db/identities.js";
 import { validateProducerCredential } from "../../db/producer-credentials.js";
 import { createStateStore, type StateStore } from "../../auth/state-store.js";
 import { createLinkHandoffStore, type LinkHandoffStore } from "../../auth/link-handoff.js";
@@ -22,39 +22,7 @@ let linkHandoff: LinkHandoffStore;
 
 beforeEach(async () => {
   db = createDbClient(":memory:");
-  await runMigrations(db, [
-    {
-      version: 1,
-      name: "init",
-      sql: `
-        CREATE TABLE broadcasters (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          twitch_user_id TEXT NOT NULL UNIQUE,
-          twitch_login TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE twitch_allowlist (
-          twitch_user_id TEXT PRIMARY KEY,
-          added_at TEXT NOT NULL,
-          note TEXT
-        );
-      `,
-    },
-    {
-      version: 2,
-      name: "producer_credentials",
-      sql: `
-        CREATE TABLE producer_credentials (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          broadcaster_id INTEGER NOT NULL REFERENCES broadcasters(id),
-          token_hash TEXT NOT NULL UNIQUE,
-          created_at TEXT NOT NULL,
-          revoked_at TEXT
-        );
-      `,
-    },
-  ]);
+  await runMigrations(db, await loadMigrations());
   stateStore = createStateStore();
   linkHandoff = createLinkHandoffStore();
 });
@@ -116,8 +84,8 @@ describe("handleAuthCallback", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toContain("juicykaraage");
-    const broadcaster = await getBroadcasterByTwitchUserId(db, "141981764");
-    expect(broadcaster?.twitchLogin).toBe("juicykaraage");
+    const identity = await findIdentity(db, "twitch", "141981764");
+    expect(identity?.displayName).toBe("juicykaraage");
   });
 
   it("with a linkId, issues a producer credential and marks the handoff store ready", async () => {
@@ -132,7 +100,7 @@ describe("handleAuthCallback", () => {
     expect(result).toBeDefined();
     expect(result?.displayName).toBe("juicykaraage");
     const validated = await validateProducerCredential(db, result?.credential as string);
-    expect(validated?.twitchUserId).toBe("141981764");
+    expect(validated?.broadcasterId).toBeGreaterThan(0);
   });
 
   it("without a linkId, no credential is issued and no handoff entry is touched", async () => {
@@ -153,7 +121,7 @@ describe("handleAuthCallback", () => {
     const response = await handleAuthCallback(req, { config, stateStore, linkHandoff, db, fetchFn: successfulFetch("999999", "not_approved") });
 
     expect(response.status).toBe(403);
-    expect(await getBroadcasterByTwitchUserId(db, "999999")).toBeNull();
+    expect(await findIdentity(db, "twitch", "999999")).toBeNull();
     // Distinct from "not-found" — the extension can tell "you're not in the
     // beta" apart from "the link attempt merely expired" and show a
     // specific message instead of silently timing out after 5 minutes.

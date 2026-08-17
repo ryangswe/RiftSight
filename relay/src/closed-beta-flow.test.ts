@@ -19,7 +19,7 @@ import { WebSocket } from "ws";
 import { createDbClient, type DbClient } from "./db/client.js";
 import { loadMigrations, runMigrations } from "./db/migrate.js";
 import { addToAllowlist, isAllowed, removeFromAllowlist } from "./db/allowlist.js";
-import { getBroadcasterByTwitchUserId, upsertBroadcaster } from "./db/broadcasters.js";
+import { findIdentity, linkOrCreateBroadcasterWithIdentity } from "./db/identities.js";
 import { issueProducerCredential, validateProducerCredential } from "./db/producer-credentials.js";
 import { createStateStore, type StateStore } from "./auth/state-store.js";
 import { createLinkHandoffStore, type LinkHandoffStore } from "./auth/link-handoff.js";
@@ -119,7 +119,18 @@ describe("closed-beta flow: allowlist -> OAuth link -> producer credential -> au
     await addToAllowlist(db, "141981764");
     const credential = await linkAndRedeem(db, stateStore, linkHandoff, "e2e-link-1");
 
-    server = await createRelayServer(0, { twitchExtensionSecret: BASE64_SECRET, producerAuth: { db, required: true } });
+    // Wired exactly as production index.ts wires it: the viewer's verified
+    // Twitch channel_id resolves through platform_identities to the same
+    // internal broadcaster session the credential-authenticated producer
+    // publishes under.
+    server = await createRelayServer(0, {
+      twitchExtensionSecret: BASE64_SECRET,
+      producerAuth: { db, required: true },
+      resolveTwitchChannel: async (twitchChannelId) => {
+        const identity = await findIdentity(db, "twitch", twitchChannelId);
+        return identity ? String(identity.broadcasterId) : null;
+      },
+    });
 
     const producer = new WebSocket(`ws://localhost:${server.port}/ws/producer?credential=${credential}`);
     await waitForOpen(producer);
@@ -134,7 +145,8 @@ describe("closed-beta flow: allowlist -> OAuth link -> producer credential -> au
     // Deliberately claims a bogus sessionId — the server must ignore it.
     producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("someone-elses-channel", 1) }));
     const message = await received;
-    expect(message.payload.sessionId).toBe("141981764");
+    const linkedIdentity = await findIdentity(db, "twitch", "141981764");
+    expect(message.payload.sessionId).toBe(String(linkedIdentity?.broadcasterId));
     expect(message.payload.sequence).toBe(1);
 
     producer.close();
@@ -183,17 +195,17 @@ describe("persistence across a restart", () => {
       const migrations = await loadMigrations();
       await runMigrations(fileDb, migrations);
       await addToAllowlist(fileDb, "141981764");
-      const broadcaster = await upsertBroadcaster(fileDb, "141981764", "juicykaraage");
-      const credential = await issueProducerCredential(fileDb, broadcaster.id);
+      const broadcaster = await linkOrCreateBroadcasterWithIdentity(fileDb, "twitch", "141981764", "juicykaraage");
+      const credential = await issueProducerCredential(fileDb, broadcaster.broadcasterId);
       fileDb.close();
 
       // Reopen as a genuinely separate client instance against the same file.
       fileDb = createDbClient(dbPath);
-      const reloadedBroadcaster = await getBroadcasterByTwitchUserId(fileDb, "141981764");
-      expect(reloadedBroadcaster?.twitchLogin).toBe("juicykaraage");
+      const reloadedIdentity = await findIdentity(fileDb, "twitch", "141981764");
+      expect(reloadedIdentity?.displayName).toBe("juicykaraage");
       expect(await isAllowed(fileDb, "141981764")).toBe(true);
       const validated = await validateProducerCredential(fileDb, credential);
-      expect(validated?.twitchUserId).toBe("141981764");
+      expect(validated?.broadcasterId).toBe(broadcaster.broadcasterId);
 
       await removeFromAllowlist(fileDb, "141981764");
       fileDb.close();
@@ -218,8 +230,8 @@ describe("session recovery across a relay restart", () => {
       const migrations = await loadMigrations();
       await runMigrations(fileDb, migrations);
       await addToAllowlist(fileDb, "141981764");
-      const broadcaster = await upsertBroadcaster(fileDb, "141981764", "juicykaraage");
-      const credential = await issueProducerCredential(fileDb, broadcaster.id);
+      const broadcaster = await linkOrCreateBroadcasterWithIdentity(fileDb, "twitch", "141981764", "juicykaraage");
+      const credential = await issueProducerCredential(fileDb, broadcaster.broadcasterId);
 
       // First "process": producer connects and publishes, viewer receives it.
       server = await createRelayServer(0, { producerAuth: { db: fileDb, required: true } });
@@ -230,11 +242,11 @@ describe("session recovery across a relay restart", () => {
       const firstViewer = new WebSocket(`ws://localhost:${server.port}`);
       await waitForOpen(firstViewer);
       const firstReceived = waitForMessage(firstViewer);
-      firstViewer.send(JSON.stringify({ type: "subscribe", sessionId: "141981764" }));
+      firstViewer.send(JSON.stringify({ type: "subscribe", sessionId: String(broadcaster.broadcasterId) }));
       await wait(50);
       firstProducer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("whatever-client-claims", 1) }));
       const firstMessage = await firstReceived;
-      expect(firstMessage.payload.sessionId).toBe("141981764");
+      expect(firstMessage.payload.sessionId).toBe(String(broadcaster.broadcasterId));
 
       firstProducer.close();
       firstViewer.close();
@@ -262,11 +274,11 @@ describe("session recovery across a relay restart", () => {
       const secondViewer = new WebSocket(`ws://localhost:${server.port}`);
       await waitForOpen(secondViewer);
       const secondReceived = waitForMessage(secondViewer);
-      secondViewer.send(JSON.stringify({ type: "subscribe", sessionId: "141981764" }));
+      secondViewer.send(JSON.stringify({ type: "subscribe", sessionId: String(broadcaster.broadcasterId) }));
       await wait(50);
       secondProducer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("whatever-client-claims", 1) }));
       const secondMessage = await secondReceived;
-      expect(secondMessage.payload.sessionId).toBe("141981764");
+      expect(secondMessage.payload.sessionId).toBe(String(broadcaster.broadcasterId));
       expect(secondMessage.payload.sequence).toBe(1);
 
       secondProducer.close();

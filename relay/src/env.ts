@@ -47,6 +47,11 @@ export interface RelayEnvConfig {
   twitchApiClientSecret: string | undefined;
   /** Must exactly match a redirect URI registered for the Twitch API app in the Developer Console. */
   twitchOAuthRedirectUri: string | undefined;
+  /** Google OAuth app for verified YouTube channel linking (see auth/google-oauth.ts). Optional in EVERY mode — unset, the /auth/google routes respond 503 (same degradation as the Twitch OAuth trio) and YouTube-only onboarding is unavailable; the manual beta channel claim keeps working regardless. */
+  googleClientId: string | undefined;
+  googleClientSecret: string | undefined;
+  /** Must exactly match an authorized redirect URI on the Google OAuth client. */
+  googleOAuthRedirectUri: string | undefined;
   /** A redis:// URL enabling cross-instance live-state fan-out (see state-bus.ts/redis-state-bus.ts) — optional in every mode, including closed-beta. Unset means single-instance behavior, unchanged from before this existed: a fresh in-process LocalStateBus per server, which never leaves the process. */
   redisUrl: string | undefined;
   /**
@@ -148,6 +153,9 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
   const twitchApiClientId = env["TWITCH_API_CLIENT_ID"] || undefined;
   const twitchApiClientSecret = env["TWITCH_API_CLIENT_SECRET"] || undefined;
   const twitchOAuthRedirectUri = env["TWITCH_OAUTH_REDIRECT_URI"] || undefined;
+  const googleClientId = env["GOOGLE_CLIENT_ID"] || undefined;
+  const googleClientSecret = env["GOOGLE_CLIENT_SECRET"] || undefined;
+  const googleOAuthRedirectUri = env["GOOGLE_OAUTH_REDIRECT_URI"] || undefined;
   const redisUrl = env["REDIS_URL"] || undefined;
   // Same explicit-opt-out shape as ALLOW_LOCAL_DEBUG below: anything other
   // than the literal "false" (including unset) keeps the safe default.
@@ -161,6 +169,10 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
       if (!env[name]) {
         errors.push(`${name} is required in closed-beta mode but is not set`);
       }
+    }
+    if (googleOAuthRedirectUri) {
+      const checked = requireHttpsUrl(googleOAuthRedirectUri, "GOOGLE_OAUTH_REDIRECT_URI");
+      if (typeof checked !== "string") errors.push(checked.error);
     }
     if (twitchOAuthRedirectUri) {
       const checked = requireHttpsUrl(twitchOAuthRedirectUri, "TWITCH_OAUTH_REDIRECT_URI");
@@ -210,6 +222,9 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
       twitchApiClientId,
       twitchApiClientSecret,
       twitchOAuthRedirectUri,
+      googleClientId,
+      googleClientSecret,
+      googleOAuthRedirectUri,
       redisUrl,
       migrateOnBoot,
     },

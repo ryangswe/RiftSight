@@ -15,7 +15,7 @@ import { touchProducerCredentialLastUsed, validateProducerCredential } from "../
 export const PRODUCER_WS_PATH = "/ws/producer";
 
 export type ProducerAuthResult =
-  | { authenticated: true; broadcasterId: number; twitchUserId: string }
+  | { authenticated: true; broadcasterId: number }
   | { authenticated: false; reason: string };
 
 /** Pure: true if this upgrade request's path is the authenticated-producer endpoint, not the legacy/viewer endpoint. */
@@ -40,5 +40,5 @@ export async function authenticateProducerUpgrade(req: IncomingMessage, db: DbCl
   // successful authentication into a rejection.
   await touchProducerCredentialLastUsed(db, credential).catch(() => {});
 
-  return { authenticated: true, broadcasterId: validated.broadcasterId, twitchUserId: validated.twitchUserId };
+  return { authenticated: true, broadcasterId: validated.broadcasterId };
 }

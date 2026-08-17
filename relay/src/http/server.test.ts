@@ -2,9 +2,9 @@ import { createServer, type Server } from "node:http";
 import fetch from "node-fetch";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDbClient, type DbClient } from "../db/client.js";
-import { runMigrations } from "../db/migrate.js";
+import { loadMigrations, runMigrations } from "../db/migrate.js";
 import { addToAllowlist } from "../db/allowlist.js";
-import { upsertBroadcaster } from "../db/broadcasters.js";
+import { linkOrCreateBroadcasterWithIdentity } from "../db/identities.js";
 import { issueProducerCredential } from "../db/producer-credentials.js";
 import { createStateStore, type StateStore } from "../auth/state-store.js";
 import { createLinkHandoffStore, type LinkHandoffStore } from "../auth/link-handoff.js";
@@ -33,41 +33,7 @@ async function startServer(deps: Parameters<typeof createHttpRouter>[0]): Promis
 
 beforeEach(async () => {
   db = createDbClient(":memory:");
-  await runMigrations(db, [
-    {
-      version: 1,
-      name: "init",
-      sql: `
-        CREATE TABLE broadcasters (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          twitch_user_id TEXT NOT NULL UNIQUE,
-          twitch_login TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE twitch_allowlist (
-          twitch_user_id TEXT PRIMARY KEY,
-          added_at TEXT NOT NULL,
-          note TEXT
-        );
-      `,
-    },
-    {
-      version: 2,
-      name: "producer_credentials",
-      sql: `
-        CREATE TABLE producer_credentials (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          broadcaster_id INTEGER NOT NULL REFERENCES broadcasters(id),
-          token_hash TEXT NOT NULL UNIQUE,
-          created_at TEXT NOT NULL,
-          revoked_at TEXT,
-          last_used_at TEXT,
-          rotated_at TEXT
-        );
-      `,
-    },
-  ]);
+  await runMigrations(db, await loadMigrations());
   stateStore = createStateStore();
   linkHandoff = createLinkHandoffStore();
 });
@@ -79,65 +45,65 @@ afterEach(async () => {
 
 describe("createHttpRouter", () => {
   it("GET /health always returns 200 ok", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/health`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
   });
 
   it("GET /ready returns 200 ready when the database is reachable", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/ready`);
     expect(response.status).toBe(200);
   });
 
   it("GET /auth/twitch/start responds 503 when OAuth isn't configured", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/auth/twitch/start`, { redirect: "manual" });
     expect(response.status).toBe(503);
   });
 
   it("GET /auth/twitch/start redirects (302) to Twitch when OAuth is configured", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/auth/twitch/start`, { redirect: "manual" });
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toContain("id.twitch.tv/oauth2/authorize");
   });
 
   it("GET /auth/twitch/callback responds 503 when OAuth isn't configured", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/auth/twitch/callback?code=abc&state=xyz`);
     expect(response.status).toBe(503);
   });
 
   it("GET /auth/twitch/callback rejects an invalid state (400) when OAuth is configured", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/auth/twitch/callback?code=abc&state=never-issued`);
     expect(response.status).toBe(400);
   });
 
   it("GET /api/link-status reports not-found for an unknown linkId", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/api/link-status?linkId=nope`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "not-found" });
   });
 
   it("POST /api/producer-credential/rotate 401s without a bearer credential", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/api/producer-credential/rotate`, { method: "POST" });
     expect(response.status).toBe(401);
   });
 
   it("404s an unknown route", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/nonexistent`);
     expect(response.status).toBe(404);
   });
 
   it("end-to-end: a valid OAuth callback with a linkId is pollable via /api/link-status", async () => {
     await addToAllowlist(db, "141981764");
-    await startServer({ db, stateStore, linkHandoff, oauthConfig });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig, googleOAuthConfig: undefined });
 
     // We can't drive a real Twitch consent screen here, but we can verify
     // the state->linkId wiring reaches all the way to a real HTTP server.
@@ -149,7 +115,7 @@ describe("createHttpRouter", () => {
   });
 
   it("rate-limits GET /auth/twitch/start after OAUTH_START_LIMIT requests from the same client", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig, googleOAuthConfig: undefined });
 
     let lastStatus = 0;
     // OAUTH_START_LIMIT.maxEvents is 20 — issue one more than that.
@@ -161,7 +127,7 @@ describe("createHttpRouter", () => {
   });
 
   it("rate-limits POST /api/producer-credential/rotate after CREDENTIAL_ROTATE_LIMIT requests from the same client", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
 
     let lastStatus = 0;
     // CREDENTIAL_ROTATE_LIMIT.maxEvents is 10 — issue one more than that.
@@ -173,16 +139,16 @@ describe("createHttpRouter", () => {
   });
 
   it("GET /api/producer-credential/status 401s without a bearer credential", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
     const response = await fetch(`${baseUrl}/api/producer-credential/status`);
     expect(response.status).toBe(401);
   });
 
   it("GET /api/producer-credential/status reports {status: \"valid\"} for a real credential, over a real HTTP round trip", async () => {
     await addToAllowlist(db, "141981764");
-    const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
-    const token = await issueProducerCredential(db, broadcaster.id);
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    const broadcaster = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "141981764", "juicykaraage");
+    const token = await issueProducerCredential(db, broadcaster.broadcasterId);
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
 
     const response = await fetch(`${baseUrl}/api/producer-credential/status`, { headers: { authorization: `Bearer ${token}` } });
     expect(response.status).toBe(200);
@@ -191,9 +157,9 @@ describe("createHttpRouter", () => {
 
   it("never logs the bearer token presented to GET /api/producer-credential/status", async () => {
     await addToAllowlist(db, "141981764");
-    const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
-    const token = await issueProducerCredential(db, broadcaster.id);
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    const broadcaster = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "141981764", "juicykaraage");
+    const token = await issueProducerCredential(db, broadcaster.broadcasterId);
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -207,7 +173,7 @@ describe("createHttpRouter", () => {
   });
 
   it("rate-limits GET /api/producer-credential/status after PRODUCER_STATUS_LIMIT requests from the same client", async () => {
-    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined });
+    await startServer({ db, stateStore, linkHandoff, oauthConfig: undefined, googleOAuthConfig: undefined });
 
     let lastStatus = 0;
     // PRODUCER_STATUS_LIMIT.maxEvents is 20 — issue one more than that.

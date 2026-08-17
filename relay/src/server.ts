@@ -94,12 +94,27 @@ const MAX_VIEWERS_PER_SESSION = 2_000;
 /** Application-level keepalive cadence for youtube-path viewer sockets only (see protocol's PingMessageSchema for the MV3 service-worker rationale). Well under Chrome's ~30s worker idle-reap so a quiet board never lets the extension's socket die, and cheap: one tiny frame per viewer per interval. */
 const VIEWER_PING_INTERVAL_MS = 20_000;
 
-/** How long one youtube-channel resolution (hit OR authoritative miss) is served from memory before the DB is asked again. Bounds DB load under a viewer connection storm on one channel (the popular-streamer case this milestone exists for) while keeping "streamer just claimed their channel" latency to a refresh's wait. Resolver ERRORS are deliberately not cached — a transient DB blip shouldn't blank a channel for a whole window. */
-const YOUTUBE_RESOLUTION_CACHE_MS = 30_000;
+/** How long one platform-channel resolution (hit OR authoritative miss) is served from memory before the DB is asked again — shared by the youtube-subscribe and twitch-subscribe resolution paths. Bounds DB load under a viewer connection storm on one channel (the popular-streamer case) while keeping "streamer just linked their channel" latency to a refresh's wait. Resolver ERRORS are deliberately not cached — a transient DB blip shouldn't blank a channel for a whole window. */
+const PLATFORM_RESOLUTION_CACHE_MS = 30_000;
 
 interface ProducerBinding {
   broadcasterId: number;
-  twitchUserId: string;
+}
+
+/**
+ * The session key for an authenticated broadcaster — the internal,
+ * platform-neutral broadcaster id, stringified (sessionId is a free-text
+ * string end to end). Since the identity refactor this is what BOTH viewer
+ * paths resolve their platform channel ids to: twitch-subscribe's
+ * channel_id and youtube-subscribe's UC-id each map through
+ * platform_identities to this same key, so a Twitch viewer and a YouTube
+ * viewer of the same streamer land in the same session. Unauthenticated
+ * dev/legacy producers keep their client-asserted free-text sessionIds,
+ * which can't collide with these in practice (and all authenticated
+ * routing goes through DB resolution regardless).
+ */
+function sessionKeyForBroadcaster(broadcasterId: number): string {
+  return String(broadcasterId);
 }
 
 /** Per-connection bookkeeping for the limits in rate-limit.ts — one instance per socket, created in the "connection" handler and read/mutated from handleMessage. */
@@ -191,13 +206,26 @@ export interface RelayConfig {
    * session key it should subscribe to, or null for "no such mapping" —
    * the youtube-subscribe path is refused outright ("unknown-channel")
    * when this is omitted, which is every mode that has no DB to resolve
-   * against. index.ts wires it to db/broadcasters.ts's
-   * findBroadcasterByYouTubeChannel; tests inject counters/fakes.
-   * Results (including null) are cached for YOUTUBE_RESOLUTION_CACHE_MS;
-   * thrown errors are treated as "unknown-channel" for the one request
-   * but never cached.
+   * against. index.ts wires it to db/identities.ts's findIdentity
+   * (yielding sessionKeyForBroadcaster of the owning broadcaster); tests
+   * inject counters/fakes. Results (including null) are cached for
+   * PLATFORM_RESOLUTION_CACHE_MS; thrown errors are treated as
+   * "unknown-channel" for the one request but never cached.
    */
   resolveYouTubeChannel?: (youtubeChannelId: string) => Promise<string | null>;
+  /**
+   * Twitch counterpart of resolveYouTubeChannel for the twitch-subscribe
+   * path: maps a JWT-verified Twitch channel_id to the broadcaster session
+   * key. OMITTED (dev servers, every pre-identity-refactor test) the path
+   * falls back to the LEGACY behavior — admitting the channel id directly
+   * as the session key — which is also what unauthenticated dev producers
+   * publish under, so local workflows keep working with zero setup. In
+   * production index.ts always wires this, so real sessions key on the
+   * internal broadcaster id and a Twitch channel with no linked
+   * broadcaster admits nobody (previously it created an empty session per
+   * curious viewer). Same caching/error contract as the YouTube resolver.
+   */
+  resolveTwitchChannel?: (twitchChannelId: string) => Promise<string | null>;
   /** Overrides MAX_VIEWERS_PER_SESSION. Test-only escape hatch, same shape as stateTtl above. */
   maxViewersPerSession?: number;
   /** Overrides VIEWER_PING_INTERVAL_MS. Test-only escape hatch. */
@@ -273,8 +301,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   const connectionStates = new WeakMap<WebSocket, ConnectionState>();
   /** Sockets admitted via youtube-subscribe — the only ones that receive the application-level keepalive ping (see VIEWER_PING_INTERVAL_MS); legacy/Twitch viewers never see a message shape their parser doesn't know. Entries are removed on socket close. */
   const youtubePingTargets = new Set<WebSocket>();
-  /** youtube channel id -> last resolution (sessionId, or null for an authoritative "no mapping") and when it was resolved — see YOUTUBE_RESOLUTION_CACHE_MS. */
-  const youtubeResolutionCache = new Map<string, { sessionId: string | null; at: number }>();
+  /** "platform:externalId" -> last resolution (session key, or null for an authoritative "no mapping") and when it was resolved — see PLATFORM_RESOLUTION_CACHE_MS. */
+  const platformResolutionCache = new Map<string, { sessionId: string | null; at: number }>();
 
   function getSession(sessionId: string): Session {
     const existing = sessions.get(sessionId);
@@ -535,14 +563,15 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
 
   function bindAuthenticatedProducer(ws: WebSocket, state: ConnectionState, binding: ProducerBinding): void {
     state.producerBinding = binding;
-    const session = getSession(binding.twitchUserId);
+    const sessionId = sessionKeyForBroadcaster(binding.broadcasterId);
+    const session = getSession(sessionId);
     if (session.producer && session.producer !== ws && session.producer.readyState === WebSocket.OPEN) {
-      logEvent("producer_replaced", { channelId: binding.twitchUserId, broadcasterId: binding.broadcasterId });
+      logEvent("producer_replaced", { sessionId, broadcasterId: binding.broadcasterId });
       session.producer.close(CLOSE_CODE.PRODUCER_REPLACED, "replaced-by-new-producer-connection");
     }
     session.producer = ws;
-    logEvent("producer_connected", { channelId: binding.twitchUserId, broadcasterId: binding.broadcasterId });
-    sendViewerCount(binding.twitchUserId, session);
+    logEvent("producer_connected", { sessionId, broadcasterId: binding.broadcasterId });
+    sendViewerCount(sessionId, session);
   }
 
   const wss = new WebSocketServer({
@@ -559,7 +588,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
               callback(false, 401, "Unauthorized");
               return;
             }
-            pendingProducerAuth.set(req, { broadcasterId: result.broadcasterId, twitchUserId: result.twitchUserId });
+            pendingProducerAuth.set(req, { broadcasterId: result.broadcasterId });
             callback(true);
           });
         }
@@ -633,25 +662,52 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   }
 
   /**
-   * Cached channel->session resolution for the youtube path. A cache
-   * entry (hit or authoritative null) is served for
-   * YOUTUBE_RESOLUTION_CACHE_MS; resolver errors fail this one request
-   * closed ("unknown-channel" to the client) without being cached, so a
-   * transient DB blip doesn't blank a channel for a whole window.
+   * Cached channel->session resolution shared by both platform viewer
+   * paths. A cache entry (hit or authoritative null) is served for
+   * PLATFORM_RESOLUTION_CACHE_MS; resolver errors fail this one request
+   * closed without being cached, so a transient DB blip doesn't blank a
+   * channel for a whole window.
    */
-  async function resolveYouTubeSession(youtubeChannelId: string): Promise<string | null> {
-    const resolver = config.resolveYouTubeChannel;
-    if (!resolver) return null;
-    const cached = youtubeResolutionCache.get(youtubeChannelId);
-    if (cached && Date.now() - cached.at <= YOUTUBE_RESOLUTION_CACHE_MS) return cached.sessionId;
+  async function resolvePlatformSession(
+    platform: "twitch" | "youtube",
+    externalId: string,
+    resolver: (externalId: string) => Promise<string | null>
+  ): Promise<string | null> {
+    const cacheKey = `${platform}:${externalId}`;
+    const cached = platformResolutionCache.get(cacheKey);
+    if (cached && Date.now() - cached.at <= PLATFORM_RESOLUTION_CACHE_MS) return cached.sessionId;
     try {
-      const sessionId = await resolver(youtubeChannelId);
-      youtubeResolutionCache.set(youtubeChannelId, { sessionId, at: Date.now() });
+      const sessionId = await resolver(externalId);
+      platformResolutionCache.set(cacheKey, { sessionId, at: Date.now() });
       return sessionId;
     } catch {
-      logEvent("viewer_rejected", { reason: "youtube-resolution-failed", youtubeChannelId });
+      logEvent("viewer_rejected", { reason: `${platform}-resolution-failed`, youtubeChannelId: platform === "youtube" ? externalId : undefined, channelId: platform === "twitch" ? externalId : undefined });
       return null;
     }
+  }
+
+  /**
+   * The twitch-subscribe admission flow post-JWT-verification: resolve the
+   * verified channel_id to the broadcaster's internal session (see
+   * RelayConfig.resolveTwitchChannel — absent, the legacy direct-keying
+   * behavior applies for dev/tests), then admit through the same
+   * admitViewer as every other path. Rejections stay SILENT on this path —
+   * the Twitch viewer's parser has no rejection vocabulary, and silence is
+   * its established contract.
+   */
+  async function admitTwitchViewer(ws: WebSocket, channelId: string): Promise<void> {
+    const resolver = config.resolveTwitchChannel;
+    const sessionId = resolver ? await resolvePlatformSession("twitch", channelId, resolver) : channelId;
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (sessionId === null) {
+      logEvent("viewer_rejected", { reason: "unknown-twitch-channel", channelId });
+      return;
+    }
+    if (sessionAtCapacity(getSession(sessionId))) {
+      logEvent("viewer_rejected", { reason: "session-at-capacity", sessionId, channelId });
+      return;
+    }
+    await admitViewer(ws, sessionId);
   }
 
   /**
@@ -665,7 +721,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
    * itself.
    */
   async function admitYouTubeViewer(ws: WebSocket, youtubeChannelId: string): Promise<void> {
-    const sessionId = await resolveYouTubeSession(youtubeChannelId);
+    const resolver = config.resolveYouTubeChannel;
+    const sessionId = resolver ? await resolvePlatformSession("youtube", youtubeChannelId, resolver) : null;
     if (ws.readyState !== WebSocket.OPEN) return;
     if (sessionId === null) {
       logEvent("viewer_rejected", { reason: config.resolveYouTubeChannel ? "unknown-youtube-channel" : "youtube-resolver-not-configured", youtubeChannelId });
@@ -728,13 +785,16 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
 
       state.invalidMessageCount = 0;
 
-      // An authenticated producer's channel is resolved once, server-side,
-      // from its credential — the message's own sessionId is never
+      // An authenticated producer's session is resolved once, server-side,
+      // from its credential (the internal broadcaster id — see
+      // sessionKeyForBroadcaster) — the message's own sessionId is never
       // trusted for that socket, exactly mirroring the viewer JWT path's
       // channel_id-claim-over-client-value discipline. Unauthenticated
       // (legacy/dev) producers keep today's behavior unchanged: whatever
       // sessionId the message itself claims.
-      const overlayState = binding ? { ...producerMessage.data.payload, sessionId: binding.twitchUserId } : producerMessage.data.payload;
+      const overlayState = binding
+        ? { ...producerMessage.data.payload, sessionId: sessionKeyForBroadcaster(binding.broadcasterId) }
+        : producerMessage.data.payload;
       const session = getSession(overlayState.sessionId);
       // Last producer to send for a session wins — no arbitration between
       // multiple producers targeting the same *unauthenticated* session.
@@ -815,12 +875,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         return;
       }
 
-      if (sessionAtCapacity(getSession(channelId))) {
-        logEvent("viewer_rejected", { reason: "session-at-capacity", sessionId: channelId });
-        return;
-      }
       state.invalidMessageCount = 0;
-      void admitViewer(ws, channelId);
+      void admitTwitchViewer(ws, channelId);
       return;
     }
 

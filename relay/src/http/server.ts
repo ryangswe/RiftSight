@@ -11,7 +11,9 @@ import type { DbClient } from "../db/client.js";
 import type { StateStore } from "../auth/state-store.js";
 import type { LinkHandoffStore } from "../auth/link-handoff.js";
 import type { TwitchOAuthConfig } from "../auth/twitch-oauth.js";
+import type { GoogleOAuthConfig } from "../auth/google-oauth.js";
 import { handleAuthCallback, handleAuthStart } from "./routes/auth-twitch.js";
+import { handleGoogleAuthCallback, handleGoogleAuthStart } from "./routes/auth-google.js";
 import { handleLinkStatus, handleProducerCredentialStatus, handleRotateProducerCredential } from "./routes/producer-credential.js";
 import { handleClearYouTubeChannel, handleGetYouTubeChannel, handleSetYouTubeChannel } from "./routes/youtube-channel.js";
 import { handleHealth, handleReady } from "./routes/health.js";
@@ -31,6 +33,8 @@ export interface HttpRouterDeps {
    * route" while debugging.
    */
   oauthConfig: TwitchOAuthConfig | undefined;
+  /** Same optional-degradation contract as oauthConfig: undefined (GOOGLE_* env unset) means the /auth/google routes respond 503 — "not configured" stays distinguishable from "no such route". */
+  googleOAuthConfig: GoogleOAuthConfig | undefined;
 }
 
 function toHttpRequest(req: IncomingMessage): HttpRequest {
@@ -47,6 +51,7 @@ function sendHttpResponse(res: ServerResponse, response: HttpResponse): void {
 }
 
 const OAUTH_NOT_CONFIGURED = jsonResponse(503, { error: "Twitch OAuth account linking is not configured on this backend" });
+const GOOGLE_OAUTH_NOT_CONFIGURED = jsonResponse(503, { error: "Google/YouTube account linking is not configured on this backend" });
 const RATE_LIMITED = jsonResponse(429, { error: "too many requests — please wait and try again" });
 
 /**
@@ -119,6 +124,37 @@ export function createHttpRouter(deps: HttpRouterDeps): (req: IncomingMessage, r
         db: deps.db,
       }).then((response) => {
         logEvent(response.status === 200 ? "oauth_link_succeeded" : "oauth_link_failed", { status: response.status });
+        sendHttpResponse(res, response);
+      });
+      return;
+    }
+
+    if (httpRequest.method === "GET" && pathname === "/auth/google/start") {
+      if (!oauthStartLimiter.tryConsume(remoteAddress)) {
+        logEvent("oauth_link_rejected", { reason: "rate-limited", remoteAddress });
+        sendHttpResponse(res, RATE_LIMITED);
+        return;
+      }
+      if (!deps.googleOAuthConfig) {
+        sendHttpResponse(res, GOOGLE_OAUTH_NOT_CONFIGURED);
+        return;
+      }
+      sendHttpResponse(res, handleGoogleAuthStart(httpRequest, deps.googleOAuthConfig, deps.stateStore, deps.linkHandoff));
+      return;
+    }
+
+    if (httpRequest.method === "GET" && pathname === "/auth/google/callback") {
+      if (!deps.googleOAuthConfig) {
+        sendHttpResponse(res, GOOGLE_OAUTH_NOT_CONFIGURED);
+        return;
+      }
+      void handleGoogleAuthCallback(httpRequest, {
+        config: deps.googleOAuthConfig,
+        stateStore: deps.stateStore,
+        linkHandoff: deps.linkHandoff,
+        db: deps.db,
+      }).then((response) => {
+        logEvent(response.status === 200 ? "oauth_link_succeeded" : "oauth_link_failed", { status: response.status, platform: "youtube" });
         sendHttpResponse(res, response);
       });
       return;

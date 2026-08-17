@@ -7,9 +7,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { createDbClient, type DbClient } from "./db/client.js";
-import { runMigrations } from "./db/migrate.js";
+import { loadMigrations, runMigrations } from "./db/migrate.js";
 import { addToAllowlist } from "./db/allowlist.js";
-import { upsertBroadcaster } from "./db/broadcasters.js";
+import { linkOrCreateBroadcasterWithIdentity } from "./db/identities.js";
 import { issueProducerCredential } from "./db/producer-credentials.js";
 import { createRelayServer, type RelayServer } from "./server.js";
 
@@ -19,44 +19,10 @@ let broadcasterId: number;
 
 beforeEach(async () => {
   db = createDbClient(":memory:");
-  await runMigrations(db, [
-    {
-      version: 1,
-      name: "init",
-      sql: `
-        CREATE TABLE broadcasters (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          twitch_user_id TEXT NOT NULL UNIQUE,
-          twitch_login TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE twitch_allowlist (
-          twitch_user_id TEXT PRIMARY KEY,
-          added_at TEXT NOT NULL,
-          note TEXT
-        );
-      `,
-    },
-    {
-      version: 2,
-      name: "producer_credentials",
-      sql: `
-        CREATE TABLE producer_credentials (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          broadcaster_id INTEGER NOT NULL REFERENCES broadcasters(id),
-          token_hash TEXT NOT NULL UNIQUE,
-          created_at TEXT NOT NULL,
-          revoked_at TEXT,
-          last_used_at TEXT,
-          rotated_at TEXT
-        );
-      `,
-    },
-  ]);
+  await runMigrations(db, await loadMigrations());
   await addToAllowlist(db, "141981764");
-  const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
-  broadcasterId = broadcaster.id;
+  const broadcaster = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "141981764", "juicykaraage");
+  broadcasterId = broadcaster.broadcasterId;
 });
 
 afterEach(async () => {
@@ -110,15 +76,17 @@ describe("authenticated producer WebSocket (/ws/producer)", () => {
     const viewer = new WebSocket(`ws://localhost:${server.port}`);
     await waitForOpen(viewer);
     const received = waitForMessage(viewer);
-    viewer.send(JSON.stringify({ type: "subscribe", sessionId: "141981764" }));
+    viewer.send(JSON.stringify({ type: "subscribe", sessionId: String(broadcasterId) }));
     await wait(50);
 
     // Client claims a bogus sessionId — the server must ignore it and use
-    // the credential-resolved twitch_user_id ("141981764") instead.
+    // the credential-resolved internal broadcaster session key instead
+    // (see sessionKeyForBroadcaster; platform channel ids resolve to this
+    // same key on the viewer paths).
     producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("someone-elses-channel", 1) }));
 
     const message = (await received) as { payload: { sessionId: string; sequence: number } };
-    expect(message.payload.sessionId).toBe("141981764");
+    expect(message.payload.sessionId).toBe(String(broadcasterId));
     expect(message.payload.sequence).toBe(1);
 
     producer.close();
@@ -165,9 +133,9 @@ describe("authenticated producer WebSocket (/ws/producer)", () => {
     const viewer = new WebSocket(`ws://localhost:${server.port}`);
     await waitForOpen(viewer);
     const received = waitForMessage(viewer);
-    viewer.send(JSON.stringify({ type: "subscribe", sessionId: "141981764" }));
+    viewer.send(JSON.stringify({ type: "subscribe", sessionId: String(broadcasterId) }));
     await wait(50);
-    secondProducer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("141981764", 1) }));
+    secondProducer.send(JSON.stringify({ type: "overlay-state", payload: sampleState(String(broadcasterId), 1) }));
     const message = (await received) as { payload: { sequence: number } };
     expect(message.payload.sequence).toBe(1);
 

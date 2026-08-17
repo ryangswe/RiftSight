@@ -136,14 +136,16 @@ one-time setup.
 
 ### One-time YouTube setup (streamer)
 
-1. **Claim your channel.** Open the RiftSight popup → YouTube section →
-   paste your channel ID (starts with `UC…`) or a
-   `youtube.com/channel/UC…` URL, then **Save channel**. Find your ID in
-   YouTube Studio under *Settings → Channel → Advanced settings*. Handles
-   (`@name`) don't work here — it has to be the `UC…` id. This claim is
-   what lets viewers' extensions find your game session from your watch
-   page. One channel per RiftSight account; saving a new one replaces the
-   old.
+1. **Link your channel.** Open the RiftSight popup → ⚙ Settings →
+   *YouTube channel (beta)* → paste your channel ID (starts with `UC…`)
+   or a `youtube.com/channel/UC…` URL, then **Save channel**. Find your
+   ID in YouTube Studio under *Settings → Channel → Advanced settings*.
+   Handles (`@name`) don't work here — it has to be the `UC…` id. This
+   link is what lets viewers' extensions find your game session from your
+   watch page. One channel per RiftSight account; saving a new one
+   replaces the old. (Verified "Connect YouTube" sign-in replaces this
+   manual step once enabled — and YouTube-only streamers won't need a
+   Twitch account at all.)
 2. **Calibrate the overlay.** Popup → **Calibrate overlay…** opens a
    calibration page: drag the rectangle to where Rift Atlas sits in your
    stream layout (same idea as the Twitch config page — while you're

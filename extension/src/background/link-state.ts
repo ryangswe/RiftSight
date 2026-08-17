@@ -13,16 +13,21 @@ export type LinkStatus =
   | "backend-unavailable"
   | "not-in-beta";
 
+/** Which platform's OAuth flow produced (or is producing) this account link — the extension has ONE RiftSight account either way; this only records which door it came in through, for display ("Connected via Twitch as X"). */
+export type LinkPlatform = "twitch" | "youtube";
+
 export interface LinkState {
   status: LinkStatus;
   /** Set once status is "connected" (and retained through a later credential-expired/backend-unavailable, so the UI can still say "connected as X, but..."). */
   displayName: string | undefined;
+  /** The platform of the in-flight or completed link (see LinkPlatform); undefined when never linked. */
+  platform: LinkPlatform | undefined;
 }
 
-export const INITIAL_LINK_STATE: LinkState = { status: "not-connected", displayName: undefined };
+export const INITIAL_LINK_STATE: LinkState = { status: "not-connected", displayName: undefined, platform: undefined };
 
 export type LinkEvent =
-  | { type: "start-link" }
+  | { type: "start-link"; platform: LinkPlatform }
   | { type: "poll-pending" }
   | { type: "poll-ready"; displayName: string }
   | { type: "poll-not-found" }
@@ -34,44 +39,44 @@ export type LinkEvent =
 export function reduceLinkState(current: LinkState, event: LinkEvent): LinkState {
   switch (event.type) {
     case "start-link":
-      return { status: "connecting", displayName: undefined };
+      return { status: "connecting", displayName: undefined, platform: event.platform };
     case "poll-pending":
-      return { status: "waiting-for-authorization", displayName: undefined };
+      return { status: "waiting-for-authorization", displayName: undefined, platform: current.platform };
     case "poll-ready":
-      return { status: "connected", displayName: event.displayName };
+      return { status: "connected", displayName: event.displayName, platform: current.platform };
     case "poll-not-found":
       // The link attempt expired or was never valid (e.g. the user closed
       // the Twitch tab without authorizing) — back to square one, not an
       // error state, since nothing was ever connected.
-      return { status: "not-connected", displayName: undefined };
+      return { status: "not-connected", displayName: undefined, platform: undefined };
     case "poll-rejected":
       // The backend explicitly determined this Twitch account isn't on the
       // closed-beta allowlist (relay's auth-twitch.ts) — distinct from
       // poll-not-found (link attempt merely expired/abandoned) so the UI
       // can say exactly what happened instead of silently reverting to
       // "not connected" after a multi-minute poll timeout.
-      return { status: "not-in-beta", displayName: undefined };
+      return { status: "not-in-beta", displayName: undefined, platform: current.platform };
     case "poll-error":
-      return { status: "backend-unavailable", displayName: current.displayName };
+      return { status: "backend-unavailable", displayName: current.displayName, platform: current.platform };
     case "disconnect":
-      return { status: "not-connected", displayName: undefined };
+      return { status: "not-connected", displayName: undefined, platform: undefined };
     case "credential-rejected":
       // The relay refused our stored credential (revoked, e.g. removed
       // from the beta allowlist, or otherwise no longer valid) — distinct
       // from never having linked at all, so the UI can say "reconnect"
       // rather than "connect for the first time".
-      return { status: "credential-expired", displayName: current.displayName };
+      return { status: "credential-expired", displayName: current.displayName, platform: current.platform };
     default:
       return current;
   }
 }
 
 export const LINK_STATUS_LABEL: Record<LinkStatus, string> = {
-  "not-connected": "Not connected to Twitch",
-  connecting: "Opening Twitch authorization…",
+  "not-connected": "Not connected",
+  connecting: "Opening authorization…",
   "waiting-for-authorization": "Waiting for authorization to complete…",
   connected: "Connected", // callers append "as <displayName>" themselves
-  "credential-expired": "Producer credential expired — reconnect to Twitch",
+  "credential-expired": "Sign-in expired — reconnect to keep publishing",
   "backend-unavailable": "RiftSight backend unavailable — try again shortly",
-  "not-in-beta": "This Twitch account isn't part of the RiftSight beta yet. Email riftsight.support@gmail.com to request access.",
+  "not-in-beta": "This account isn't part of the RiftSight beta yet. Email riftsight.support@gmail.com to request access.",
 };

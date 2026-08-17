@@ -54,7 +54,7 @@ import { getPublishingIntent, loadPersistedPublishingIntent, setPublishingIntent
 import { resolveProducerWsUrl, resolveViewerWsUrl } from "./producer-url.js";
 import { ViewerRelayManager } from "./viewer-relay.js";
 import { syncYouTubeRegistration } from "./youtube-enable.js";
-import { YOUTUBE_VIEWER_PORT, type ViewerPortMessageFromContent, type ViewerPortMessageToContent } from "../shared/viewer-port.js";
+import { YOUTUBE_VIEWER_PORT, type ViewerPortMessageFromContent, type ViewerPortMessageToContent, type WatchPageStatus } from "../shared/viewer-port.js";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -320,6 +320,8 @@ function withOverlayConfig(state: OverlayState): OverlayState {
 // ---------------------------------------------------------------------------
 /** Which channel each connected viewer port is currently watching (null = port open but not on a live watch page right now). */
 const viewerPortChannels = new Map<chrome.runtime.Port, string | null>();
+/** Each viewer port's last self-reported page status — the popup's Watch view reads the ACTIVE tab's entry via get-watch-status. */
+const viewerPortStatuses = new Map<chrome.runtime.Port, WatchPageStatus>();
 /** Reverse index: which ports to fan a channel's events out to. */
 const channelViewerPorts = new Map<string, Set<chrome.runtime.Port>>();
 
@@ -391,12 +393,17 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((message: ViewerPortMessageFromContent) => {
     if (message?.type === "watch-channel") {
       switchViewerPortChannel(port, typeof message.channelId === "string" ? message.channelId : null);
+      return;
+    }
+    if (message?.type === "page-status") {
+      viewerPortStatuses.set(port, message.status);
     }
   });
 
   port.onDisconnect.addListener(() => {
     switchViewerPortChannel(port, null);
     viewerPortChannels.delete(port);
+    viewerPortStatuses.delete(port);
   });
 });
 
@@ -603,6 +610,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message?.type === "get-watch-status") {
+    // The popup's Watch view: what does the ACTIVE tab's RiftSight content
+    // script say its page is? null = no RiftSight content script there (not
+    // a YouTube tab, or the permission isn't granted).
+    void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+      const activeTabId = tabs[0]?.id;
+      if (activeTabId === undefined) {
+        sendResponse({ status: null });
+        return;
+      }
+      for (const [port, status] of viewerPortStatuses) {
+        if (port.sender?.tab?.id === activeTabId) {
+          sendResponse({ status });
+          return;
+        }
+      }
+      sendResponse({ status: null });
+    });
+    return true;
+  }
+
   if (message?.type === "get-last-state") {
     // Calibration page's live-preview feed — the last state this worker
     // forwarded (config already attached). Same already-sanitized data
@@ -649,7 +677,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "start-link") {
-    void startLink().then(() => {
+    void startLink(message.platform === "youtube" ? "youtube" : "twitch").then(() => {
       updateBadge();
       sendResponse(getLinkState());
     });

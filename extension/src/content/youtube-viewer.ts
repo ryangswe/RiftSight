@@ -19,7 +19,7 @@ import {
   FULL_FRAME_SOURCE_REGION,
 } from "@riftsight/overlay-core";
 import { TimeWindowBuffer, type OverlayState } from "@riftsight/protocol";
-import { YOUTUBE_VIEWER_PORT, type ViewerPortMessageFromContent, type ViewerPortMessageToContent } from "../shared/viewer-port.js";
+import { YOUTUBE_VIEWER_PORT, type ViewerPortMessageFromContent, type ViewerPortMessageToContent, type WatchPageStatus } from "../shared/viewer-port.js";
 import { computeContainedRect, resolveViewerDelayMs, scaleTooltipForStage } from "./youtube-geometry.js";
 import {
   DEFAULT_VIEWER_PREFS,
@@ -294,8 +294,10 @@ function initYouTubeViewer(): void {
         latestState = message.state;
         rejectedForCurrentChannel = false;
         stateBuffer.push(message.state.capturedAt, message.state);
+        const firstState = root.style.display === "none";
         root.style.display = "block";
         applyConfigToOverlay();
+        if (firstState) reportPageStatus();
         return;
       }
       if (message.type === "subscribe-rejected") {
@@ -305,6 +307,7 @@ function initYouTubeViewer(): void {
         rejectedForCurrentChannel = true;
         applyState(undefined);
         root.style.display = "none";
+        reportPageStatus();
         return;
       }
       // relay-status: no UI today — reconnects are the background's job.
@@ -329,9 +332,30 @@ function initYouTubeViewer(): void {
     }, delay);
   }
 
+  /** The popup's Watch view renders off these reports (see shared/viewer-port.ts). Sent on every meaningful transition; cheap and idempotent. */
+  function reportPageStatus(): void {
+    const onWatchPage = location.pathname === "/watch";
+    const player = onWatchPage ? findPlayer() : null;
+    const live = player !== null && isLivePlayer(player);
+    const status: WatchPageStatus = target
+      ? {
+          pageKind: "live-watch",
+          channelId: target.channelId,
+          session: rejectedForCurrentChannel ? "unavailable" : latestState ? "active" : "waiting",
+        }
+      : { pageKind: onWatchPage ? (live ? "live-watch" : "vod-watch") : "other", channelId: null, session: "idle" };
+    const activePort = ensurePort();
+    if (!activePort) return;
+    try {
+      activePort.postMessage({ type: "page-status", status } satisfies ViewerPortMessageFromContent);
+    } catch {
+      port = null;
+      schedulePortReconnect();
+    }
+  }
+
   function announce(channelId: string | null): void {
     announcedChannelId = channelId;
-    if (channelId === null && !port) return; // nothing to tell and no port to tell it on
     const activePort = ensurePort();
     if (!activePort) return;
     try {
@@ -384,6 +408,7 @@ function initYouTubeViewer(): void {
     root.style.display = "none";
     panel.style.display = "none";
     announce(null);
+    reportPageStatus();
   }
 
   function activate(channelId: string, player: HTMLElement, video: HTMLVideoElement): void {
@@ -405,6 +430,7 @@ function initYouTubeViewer(): void {
     video.addEventListener("resize", queueStageSync);
     queueStageSync();
     announce(channelId);
+    reportPageStatus();
   }
 
   /**
@@ -436,6 +462,7 @@ function initYouTubeViewer(): void {
       return;
     }
     if (target) deactivate();
+    else reportPageStatus(); // settled on a non-live page having never activated — tell the popup what this page is
   }
 
   function onNavigation(): void {

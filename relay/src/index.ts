@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { validateEnv } from "./env.js";
 import { createDbClient } from "./db/client.js";
-import { findBroadcasterByYouTubeChannel } from "./db/broadcasters.js";
+import { findIdentity } from "./db/identities.js";
 import { loadMigrations, runMigrations } from "./db/migrate.js";
 import { createStateStore } from "./auth/state-store.js";
 import { createLinkHandoffStore } from "./auth/link-handoff.js";
@@ -57,6 +57,14 @@ const oauthConfig: TwitchOAuthConfig | undefined =
     ? { clientId: config.twitchApiClientId, clientSecret: config.twitchApiClientSecret, redirectUri: config.twitchOAuthRedirectUri }
     : undefined;
 
+// Same conditional wiring as the Twitch trio above — all three GOOGLE_*
+// vars present enables verified YouTube linking; otherwise /auth/google
+// responds 503 and the manual beta claim remains the only YouTube path.
+const googleOAuthConfig =
+  config.googleClientId && config.googleClientSecret && config.googleOAuthRedirectUri
+    ? { clientId: config.googleClientId, clientSecret: config.googleClientSecret, redirectUri: config.googleOAuthRedirectUri }
+    : undefined;
+
 const stateStore = createStateStore();
 const linkHandoff = createLinkHandoffStore();
 
@@ -88,6 +96,7 @@ const httpServer = createServer(
     stateStore,
     linkHandoff,
     oauthConfig,
+    googleOAuthConfig,
   })
 );
 
@@ -111,14 +120,20 @@ const { close: closeWebSocketServer } = attachRelayWebSocketServer(httpServer, {
   // requirements.
   producerAuth: { db, required: config.mode === "closed-beta" },
   stateBus: redisStateBus,
-  // The youtube-subscribe path's channel->session mapping, backed by the
-  // broadcaster row's streamer-claimed youtube_channel_id (see
-  // /api/youtube-channel). Wired in every mode — with no claims in the DB
-  // it simply resolves nothing, and the relay's own cache bounds the query
-  // rate (see YOUTUBE_RESOLUTION_CACHE_MS).
+  // Both viewer paths' channel->session mapping, backed by
+  // platform_identities (see db/identities.ts): a platform channel id
+  // resolves to the owning broadcaster's internal id, which is the session
+  // key authenticated producers publish under (sessionKeyForBroadcaster).
+  // Wired in every mode — with no links in the DB they simply resolve
+  // nothing, and the relay's own cache bounds the query rate (see
+  // PLATFORM_RESOLUTION_CACHE_MS).
   resolveYouTubeChannel: async (youtubeChannelId) => {
-    const broadcaster = await findBroadcasterByYouTubeChannel(db, youtubeChannelId);
-    return broadcaster ? broadcaster.twitchUserId : null;
+    const identity = await findIdentity(db, "youtube", youtubeChannelId);
+    return identity ? String(identity.broadcasterId) : null;
+  },
+  resolveTwitchChannel: async (twitchChannelId) => {
+    const identity = await findIdentity(db, "twitch", twitchChannelId);
+    return identity ? String(identity.broadcasterId) : null;
   },
 });
 

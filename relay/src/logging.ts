@@ -53,6 +53,8 @@ const ALLOWED_LOG_FIELDS = new Set([
   // every YouTube watch page, never viewer-identifying) — logged by the
   // youtube-subscribe resolution path and the /api/youtube-channel routes.
   "youtubeChannelId",
+  // Which linked-platform flow a log line concerns ("twitch" | "youtube") — never user-identifying.
+  "platform",
   "path",
   "method",
   "status",

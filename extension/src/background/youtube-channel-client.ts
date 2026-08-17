@@ -11,7 +11,7 @@ import { getStoredCredential } from "./auth.js";
 
 export type YouTubeChannelFailure = "not-linked" | "backend-not-configured" | "conflict" | "invalid" | "network";
 
-export type YouTubeChannelResult = { ok: true; channelId: string | null } | { ok: false; error: YouTubeChannelFailure };
+export type YouTubeChannelResult = { ok: true; channelId: string | null; displayName: string | null } | { ok: false; error: YouTubeChannelFailure };
 
 function backendUrl(): string {
   return __RIFTSIGHT_BACKEND_URL__;
@@ -37,8 +37,8 @@ async function callYouTubeChannelRoute(method: "GET" | "POST" | "DELETE", channe
   if (!response.ok) return { ok: false, error: "network" };
 
   try {
-    const body = (await response.json()) as { channelId?: string | null };
-    return { ok: true, channelId: body.channelId ?? null };
+    const body = (await response.json()) as { channelId?: string | null; displayName?: string | null };
+    return { ok: true, channelId: body.channelId ?? null, displayName: body.displayName ?? null };
   } catch {
     return { ok: false, error: "network" };
   }

@@ -75,3 +75,50 @@ real extension packaging. Before announcing:
    needed).
 5. SPA-navigate live→VOD→live: overlay detaches/reattaches.
 6. Claim/clear channel round-trip against the production relay.
+
+## Identity-model refactor (cross-platform client milestone)
+
+The relay's broadcaster identity is now the internal `broadcasters.id`
+(platform-neutral, opaque), with Twitch and YouTube demoted to linked
+identities in `platform_identities` (migration
+`0005_platform_identities.sql`). Operational consequences:
+
+- **Deploying 0005**: apply BEFORE any Turso cutover (the migration runner
+  suspends FK enforcement via a connection-level PRAGMA, which the local
+  sqlite3/file driver honors; remote libsql may not — see
+  `db/migrate.ts`'s comment). Existing broadcasters keep their ids,
+  credentials, and allowlist status; nobody re-registers. Verified by
+  `db/migration-0005.test.ts` against legacy-shaped rows.
+- **Session keys changed**: relay sessions now key on the internal
+  broadcaster id, and BOTH viewer paths (Twitch JWT channel_id, YouTube
+  channel id) resolve through `platform_identities`. In-memory sessions
+  don't survive restarts anyway; pre-upgrade Redis snapshot keys age out
+  via TTL. A Twitch channel with no linked broadcaster no longer creates
+  empty sessions per curious viewer.
+- **Allowlists**: `twitch_allowlist` is untouched; `youtube_allowlist`
+  (new) gates YouTube-only onboarding. A broadcaster is permitted if ANY
+  linked identity is allowlisted — removal on the relevant platform still
+  revokes producer access. CLI: `seed-allowlist add-youtube <UC...>` /
+  `remove-youtube <UC...>`.
+- **Verified YouTube linking (Google OAuth)** is code-complete and INERT:
+  provision a Google Cloud project (YouTube Data API v3 + OAuth consent
+  screen, scope `youtube.readonly`), set
+  `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_OAUTH_REDIRECT_URI`
+  (`https://<backend>/auth/google/callback`), and `/auth/google/*` goes
+  live — a YouTube-only streamer then onboards with zero Twitch. Until
+  then those routes 503 and the manual channel claim (now in the popup's
+  Settings view, labeled beta) is the only YouTube attach path.
+- **Known deferral**: attaching a SECOND platform to an existing account
+  via OAuth (e.g. Twitch-linked streamer adding verified YouTube) isn't
+  wired — the manual claim covers YouTube attach; Twitch-attach for
+  YouTube-first accounts shows "coming soon" in the UI. Needs a
+  bearer-authed one-time attach-code flow; deliberately out of scope.
+
+## Popup (cross-platform client)
+
+The popup is now Watch | Stream tabbed with a first-run chooser (sets the
+default tab only), a settings view holding account/linking admin, and
+state-driven views throughout (`popup/view-model.ts`, unit-tested).
+Viewers see no streamer machinery by default and need no account; the
+YouTube host permission is only ever requested from an explicit user
+action (onboarding "Watch" choice or the Watch tab's enable CTA).

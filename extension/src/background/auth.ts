@@ -12,7 +12,7 @@
 // The debug panel (content/inventory.ts) just triggers this and polls its
 // *own* status back from here — it never owns the linking flow itself.
 
-import { INITIAL_LINK_STATE, reduceLinkState, type LinkState } from "./link-state.js";
+import { INITIAL_LINK_STATE, reduceLinkState, type LinkPlatform, type LinkState } from "./link-state.js";
 
 const STORAGE_KEY_CREDENTIAL = "riftsight.producerCredential";
 const STORAGE_KEY_LINK_STATE = "riftsight.linkState";
@@ -106,13 +106,14 @@ async function pollOnce(linkId: string, deadline: number): Promise<void> {
   pollTimer = setTimeout(() => void pollOnce(linkId, deadline), POLL_INTERVAL_MS);
 }
 
-/** Starts a fresh linking attempt: opens the Twitch authorization tab and begins polling for the resulting credential. */
-export async function startLink(): Promise<void> {
+/** Starts a fresh linking attempt on either platform: opens the authorization tab (Twitch OAuth or Google/YouTube OAuth — same linkId handoff either way) and begins polling for the resulting credential. */
+export async function startLink(platform: LinkPlatform = "twitch"): Promise<void> {
   stopPolling();
-  await persistState(reduceLinkState(currentState, { type: "start-link" }));
+  await persistState(reduceLinkState(currentState, { type: "start-link", platform }));
 
   const linkId = crypto.randomUUID();
-  await chrome.tabs.create({ url: `${backendUrl()}/auth/twitch/start?linkId=${encodeURIComponent(linkId)}` });
+  const startPath = platform === "youtube" ? "/auth/google/start" : "/auth/twitch/start";
+  await chrome.tabs.create({ url: `${backendUrl()}${startPath}?linkId=${encodeURIComponent(linkId)}` });
 
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   pollTimer = setTimeout(() => void pollOnce(linkId, deadline), POLL_INTERVAL_MS);

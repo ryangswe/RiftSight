@@ -14,7 +14,7 @@
 
 import type { DbClient } from "../../db/client.js";
 import { isAllowed } from "../../db/allowlist.js";
-import { upsertBroadcaster } from "../../db/broadcasters.js";
+import { linkOrCreateBroadcasterWithIdentity } from "../../db/identities.js";
 import { issueProducerCredential } from "../../db/producer-credentials.js";
 import type { StateStore } from "../../auth/state-store.js";
 import type { LinkHandoffStore } from "../../auth/link-handoff.js";
@@ -94,10 +94,15 @@ export async function handleAuthCallback(req: HttpRequest, deps: AuthCallbackDep
     return resultPage(403, "Not in the beta yet", "This Twitch account isn't part of the RiftSight beta yet. Reach out if you'd like access.");
   }
 
-  const broadcaster = await upsertBroadcaster(deps.db, identity.userId, identity.login);
+  // Twitch is a LINKED IDENTITY of an internal RiftSight broadcaster, not
+  // the broadcaster itself (see db/identities.ts / migration 0005): an
+  // already-linked Twitch account resolves to its existing broadcaster (a
+  // relink just refreshes the display name), a new one gets a fresh
+  // internal broadcaster created for it.
+  const { broadcasterId } = await linkOrCreateBroadcasterWithIdentity(deps.db, "twitch", identity.userId, identity.login);
 
   if (linkId) {
-    const credential = await issueProducerCredential(deps.db, broadcaster.id);
+    const credential = await issueProducerCredential(deps.db, broadcasterId);
     deps.linkHandoff.markReady(linkId, { credential, displayName: identity.login });
   }
 

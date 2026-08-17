@@ -73,18 +73,35 @@ export async function runMigrations(db: DbClient, migrations: Migration[]): Prom
   const pending = migrations.filter((m) => !appliedVersions.has(m.version)).sort((a, b) => a.version - b.version);
 
   const applied: string[] = [];
-  for (const migration of pending) {
-    await db.batch(
-      [
-        ...splitStatements(migration.sql),
-        {
-          sql: "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-          args: [migration.version, migration.name, new Date().toISOString()],
-        },
-      ],
-      "write"
-    );
-    applied.push(migration.name);
+  // Foreign-key enforcement is suspended for the duration of migration
+  // application — SQLite's own documented table-rebuild procedure
+  // (https://sqlite.org/lang_altertable.html §7) requires it, and 0005's
+  // broadcasters rebuild is exactly that shape: DROP TABLE on a parent
+  // with child references performs an implicit DELETE that would otherwise
+  // trip the children's constraints mid-rebuild. A connection-level PRAGMA
+  // (it can't change inside the batch's transaction), restored in finally.
+  // NOTE (ops): this relies on the PRAGMA sticking to the same underlying
+  // connection as the batch — true for the local sqlite3/file driver every
+  // deployment uses today; if the database ever moves to remote
+  // libsql/Turso (scaling-plan Stage 0), apply pending migrations BEFORE
+  // the cutover, or via a local copy — documented in the deployment docs.
+  await db.execute("PRAGMA foreign_keys=OFF");
+  try {
+    for (const migration of pending) {
+      await db.batch(
+        [
+          ...splitStatements(migration.sql),
+          {
+            sql: "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            args: [migration.version, migration.name, new Date().toISOString()],
+          },
+        ],
+        "write"
+      );
+      applied.push(migration.name);
+    }
+  } finally {
+    await db.execute("PRAGMA foreign_keys=ON");
   }
 
   return { applied };

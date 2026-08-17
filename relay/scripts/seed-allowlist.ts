@@ -17,15 +17,21 @@
 // round trip); anything else is resolved as a username.
 
 import { createDbClient } from "../src/db/client.js";
-import { addToAllowlist, listAllowlist, removeFromAllowlist } from "../src/db/allowlist.js";
-import { getBroadcasterByTwitchUserId } from "../src/db/broadcasters.js";
+import {
+  addToAllowlist,
+  addToYouTubeAllowlist,
+  listAllowlist,
+  removeFromAllowlist,
+  removeFromYouTubeAllowlist,
+} from "../src/db/allowlist.js";
+import { findIdentity } from "../src/db/identities.js";
 import { listCredentialLifecycleForBroadcaster } from "../src/db/producer-credentials.js";
 import { resolveTwitchUserIdByLogin } from "../src/auth/twitch-oauth.js";
 import { validateEnv } from "../src/env.js";
 
 function usage(): never {
   console.error(
-    "Usage: seed-allowlist add <twitchUserId-or-username> [note...] | remove <twitchUserId-or-username> | list | credential-status <twitchUserId-or-username>"
+    "Usage: seed-allowlist add <twitchUserId-or-username> [note...] | remove <twitchUserId-or-username> | add-youtube <UC-channel-id> [note...] | remove-youtube <UC-channel-id> | list | credential-status <twitchUserId-or-username>"
   );
   process.exit(1);
 }
@@ -105,15 +111,33 @@ switch (command) {
     }
     break;
   }
+  case "add-youtube": {
+    // YouTube beta gate — mirrors "add", but YouTube channel ids are pasted
+    // directly (no username resolution; a UC... id is copyable from
+    // YouTube Studio).
+    if (!idOrLogin || !/^UC[A-Za-z0-9_-]{22}$/.test(idOrLogin)) {
+      console.error("[seed-allowlist] add-youtube needs a canonical UC... channel id");
+      process.exit(1);
+    }
+    await addToYouTubeAllowlist(db, idOrLogin, noteParts.join(" ") || undefined);
+    console.log(`[seed-allowlist] added youtube channel "${idOrLogin}"`);
+    break;
+  }
+  case "remove-youtube": {
+    if (!idOrLogin) usage();
+    await removeFromYouTubeAllowlist(db, idOrLogin);
+    console.log(`[seed-allowlist] removed youtube channel "${idOrLogin}" — a YouTube-only broadcaster's credential is revoked on their next connection attempt`);
+    break;
+  }
   case "credential-status": {
     if (!idOrLogin) usage();
     const twitchUserId = await resolveUserId(idOrLogin);
-    const broadcaster = await getBroadcasterByTwitchUserId(db, twitchUserId);
-    if (!broadcaster) {
+    const identity = await findIdentity(db, "twitch", twitchUserId);
+    if (!identity) {
       console.log(`[seed-allowlist] no broadcaster record for "${twitchUserId}" — they've never linked their Twitch account`);
       break;
     }
-    const lifecycle = await listCredentialLifecycleForBroadcaster(db, twitchUserId);
+    const lifecycle = await listCredentialLifecycleForBroadcaster(db, identity.broadcasterId);
     if (lifecycle.length === 0) {
       console.log(`[seed-allowlist] "${twitchUserId}" has never had a producer credential issued`);
     } else {

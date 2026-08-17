@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDbClient, type DbClient } from "../../db/client.js";
 import { runMigrations } from "../../db/migrate.js";
 import { addToAllowlist } from "../../db/allowlist.js";
-import { upsertBroadcaster } from "../../db/broadcasters.js";
+import { linkOrCreateBroadcasterWithIdentity } from "../../db/identities.js";
 import { issueProducerCredential } from "../../db/producer-credentials.js";
 import { handleClearYouTubeChannel, handleGetYouTubeChannel, handleSetYouTubeChannel } from "./youtube-channel.js";
 
@@ -21,7 +21,7 @@ let otherCredential: string;
 beforeEach(async () => {
   db = createDbClient(":memory:");
   const migrations = await Promise.all(
-    ["0001_init.sql", "0002_producer_credentials.sql", "0003_producer_credential_lifecycle.sql", "0004_youtube_channels.sql"].map(
+    ["0001_init.sql", "0002_producer_credentials.sql", "0003_producer_credential_lifecycle.sql", "0004_youtube_channels.sql", "0005_platform_identities.sql"].map(
       async (file, index) => ({
         version: index + 1,
         name: file,
@@ -32,12 +32,12 @@ beforeEach(async () => {
   await runMigrations(db, migrations);
 
   await addToAllowlist(db, "141981764");
-  const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
-  credential = await issueProducerCredential(db, broadcaster.id);
+  const broadcaster = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "141981764", "juicykaraage");
+  credential = await issueProducerCredential(db, broadcaster.broadcasterId);
 
   await addToAllowlist(db, "555555");
-  const other = await upsertBroadcaster(db, "555555", "other_streamer");
-  otherCredential = await issueProducerCredential(db, other.id);
+  const other = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "555555", "other_streamer");
+  otherCredential = await issueProducerCredential(db, other.broadcasterId);
 });
 
 afterEach(() => {
@@ -73,7 +73,7 @@ describe("handleSetYouTubeChannel", () => {
 
     const get = await handleGetYouTubeChannel(request("GET", "/api/youtube-channel", credential), db);
     expect(get.status).toBe(200);
-    expect(JSON.parse(get.body)).toEqual({ channelId: CHANNEL_A });
+    expect(JSON.parse(get.body)).toEqual({ channelId: CHANNEL_A, displayName: null });
   });
 
   it("409s when another broadcaster already claimed the channel", async () => {
@@ -89,7 +89,7 @@ describe("handleSetYouTubeChannel", () => {
     const replaced = await handleSetYouTubeChannel(request("POST", `/api/youtube-channel?channelId=${CHANNEL_B}`, credential), db);
     expect(replaced.status).toBe(200);
     const get = await handleGetYouTubeChannel(request("GET", "/api/youtube-channel", credential), db);
-    expect(JSON.parse(get.body)).toEqual({ channelId: CHANNEL_B });
+    expect(JSON.parse(get.body)).toEqual({ channelId: CHANNEL_B, displayName: null });
   });
 });
 
@@ -97,7 +97,7 @@ describe("handleGetYouTubeChannel", () => {
   it("reports null before any claim", async () => {
     const response = await handleGetYouTubeChannel(request("GET", "/api/youtube-channel", credential), db);
     expect(response.status).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ channelId: null });
+    expect(JSON.parse(response.body)).toEqual({ channelId: null, displayName: null });
   });
 
   it("401s without a credential", async () => {
@@ -113,7 +113,7 @@ describe("handleClearYouTubeChannel", () => {
     expect(cleared.status).toBe(200);
     expect(JSON.parse(cleared.body)).toEqual({ channelId: null });
     const get = await handleGetYouTubeChannel(request("GET", "/api/youtube-channel", credential), db);
-    expect(JSON.parse(get.body)).toEqual({ channelId: null });
+    expect(JSON.parse(get.body)).toEqual({ channelId: null, displayName: null });
   });
 
   it("clearing when nothing is set is a harmless 200", async () => {

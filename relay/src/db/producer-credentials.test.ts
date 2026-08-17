@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDbClient, type DbClient } from "./client.js";
 import { runMigrations } from "./migrate.js";
-import { upsertBroadcaster } from "./broadcasters.js";
+import { linkOrCreateBroadcasterWithIdentity } from "./identities.js";
 import { addToAllowlist, removeFromAllowlist } from "./allowlist.js";
 import {
   inspectProducerCredential,
@@ -24,7 +24,7 @@ let broadcasterId: number;
 beforeEach(async () => {
   db = createDbClient(":memory:");
   const migrations = await Promise.all(
-    ["0001_init.sql", "0002_producer_credentials.sql", "0003_producer_credential_lifecycle.sql"].map(async (file, index) => ({
+    ["0001_init.sql", "0002_producer_credentials.sql", "0003_producer_credential_lifecycle.sql", "0004_youtube_channels.sql", "0005_platform_identities.sql"].map(async (file, index) => ({
       version: index + 1,
       name: file,
       sql: await readFile(path.join(migrationsDir, file), "utf8"),
@@ -33,8 +33,8 @@ beforeEach(async () => {
   await runMigrations(db, migrations);
 
   await addToAllowlist(db, "141981764");
-  const broadcaster = await upsertBroadcaster(db, "141981764", "juicykaraage");
-  broadcasterId = broadcaster.id;
+  const broadcaster = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "141981764", "juicykaraage");
+  broadcasterId = broadcaster.broadcasterId;
 });
 
 afterEach(() => {
@@ -45,7 +45,7 @@ describe("issueProducerCredential + validateProducerCredential", () => {
   it("a freshly issued credential validates to the correct broadcaster/channel", async () => {
     const token = await issueProducerCredential(db, broadcasterId);
     const result = await validateProducerCredential(db, token);
-    expect(result).toEqual({ broadcasterId, twitchUserId: "141981764" });
+    expect(result).toEqual({ broadcasterId });
   });
 
   it("an unknown/garbage token does not validate", async () => {
@@ -68,9 +68,9 @@ describe("revokeAllCredentialsForBroadcaster", () => {
 
   it("only revokes the given broadcaster's credentials, not others'", async () => {
     await addToAllowlist(db, "222");
-    const other = await upsertBroadcaster(db, "222", "other_streamer");
+    const other = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "222", "other_streamer");
     const tokenA = await issueProducerCredential(db, broadcasterId);
-    const tokenB = await issueProducerCredential(db, other.id);
+    const tokenB = await issueProducerCredential(db, other.broadcasterId);
 
     await revokeAllCredentialsForBroadcaster(db, broadcasterId);
 
@@ -86,7 +86,7 @@ describe("rotateProducerCredential", () => {
 
     expect(oldToken).not.toBe(newToken);
     expect(await validateProducerCredential(db, oldToken)).toBeNull();
-    expect(await validateProducerCredential(db, newToken)).toEqual({ broadcasterId, twitchUserId: "141981764" });
+    expect(await validateProducerCredential(db, newToken)).toEqual({ broadcasterId });
   });
 });
 
@@ -147,8 +147,8 @@ describe("inspectProducerCredential", () => {
 
   it("never reveals anything about a different broadcaster's credential", async () => {
     await addToAllowlist(db, "222");
-    const other = await upsertBroadcaster(db, "222", "other_streamer");
-    const otherToken = await issueProducerCredential(db, other.id);
+    const other = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "222", "other_streamer");
+    const otherToken = await issueProducerCredential(db, other.broadcasterId);
 
     // Inspecting broadcasterId's own (nonexistent) guess at another
     // credential's shape must never succeed — only a token that actually
@@ -203,7 +203,7 @@ describe("touchProducerCredentialLastUsed", () => {
 describe("listCredentialLifecycleForBroadcaster", () => {
   it("reports issuedAt for a freshly issued credential with everything else null and active true", async () => {
     await issueProducerCredential(db, broadcasterId);
-    const [entry] = await listCredentialLifecycleForBroadcaster(db, "141981764");
+    const [entry] = await listCredentialLifecycleForBroadcaster(db, broadcasterId);
     expect(entry).toBeDefined();
     expect(entry!.issuedAt).toEqual(expect.any(String));
     expect(entry!.lastUsedAt).toBeNull();
@@ -217,7 +217,7 @@ describe("listCredentialLifecycleForBroadcaster", () => {
     await touchProducerCredentialLastUsed(db, oldToken);
     await rotateProducerCredential(db, broadcasterId);
 
-    const entries = await listCredentialLifecycleForBroadcaster(db, "141981764");
+    const entries = await listCredentialLifecycleForBroadcaster(db, broadcasterId);
     expect(entries).toHaveLength(2);
     const [newest, oldest] = entries;
     expect(newest!.active).toBe(true);
@@ -229,23 +229,23 @@ describe("listCredentialLifecycleForBroadcaster", () => {
 
   it("never includes a token hash or any field resembling one", async () => {
     await issueProducerCredential(db, broadcasterId);
-    const [entry] = await listCredentialLifecycleForBroadcaster(db, "141981764");
+    const [entry] = await listCredentialLifecycleForBroadcaster(db, broadcasterId);
     const keys = Object.keys(entry!);
     expect(keys.some((key) => key.toLowerCase().includes("hash"))).toBe(false);
     expect(keys.some((key) => key.toLowerCase().includes("token"))).toBe(false);
   });
 
-  it("returns an empty array for a twitch user id with no credentials at all", async () => {
-    expect(await listCredentialLifecycleForBroadcaster(db, "999999")).toEqual([]);
+  it("returns an empty array for a broadcaster with no credentials at all", async () => {
+    expect(await listCredentialLifecycleForBroadcaster(db, 999999)).toEqual([]);
   });
 
   it("only reports the requested broadcaster's own credentials", async () => {
     await addToAllowlist(db, "222");
-    const other = await upsertBroadcaster(db, "222", "other_streamer");
+    const other = await linkOrCreateBroadcasterWithIdentity(db, "twitch", "222", "other_streamer");
     await issueProducerCredential(db, broadcasterId);
-    await issueProducerCredential(db, other.id);
+    await issueProducerCredential(db, other.broadcasterId);
 
-    const entries = await listCredentialLifecycleForBroadcaster(db, "141981764");
+    const entries = await listCredentialLifecycleForBroadcaster(db, broadcasterId);
     expect(entries).toHaveLength(1);
   });
 });

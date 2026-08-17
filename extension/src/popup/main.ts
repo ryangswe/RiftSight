@@ -1,29 +1,17 @@
-// The toolbar popup — the sole streamer-facing UI in closed-beta builds
-// (see content/inventory.ts's bottom-of-file gating: the debug panel it
-// injects into RiftAtlas never renders in that mode). A separate JS
-// execution context from both the content script and the background
-// worker, so it talks to background.ts through the exact same
-// chrome.runtime.sendMessage contract inventory.ts already uses — no new
-// message types.
+// The popup — the cross-platform RiftSight client's front door, organized
+// around the two experiences (Watch | Stream) rather than the
+// implementation model. All UI-state decisions live in the pure, tested
+// view-model.ts; this file is render glue + event wiring on the same
+// background-message contract as before, refreshed on the popup's
+// established 2s cadence.
 //
-// Two things this file deliberately never does:
-//  - Send "heartbeat": background.ts's heartbeat handler reads
-//    sender.tab?.id to track RiftAtlas presence, and a popup has no
-//    associated tab (it degrades gracefully — the message is just
-//    dropped — but sending it here would be pointless). Presence stays
-//    sourced exclusively from the content script, which keeps running
-//    headlessly whether or not this popup is ever opened.
-//  - Call startPublishing/stopPublishing directly: this popup has no DOM
-//    access to RiftAtlas and can't import publisher.ts/card-observer.ts
-//    (wrong execution context). It only ever writes intent via
-//    set-publishing-intent; content/inventory.ts's sendHeartbeat() tick
-//    is what actually starts/stops the publisher, re-polling
-//    get-publishing-intent every cycle specifically so it picks up a
-//    change made from here (see that function's doc comment).
+// Views: first-run onboarding (sets the DEFAULT tab only — never a
+// permanent role), the main tabbed view, and a settings view holding the
+// low-frequency account/linking administration that used to crowd the top
+// of the old popup. Tab selection persists locally.
 
-import { LINK_STATUS_LABEL, type LinkState, type LinkStatus } from "../background/link-state.js";
-import { idlePublishingMessage, PRESENCE_STATUS_LABEL, type PresenceStatus } from "../background/presence.js";
-import { describeStreamerError } from "../background/error-messages.js";
+import { LINK_STATUS_LABEL, type LinkState } from "../background/link-state.js";
+import { type PresenceStatus } from "../background/presence.js";
 import { safeSendMessage } from "../shared/messaging.js";
 import { enableYouTube, isYouTubeEnabled, YOUTUBE_ORIGIN } from "../background/youtube-enable.js";
 import {
@@ -33,255 +21,394 @@ import {
   type YouTubeChannelFailure,
 } from "../background/youtube-channel-client.js";
 import { parseYouTubeChannelInput } from "../shared/youtube-channel-input.js";
+import { parseViewerPrefs, STORAGE_KEY_VIEWER_PREFS, type YouTubeViewerPrefs } from "../content/youtube-prefs.js";
+import type { WatchPageStatus } from "../shared/viewer-port.js";
+import { buildStreamView, buildWatchView, type PlatformRowModel, type StatusLine } from "./view-model.js";
 
-function requireElement<T extends Element>(id: string): T {
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`Missing #${id}`);
-  return el as unknown as T;
+const STORAGE_KEY_POPUP_TAB = "riftsight.popupTab";
+const STORAGE_KEY_ONBOARDED = "riftsight.onboarded";
+
+function el<T extends Element>(id: string): T {
+  const found = document.getElementById(id);
+  if (!found) throw new Error(`Missing #${id}`);
+  return found as unknown as T;
 }
 
-const accountStatusEl = requireElement<HTMLDivElement>("account-status");
-const connectButton = requireElement<HTMLButtonElement>("connect-button");
-const disconnectButton = requireElement<HTMLButtonElement>("disconnect-button");
-const presenceStatusEl = requireElement<HTMLDivElement>("presence-status");
-const publishStatusEl = requireElement<HTMLDivElement>("publish-status");
-const publishToggleButton = requireElement<HTMLButtonElement>("publish-toggle");
-const youtubeStatusEl = requireElement<HTMLDivElement>("youtube-status");
-const youtubeEnableButton = requireElement<HTMLButtonElement>("youtube-enable-button");
-const youtubeChannelSection = requireElement<HTMLDivElement>("youtube-channel-section");
-const youtubeChannelInput = requireElement<HTMLInputElement>("youtube-channel-input");
-const youtubeChannelSaveButton = requireElement<HTMLButtonElement>("youtube-channel-save");
-const youtubeChannelClearButton = requireElement<HTMLButtonElement>("youtube-channel-clear");
-const youtubeChannelStatusEl = requireElement<HTMLDivElement>("youtube-channel-status");
+// --------------------------------------------------------------- view refs
+const viewOnboarding = el<HTMLDivElement>("view-onboarding");
+const viewMain = el<HTMLDivElement>("view-main");
+const viewSettings = el<HTMLDivElement>("view-settings");
 
-let cachedPublishingIntent = false;
-let lastKnownLinkStatus: LinkStatus = "not-connected";
-let lastKnownPresenceStatus: PresenceStatus = "no-riftatlas";
+const tabWatch = el<HTMLButtonElement>("tab-watch");
+const tabStream = el<HTMLButtonElement>("tab-stream");
+const panelWatch = el<HTMLElement>("panel-watch");
+const panelStream = el<HTMLElement>("panel-stream");
 
-function updateAccountSection(): void {
-  safeSendMessage<LinkState>({ type: "get-link-state" })
-    .then((state) => {
-      const status: LinkStatus = state?.status ?? "not-connected";
-      lastKnownLinkStatus = status;
-      const label = LINK_STATUS_LABEL[status];
-      accountStatusEl.textContent = status === "connected" && state?.displayName ? `${label} as ${state.displayName}` : label;
-      accountStatusEl.className = status === "not-in-beta" ? "status-line status-warning" : "status-line";
+const watchEnable = el<HTMLDivElement>("watch-enable");
+const watchEnableButton = el<HTMLButtonElement>("watch-enable-button");
+const watchStatus = el<HTMLDivElement>("watch-status");
+const watchOverlaysToggle = el<HTMLInputElement>("watch-overlays-toggle");
+const watchPageDot = el<HTMLSpanElement>("watch-page-dot");
+const watchPageText = el<HTMLSpanElement>("watch-page-text");
 
-      const showConnect =
-        status === "not-connected" || status === "credential-expired" || status === "backend-unavailable" || status === "not-in-beta";
-      connectButton.style.display = showConnect ? "inline-block" : "none";
-      disconnectButton.style.display = status === "connected" ? "inline-block" : "none";
-    })
-    .catch(() => {
-      lastKnownLinkStatus = "backend-unavailable";
-      accountStatusEl.textContent = LINK_STATUS_LABEL["backend-unavailable"];
-      accountStatusEl.className = "status-line";
-      connectButton.style.display = "inline-block";
-      disconnectButton.style.display = "none";
-    });
-}
+const streamAtlasDot = el<HTMLSpanElement>("stream-atlas-dot");
+const streamAtlasText = el<HTMLSpanElement>("stream-atlas-text");
+const streamPublishingDot = el<HTMLSpanElement>("stream-publishing-dot");
+const streamPublishingText = el<HTMLSpanElement>("stream-publishing-text");
+const streamTwitchDetail = el<HTMLSpanElement>("stream-twitch-detail");
+const streamTwitchConnect = el<HTMLButtonElement>("stream-twitch-connect");
+const streamYoutubeDetail = el<HTMLSpanElement>("stream-youtube-detail");
+const streamYoutubeConnect = el<HTMLButtonElement>("stream-youtube-connect");
+const streamPrimary = el<HTMLButtonElement>("stream-primary");
+const streamNotice = el<HTMLDivElement>("stream-notice");
 
-function updatePresenceSection(): void {
-  safeSendMessage<{ status?: PresenceStatus }>({ type: "get-presence-state" })
-    .then((response) => {
-      lastKnownPresenceStatus = response?.status ?? "no-riftatlas";
-      presenceStatusEl.textContent = PRESENCE_STATUS_LABEL[lastKnownPresenceStatus];
-    })
-    .catch(() => {
-      lastKnownPresenceStatus = "no-riftatlas";
-      presenceStatusEl.textContent = PRESENCE_STATUS_LABEL["no-riftatlas"];
-    });
-}
+const settingsAccount = el<HTMLDivElement>("settings-account");
+const settingsDisconnect = el<HTMLButtonElement>("settings-disconnect");
+const settingsTwitchDetail = el<HTMLSpanElement>("settings-twitch-detail");
+const settingsTwitchConnect = el<HTMLButtonElement>("settings-twitch-connect");
+const settingsYoutubeDetail = el<HTMLSpanElement>("settings-youtube-detail");
+const settingsYoutubeConnect = el<HTMLButtonElement>("settings-youtube-connect");
+const settingsClaim = el<HTMLDivElement>("settings-claim");
+const settingsClaimInput = el<HTMLInputElement>("settings-claim-input");
+const settingsClaimSave = el<HTMLButtonElement>("settings-claim-save");
+const settingsClaimClear = el<HTMLButtonElement>("settings-claim-clear");
+const settingsClaimStatus = el<HTMLDivElement>("settings-claim-status");
 
-function syncPublishToggleUI(): void {
-  publishToggleButton.textContent = cachedPublishingIntent ? "Stop publishing" : "Start publishing";
-}
+// ----------------------------------------------------------------- state
+type Tab = "watch" | "stream";
+let activeTab: Tab = "watch";
+let settingsOpen = false;
 
-/**
- * The relay-reported viewer count, appended to the "Publishing." status
- * line — the strongest signal this popup can show that things are working
- * end to end, since it means someone else's browser is actually receiving
- * data, not just that this extension believes it's sending. Undefined
- * (never omit vs. "0 viewers" as if they're the same thing) means no
- * producer connection has told us yet — nothing appended in that case,
- * rather than a misleading "0 viewers" flash before the first real count
- * arrives.
- */
-function describeViewerCount(count: number | undefined): string {
-  if (count === undefined) return "";
-  return ` — ${count} viewer${count === 1 ? "" : "s"}`;
-}
+let permissionGranted = false;
+let viewerPrefs: YouTubeViewerPrefs = parseViewerPrefs(undefined);
+let watchPage: WatchPageStatus | null = null;
 
-// Approximates content/inventory.ts's isPublishing()/publishedSnapshotCount()
-// via presence instead of a dedicated message — those two live purely in
-// publisher.ts's content-script-local state and were never exposed over
-// chrome.runtime messaging, and adding a new message type just to mirror
-// them here isn't worth it for a status line. "presence active" is a close
-// enough proxy for "actually publishing" for this summary view; the richer
-// per-snapshot count stays a debug-panel-only (dev mode) detail.
-function updatePublishStatus(): void {
-  if (!cachedPublishingIntent) {
-    publishStatusEl.textContent = "Not publishing.";
-    return;
-  }
-  if (lastKnownPresenceStatus !== "active") {
-    publishStatusEl.textContent = idlePublishingMessage(lastKnownPresenceStatus);
-    return;
-  }
+let link: LinkState = { status: "not-connected", displayName: undefined, platform: undefined };
+let presence: PresenceStatus = "no-riftatlas";
+let publishingIntent = false;
+let relayStatus: "connecting" | "connected" | "disconnected" = "disconnected";
+let producerReplaced = false;
+let viewerCount: number | undefined;
+let youtubeClaim: { channelId: string | null; displayName: string | null } | "unknown" = "unknown";
 
-  safeSendMessage<{ status?: string; replaced?: boolean; viewerCount?: number }>({ type: "get-status" })
-    .then((response) => {
-      publishStatusEl.textContent = response?.replaced
-        ? describeStreamerError("producer-replaced")
-        : response?.status === "connected"
-          ? `Publishing. Relay: connected${describeViewerCount(response.viewerCount)}`
-          : response?.status === "disconnected"
-            ? describeStreamerError("relay-reconnecting")
-            : idlePublishingMessage(lastKnownPresenceStatus);
-    })
-    .catch(() => {
-      publishStatusEl.textContent = describeStreamerError("backend-unreachable");
-    });
-}
-
-connectButton.addEventListener("click", () => {
-  void safeSendMessage({ type: "start-link" }).then(updateAccountSection);
-});
-disconnectButton.addEventListener("click", () => {
-  void safeSendMessage({ type: "disconnect-link" }).then(updateAccountSection);
-});
-
-publishToggleButton.addEventListener("click", () => {
-  if (!cachedPublishingIntent && lastKnownLinkStatus !== "connected") {
-    publishStatusEl.textContent = "Link your Twitch account first.";
-    return;
-  }
-  cachedPublishingIntent = !cachedPublishingIntent;
-  syncPublishToggleUI();
-  updatePublishStatus();
-  void safeSendMessage({ type: "set-publishing-intent", intent: cachedPublishingIntent }).catch(() => {
-    // Best-effort, matching content/inventory.ts's setIntent() — a
-    // genuinely dropped persist only matters across a reload, and the
-    // content script's own heartbeat-tick re-fetch of this same value will
-    // reconcile it soon regardless.
-  });
-});
-
-// ---------------------------------------------------------------------------
-// YouTube section — permission enablement + the streamer's channel claim.
-// Unlike everything above, this talks to youtube-enable.ts and the backend
-// client DIRECTLY rather than via background messages: the permission
-// request legally requires a user gesture in an extension page (this
-// popup), and extension pages share chrome.storage/host-permission fetch
-// with the worker, so a message round trip would add contract surface for
-// nothing. The background's own permission listeners keep IT in sync with
-// whatever happens here.
-// ---------------------------------------------------------------------------
-
-const YOUTUBE_CLAIM_ERROR_TEXT: Record<YouTubeChannelFailure, string> = {
-  "not-linked": "Link your Twitch account first — the channel claim uses the same credential.",
+// ----------------------------------------------------------- shared render
+const CLAIM_ERROR_TEXT: Record<YouTubeChannelFailure, string> = {
+  "not-linked": "Connect Twitch or YouTube first — linking uses your RiftSight sign-in.",
   "backend-not-configured": "No backend configured in this build (development mode).",
-  conflict: "That channel is already claimed by another RiftSight streamer.",
+  conflict: "That channel is already linked to another RiftSight streamer.",
   invalid: "That doesn't look like a valid channel ID.",
-  network: "Couldn't reach the RiftSight backend — try again in a moment.",
+  network: "Couldn't reach RiftSight — try again in a moment.",
 };
 
-function refreshYouTubeClaim(): void {
-  void fetchClaimedYouTubeChannel().then((result) => {
-    if (result.ok && result.channelId) {
-      youtubeChannelStatusEl.textContent = `Claimed: ${result.channelId}`;
-      youtubeChannelClearButton.style.display = "inline-block";
-      if (!youtubeChannelInput.value) youtubeChannelInput.value = result.channelId;
-    } else if (result.ok) {
-      youtubeChannelStatusEl.textContent = "No channel claimed yet.";
-      youtubeChannelClearButton.style.display = "none";
-    } else if (result.error === "not-linked" || result.error === "backend-not-configured") {
-      youtubeChannelStatusEl.textContent = YOUTUBE_CLAIM_ERROR_TEXT[result.error];
-      youtubeChannelClearButton.style.display = "none";
-    } else {
-      youtubeChannelStatusEl.textContent = "Claim status unavailable right now.";
-    }
-  });
+// Stream rows are single-line, right-aligned values that ellipsize when long
+// (row-sub); the Watch page line is a full sentence, so it wraps left instead.
+function renderStatusLine(dot: HTMLElement, text: HTMLElement, line: StatusLine, wrap = false): void {
+  dot.className = `dot ${line.tone === "on" ? "on" : line.tone === "waiting" ? "waiting" : line.tone === "warn" ? "warn" : ""}`.trim();
+  const shape = wrap ? "status-text grow" : "status-text row-sub grow";
+  text.className = `${shape} ${line.tone === "off" ? "off" : line.tone === "warn" ? "warn" : ""}`.trim();
+  text.style.textAlign = wrap ? "left" : "right";
+  text.textContent = line.text;
 }
 
-function updateYouTubeSection(): void {
+function platformDetailText(row: PlatformRowModel): string {
+  if (row.state === "connected") return row.detail ?? "Connected";
+  if (row.state === "busy") return row.detail ?? "…";
+  if (row.state === "coming-soon") return row.detail ?? "Coming soon";
+  return row.detail ?? "Not connected";
+}
+
+function renderViews(): void {
+  viewSettings.hidden = !settingsOpen;
+  viewMain.hidden = settingsOpen || viewOnboarding.hidden === false;
+  if (settingsOpen) renderSettings();
+}
+
+function renderTabs(): void {
+  tabWatch.setAttribute("aria-selected", String(activeTab === "watch"));
+  tabStream.setAttribute("aria-selected", String(activeTab === "stream"));
+  panelWatch.hidden = activeTab !== "watch";
+  panelStream.hidden = activeTab !== "stream";
+}
+
+function renderWatch(): void {
+  const view = buildWatchView({ permissionGranted, overlaysEnabled: viewerPrefs.enabled, page: watchPage });
+  watchEnable.hidden = view.kind !== "enable";
+  watchStatus.hidden = view.kind !== "status";
+  if (view.kind === "status") {
+    watchOverlaysToggle.checked = view.overlaysOn;
+    renderStatusLine(watchPageDot, watchPageText, view.page, true);
+  }
+}
+
+function renderStream(): void {
+  const view = buildStreamView({ link, presence, publishingIntent, relayStatus, producerReplaced, viewerCount, youtubeClaim });
+
+  renderStatusLine(streamAtlasDot, streamAtlasText, view.atlas);
+  renderStatusLine(streamPublishingDot, streamPublishingText, view.publishing);
+
+  streamTwitchDetail.textContent = platformDetailText(view.twitch);
+  streamTwitchConnect.hidden = !view.twitch.connectable;
+  streamYoutubeDetail.textContent = platformDetailText(view.youtube);
+  streamYoutubeConnect.hidden = !view.youtube.connectable;
+
+  streamPrimary.textContent = view.primary.label;
+  streamPrimary.disabled = !view.primary.enabled;
+
+  streamNotice.hidden = view.notice === null;
+  streamNotice.textContent = view.notice ?? "";
+}
+
+function renderSettings(): void {
+  const linked = link.status === "connected" || link.status === "credential-expired" || link.status === "backend-unavailable";
+  settingsAccount.textContent = linked
+    ? `Signed in via ${link.platform === "youtube" ? "YouTube" : "Twitch"}${link.displayName ? ` as ${link.displayName}` : ""}`
+    : link.status === "not-connected"
+      ? "No RiftSight account — viewers don't need one. Streamers sign in by connecting a platform below."
+      : LINK_STATUS_LABEL[link.status];
+  settingsDisconnect.hidden = !linked;
+
+  const view = buildStreamView({ link, presence, publishingIntent, relayStatus, producerReplaced, viewerCount, youtubeClaim });
+  settingsTwitchDetail.textContent = platformDetailText(view.twitch);
+  settingsTwitchConnect.hidden = !view.twitch.connectable;
+  settingsYoutubeDetail.textContent = platformDetailText(view.youtube);
+  settingsYoutubeConnect.hidden = !view.youtube.connectable;
+
+  // The manual channel claim is the beta attach path for an already-linked
+  // account (verified Google sign-in covers fresh YouTube-only accounts).
+  settingsClaim.hidden = !linked;
+  if (linked && youtubeClaim !== "unknown") {
+    settingsClaimClear.hidden = !youtubeClaim.channelId;
+    if (!settingsClaimInput.value && youtubeClaim.channelId) settingsClaimInput.value = youtubeClaim.channelId;
+  }
+}
+
+function renderAll(): void {
+  renderTabs();
+  renderWatch();
+  renderStream();
+  renderViews();
+}
+
+// ------------------------------------------------------------- data refresh
+function refreshWatchData(): void {
   void isYouTubeEnabled().then((enabled) => {
-    youtubeStatusEl.textContent = enabled
-      ? "Enabled — viewers with RiftSight see overlays on your YouTube live streams."
-      : "Not enabled in this browser.";
-    youtubeEnableButton.style.display = enabled ? "none" : "inline-block";
-    youtubeChannelSection.style.display = enabled ? "block" : "none";
-    if (enabled) refreshYouTubeClaim();
+    permissionGranted = enabled;
+    renderWatch();
+  });
+  void chrome.storage.local
+    .get(STORAGE_KEY_VIEWER_PREFS)
+    .then((stored) => {
+      viewerPrefs = parseViewerPrefs((stored as Record<string, unknown>)[STORAGE_KEY_VIEWER_PREFS]);
+      renderWatch();
+    })
+    .catch(() => {});
+  void safeSendMessage<{ status?: WatchPageStatus | null }>({ type: "get-watch-status" })
+    .then((response) => {
+      watchPage = response?.status ?? null;
+      renderWatch();
+    })
+    .catch(() => {
+      watchPage = null;
+      renderWatch();
+    });
+}
+
+function refreshStreamData(): void {
+  void safeSendMessage<LinkState>({ type: "get-link-state" })
+    .then((state) => {
+      if (state) link = state;
+      renderStream();
+      if (settingsOpen) renderSettings();
+    })
+    .catch(() => {
+      link = { ...link, status: "backend-unavailable" };
+      renderStream();
+    });
+  void safeSendMessage<{ status?: PresenceStatus }>({ type: "get-presence-state" })
+    .then((response) => {
+      presence = response?.status ?? "no-riftatlas";
+      renderStream();
+    })
+    .catch(() => {});
+  void safeSendMessage<{ intent?: boolean }>({ type: "get-publishing-intent" })
+    .then((response) => {
+      publishingIntent = Boolean(response?.intent);
+      renderStream();
+    })
+    .catch(() => {});
+  void safeSendMessage<{ status?: string; replaced?: boolean; viewerCount?: number }>({ type: "get-status" })
+    .then((response) => {
+      relayStatus = response?.status === "connected" ? "connected" : response?.status === "connecting" ? "connecting" : "disconnected";
+      producerReplaced = Boolean(response?.replaced);
+      viewerCount = response?.viewerCount;
+      renderStream();
+    })
+    .catch(() => {});
+}
+
+let claimRefreshed = false;
+function refreshClaim(force = false): void {
+  if (claimRefreshed && !force) return;
+  claimRefreshed = true;
+  void fetchClaimedYouTubeChannel().then((result) => {
+    // Definitive answers (including "this build has no backend" and "not
+    // signed in") render as not-linked; only a transient network failure
+    // keeps the row in its busy state for the next refresh to resolve.
+    youtubeClaim = result.ok
+      ? { channelId: result.channelId, displayName: result.displayName }
+      : result.error === "network"
+        ? "unknown"
+        : { channelId: null, displayName: null };
+    renderStream();
+    if (settingsOpen) renderSettings();
   });
 }
 
-youtubeEnableButton.addEventListener("click", () => {
-  // Must run directly in this click handler — Chrome only honors
+// ---------------------------------------------------------------- actions
+el<HTMLButtonElement>("settings-button").addEventListener("click", () => {
+  settingsOpen = !settingsOpen;
+  refreshClaim(true);
+  renderAll();
+});
+el<HTMLButtonElement>("settings-back").addEventListener("click", () => {
+  settingsOpen = false;
+  renderAll();
+});
+
+function selectTab(tab: Tab): void {
+  activeTab = tab;
+  void chrome.storage.local.set({ [STORAGE_KEY_POPUP_TAB]: tab }).catch(() => {});
+  renderTabs();
+}
+tabWatch.addEventListener("click", () => selectTab("watch"));
+tabStream.addEventListener("click", () => selectTab("stream"));
+
+watchEnableButton.addEventListener("click", () => {
+  // Must run directly in the click handler — Chrome only honors
   // permissions.request from a user gesture.
   void chrome.permissions
     .request({ origins: [YOUTUBE_ORIGIN] })
     .then((granted) => (granted ? enableYouTube() : undefined))
-    .then(updateYouTubeSection)
-    .catch(() => {
-      youtubeStatusEl.textContent = "Couldn't request the YouTube permission.";
-    });
+    .then(() => refreshWatchData())
+    .catch(() => {});
 });
 
-youtubeChannelSaveButton.addEventListener("click", () => {
-  const channelId = parseYouTubeChannelInput(youtubeChannelInput.value);
-  if (!channelId) {
-    youtubeChannelStatusEl.textContent =
-      "Paste your channel ID (starts with UC) or a youtube.com/channel/UC… URL — find it in YouTube Studio under Settings → Channel.";
-    return;
-  }
-  youtubeChannelStatusEl.textContent = "Saving…";
-  void saveYouTubeChannelClaim(channelId).then((result) => {
-    if (result.ok) {
-      youtubeChannelStatusEl.textContent = `Claimed: ${result.channelId ?? channelId}`;
-      youtubeChannelClearButton.style.display = "inline-block";
-    } else {
-      youtubeChannelStatusEl.textContent = YOUTUBE_CLAIM_ERROR_TEXT[result.error];
-    }
+watchOverlaysToggle.addEventListener("change", () => {
+  viewerPrefs = { ...viewerPrefs, enabled: watchOverlaysToggle.checked };
+  void chrome.storage.local.set({ [STORAGE_KEY_VIEWER_PREFS]: viewerPrefs }).catch(() => {});
+  renderWatch();
+});
+
+function connectPlatform(platform: "twitch" | "youtube"): void {
+  void safeSendMessage({ type: "start-link", platform }).then(() => {
+    refreshStreamData();
+    // Now that an account exists, re-run the one-shot claim lookup so the
+    // other platform's row resolves from "Checking…" to its real state
+    // ("Link in Settings" or the linked channel) instead of hanging.
+    refreshClaim(true);
+  });
+}
+streamTwitchConnect.addEventListener("click", () => connectPlatform("twitch"));
+streamYoutubeConnect.addEventListener("click", () => connectPlatform("youtube"));
+settingsTwitchConnect.addEventListener("click", () => connectPlatform("twitch"));
+settingsYoutubeConnect.addEventListener("click", () => connectPlatform("youtube"));
+
+settingsDisconnect.addEventListener("click", () => {
+  void safeSendMessage({ type: "disconnect-link" }).then(() => {
+    youtubeClaim = "unknown";
+    refreshStreamData();
+    renderAll();
   });
 });
 
-requireElement<HTMLButtonElement>("calibrate-button").addEventListener("click", () => {
+streamPrimary.addEventListener("click", () => {
+  publishingIntent = !publishingIntent;
+  renderStream();
+  void safeSendMessage({ type: "set-publishing-intent", intent: publishingIntent }).catch(() => {
+    // Best-effort — the background's own state remains authoritative and
+    // the next refresh reconciles.
+  });
+});
+
+el<HTMLButtonElement>("calibrate-button").addEventListener("click", () => {
   void chrome.tabs.create({ url: chrome.runtime.getURL("calibration.html") });
 });
 
-youtubeChannelClearButton.addEventListener("click", () => {
-  youtubeChannelStatusEl.textContent = "Clearing…";
-  void clearYouTubeChannelClaim().then((result) => {
+settingsClaimSave.addEventListener("click", () => {
+  const channelId = parseYouTubeChannelInput(settingsClaimInput.value);
+  if (!channelId) {
+    settingsClaimStatus.textContent = "Paste your channel ID (starts with UC) or a youtube.com/channel/UC… URL.";
+    return;
+  }
+  settingsClaimStatus.textContent = "Saving…";
+  void saveYouTubeChannelClaim(channelId).then((result) => {
     if (result.ok) {
-      youtubeChannelStatusEl.textContent = "No channel claimed yet.";
-      youtubeChannelClearButton.style.display = "none";
-      youtubeChannelInput.value = "";
+      settingsClaimStatus.textContent = "Linked.";
+      refreshClaim(true);
     } else {
-      youtubeChannelStatusEl.textContent = YOUTUBE_CLAIM_ERROR_TEXT[result.error];
+      settingsClaimStatus.textContent = CLAIM_ERROR_TEXT[result.error];
     }
   });
 });
 
+settingsClaimClear.addEventListener("click", () => {
+  settingsClaimStatus.textContent = "Clearing…";
+  void clearYouTubeChannelClaim().then((result) => {
+    settingsClaimStatus.textContent = result.ok ? "Cleared." : CLAIM_ERROR_TEXT[result.error];
+    settingsClaimInput.value = "";
+    refreshClaim(true);
+  });
+});
+
+// -------------------------------------------------------------- onboarding
+function completeOnboarding(defaultTab: Tab, requestYouTube: boolean): void {
+  const finish = (): void => {
+    void chrome.storage.local.set({ [STORAGE_KEY_ONBOARDED]: true }).catch(() => {});
+    viewOnboarding.hidden = true;
+    selectTab(defaultTab);
+    renderAll();
+    refreshWatchData();
+    refreshStreamData();
+    refreshClaim();
+  };
+  if (requestYouTube) {
+    // The onboarding button click is the user gesture the permission
+    // prompt needs — request inline, then continue either way (declining
+    // just leaves the Watch view showing its enable CTA).
+    void chrome.permissions
+      .request({ origins: [YOUTUBE_ORIGIN] })
+      .then((granted) => (granted ? enableYouTube() : undefined))
+      .catch(() => {})
+      .then(finish);
+  } else {
+    finish();
+  }
+}
+el<HTMLButtonElement>("onboard-watch").addEventListener("click", () => completeOnboarding("watch", true));
+el<HTMLButtonElement>("onboard-stream").addEventListener("click", () => completeOnboarding("stream", false));
+el<HTMLButtonElement>("onboard-both").addEventListener("click", () => completeOnboarding("watch", true));
+
+// ----------------------------------------------------------------- startup
 async function init(): Promise<void> {
-  updateAccountSection();
-  updatePresenceSection();
-  updateYouTubeSection();
-  const intentResponse = (await safeSendMessage({ type: "get-publishing-intent" }).catch(() => undefined)) as
-    | { intent?: boolean }
-    | undefined;
-  cachedPublishingIntent = Boolean(intentResponse?.intent);
-  syncPublishToggleUI();
-  updatePublishStatus();
+  const stored = (await chrome.storage.local.get([STORAGE_KEY_POPUP_TAB, STORAGE_KEY_ONBOARDED]).catch(() => ({}))) as Record<string, unknown>;
+  const onboarded = stored[STORAGE_KEY_ONBOARDED] === true;
+  activeTab = stored[STORAGE_KEY_POPUP_TAB] === "stream" ? "stream" : "watch";
+
+  viewOnboarding.hidden = onboarded;
+  renderAll();
+  if (onboarded) {
+    refreshWatchData();
+    refreshStreamData();
+    refreshClaim();
+  }
 }
 
 void init();
 
-// Chrome tears down and re-creates this entire document every time the
-// popup is opened, so there's no stale-state problem to solve across opens
-// — this interval only needs to keep things fresh while a single popup
-// instance stays open.
+// Chrome tears this document down on every close — the interval only keeps
+// a single open popup fresh.
 setInterval(() => {
-  updateAccountSection();
-  updatePresenceSection();
-  updatePublishStatus();
+  if (!viewOnboarding.hidden) return;
+  refreshWatchData();
+  refreshStreamData();
 }, 2000);

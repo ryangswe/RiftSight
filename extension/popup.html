@@ -4,20 +4,33 @@
     <meta charset="utf-8" />
     <title>RiftSight</title>
     <style>
+      :root {
+        --bg: #0b0f16;
+        --panel: #131022;
+        --border: #241d3a;
+        --border-strong: #4c1d95;
+        --ink: #e6e6e6;
+        --muted: #8b8b98;
+        --accent: #a78bfa;
+        --on: #22c55e;
+        --waiting: #facc15;
+        --warn: #fbbf24;
+        --off: #565664;
+      }
       html,
       body {
         margin: 0;
-        width: 320px;
-        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #0b0f16;
-        color: #e6e6e6;
+        width: 340px;
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--ink);
         overflow-x: hidden;
       }
       .header {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 12px 14px;
+        padding: 10px 14px;
         background: linear-gradient(135deg, #7c3aed, #4c1d95);
       }
       .header img {
@@ -29,113 +42,366 @@
         font-size: 14px;
         font-weight: 600;
         color: #fff;
+        flex: 1;
+      }
+      .icon-button {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.85);
+        font-size: 15px;
+        cursor: pointer;
+        padding: 2px 4px;
+        border-radius: 4px;
+      }
+      .icon-button:hover {
+        background: rgba(255, 255, 255, 0.15);
       }
       .body {
-        padding: 4px 14px 14px;
+        padding: 12px 14px 14px;
       }
-      .section-title {
+
+      /* --- tabs --- */
+      .tabs {
+        display: flex;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 3px;
+        margin-bottom: 12px;
+      }
+      .tabs button {
+        flex: 1;
+        font: inherit;
         font-weight: 600;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: #a78bfa;
-        margin: 14px 0 6px;
+        padding: 6px 0;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
       }
-      .status-line {
+      .tabs button[aria-selected="true"] {
+        background: linear-gradient(135deg, #7c3aed, #4c1d95);
+        color: #fff;
+      }
+
+      /* --- shared rows --- */
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 0;
+      }
+      .row + .row {
+        border-top: 1px solid var(--border);
+      }
+      .row .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      .row-label {
+        font-weight: 600;
+      }
+      .row-sub {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--off);
+      }
+      .dot.on { background: var(--on); }
+      .dot.waiting { background: var(--waiting); }
+      .dot.warn { background: var(--warn); }
+      .status-text { color: var(--ink); }
+      .status-text.off { color: var(--muted); }
+      .status-text.warn { color: var(--warn); }
+      .section-gap { height: 10px; }
+
+      button.primary {
+        display: block;
+        width: 100%;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin-top: 10px;
+        border: none;
+        background: linear-gradient(135deg, #7c3aed, #4c1d95);
+        color: #fff;
+      }
+      button.primary:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      button.secondary {
+        font: inherit;
+        cursor: pointer;
+        border-radius: 5px;
+        padding: 4px 10px;
+        border: 1px solid var(--border-strong);
+        background: #1c1730;
+        color: var(--ink);
+        flex: none;
+      }
+      .linkish {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        font: inherit;
+        background: none;
+        border: none;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        padding: 9px 0 2px;
+        margin-top: 10px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .linkish:hover { color: var(--ink); }
+      .linkish .grow { flex: 1; }
+
+      .notice {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--warn);
         white-space: pre-wrap;
         word-break: break-word;
+      }
+      .hint {
         font-size: 12px;
-        color: #c9c9d1;
-        margin-bottom: 8px;
+        color: var(--muted);
+        margin: 4px 0 8px;
       }
-      .status-warning {
-        color: #fbbf24;
+
+      /* --- switch --- */
+      .switch {
+        position: relative;
+        width: 34px;
+        height: 20px;
+        flex: none;
       }
-      button {
-        cursor: pointer;
-        font: inherit;
-        border-radius: 4px;
-        padding: 6px 10px;
-        border: 1px solid #4c1d95;
-        background: #1c1730;
-        color: #e6e6e6;
-      }
-      button.primary {
-        background: linear-gradient(135deg, #7c3aed, #4c1d95);
-        border-color: transparent;
-        color: #fff;
+      .switch input {
+        opacity: 0;
         width: 100%;
+        height: 100%;
+        margin: 0;
+        position: absolute;
+        cursor: pointer;
       }
-      button + button {
-        margin-left: 6px;
+      .switch .track {
+        position: absolute;
+        inset: 0;
+        background: var(--off);
+        border-radius: 10px;
+        transition: background 0.15s;
+        pointer-events: none;
       }
-      hr {
-        border: none;
-        border-top: 1px solid #241d3a;
-        margin: 10px 0;
+      .switch .thumb {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        background: #fff;
+        border-radius: 50%;
+        transition: left 0.15s;
+        pointer-events: none;
       }
+      .switch input:checked ~ .track { background: var(--on); }
+      .switch input:checked ~ .thumb { left: 16px; }
+
+      /* --- enable CTA / onboarding cards --- */
+      .cta-card {
+        text-align: center;
+        padding: 18px 10px 6px;
+      }
+      .cta-card h2 {
+        font-size: 14px;
+        margin: 0 0 4px;
+      }
+      .choice {
+        display: block;
+        width: 100%;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-top: 8px;
+        color: var(--ink);
+      }
+      .choice:hover { border-color: var(--border-strong); }
+      .choice .choice-title { font-weight: 600; display: block; }
+      .choice .choice-sub { color: var(--muted); font-size: 12px; }
+
       input[type="text"] {
         font: inherit;
         width: 100%;
         box-sizing: border-box;
-        margin-bottom: 6px;
-        padding: 6px 8px;
-        border-radius: 4px;
-        border: 1px solid #4c1d95;
-        background: #131022;
-        color: #e6e6e6;
-      }
-      .hint {
-        font-size: 11px;
-        color: #8b8b98;
         margin: 4px 0 6px;
+        padding: 6px 8px;
+        border-radius: 5px;
+        border: 1px solid var(--border-strong);
+        background: var(--panel);
+        color: var(--ink);
       }
-      .disclaimer {
-        margin: 12px 0 0;
-        font-size: 10px;
-        line-height: 1.4;
-        color: #6b6b78;
+      .settings-title {
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--accent);
+        margin: 12px 0 4px;
       }
+      .footer-links {
+        margin-top: 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .footer-links a {
+        color: var(--accent);
+        text-decoration: none;
+        margin-right: 10px;
+      }
+      [hidden] { display: none !important; }
     </style>
   </head>
   <body>
     <div class="header">
       <img src="icons/icon48.png" alt="" />
       <h1>RiftSight</h1>
+      <button id="settings-button" class="icon-button" title="Settings">⚙</button>
     </div>
-    <div class="body">
-      <div class="section-title">Account</div>
-      <div id="account-status" class="status-line">Not connected to Twitch</div>
-      <button id="connect-button">Connect Twitch</button>
-      <button id="disconnect-button" style="display: none">Disconnect</button>
 
-      <hr />
-      <div class="section-title">RiftAtlas</div>
-      <div id="presence-status" class="status-line">Open RiftAtlas to begin</div>
+    <!-- First-run onboarding: sets the default tab only, never a permanent role. -->
+    <div id="view-onboarding" class="body" hidden>
+      <div class="cta-card">
+        <h2>Welcome to RiftSight</h2>
+        <div class="hint">How do you plan to use RiftSight? You can always do both.</div>
+      </div>
+      <button class="choice" id="onboard-watch">
+        <span class="choice-title">Watch Riftbound streams</span>
+        <span class="choice-sub">Hover cards while watching supported streams.</span>
+      </button>
+      <button class="choice" id="onboard-stream">
+        <span class="choice-title">Stream Riftbound</span>
+        <span class="choice-sub">Make cards interactive for your viewers.</span>
+      </button>
+      <button class="choice" id="onboard-both">
+        <span class="choice-title">I do both</span>
+        <span class="choice-sub">Set up watching and streaming together.</span>
+      </button>
+    </div>
 
-      <hr />
-      <div class="section-title">Publishing</div>
-      <div id="publish-status" class="status-line">Not publishing.</div>
-      <button id="publish-toggle" class="primary">Start publishing</button>
-
-      <hr />
-      <div class="section-title">YouTube</div>
-      <div id="youtube-status" class="status-line">Checking…</div>
-      <button id="youtube-enable-button" style="display: none">Enable RiftSight on YouTube</button>
-      <div id="youtube-channel-section" style="display: none">
-        <div class="hint">Streaming on YouTube? Claim your channel so viewers' overlays find your games.</div>
-        <input id="youtube-channel-input" type="text" placeholder="Channel ID (UC…) or /channel/ URL" />
-        <button id="youtube-channel-save">Save channel</button>
-        <button id="youtube-channel-clear" style="display: none">Clear</button>
-        <div id="youtube-channel-status" class="status-line"></div>
-        <button id="calibrate-button">Calibrate overlay…</button>
+    <div id="view-main" class="body" hidden>
+      <div class="tabs" role="tablist">
+        <button id="tab-watch" role="tab" aria-selected="true">Watch</button>
+        <button id="tab-stream" role="tab" aria-selected="false">Stream</button>
       </div>
 
-      <p class="disclaimer">
-        RiftSight was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot
-        Games does not endorse or sponsor this project.
-      </p>
+      <!-- ============================== WATCH ============================== -->
+      <section id="panel-watch" role="tabpanel">
+        <div id="watch-enable" class="cta-card" hidden>
+          <h2>Watch on YouTube with RiftSight</h2>
+          <div class="hint">Hover cards on supported live streams — no account needed.</div>
+          <button id="watch-enable-button" class="primary">Enable YouTube overlays</button>
+        </div>
+        <div id="watch-status" hidden>
+          <div class="row">
+            <span class="row-label grow">YouTube overlays</span>
+            <span class="switch"><input type="checkbox" id="watch-overlays-toggle" /><span class="track"></span><span class="thumb"></span></span>
+          </div>
+          <div class="row">
+            <span id="watch-page-dot" class="dot"></span>
+            <span id="watch-page-text" class="status-text grow off">Open a supported YouTube live stream to use RiftSight.</span>
+          </div>
+          <div class="hint">Delay and outline preferences live in the ⚙ on the video overlay itself.</div>
+        </div>
+      </section>
+
+      <!-- ============================== STREAM ============================= -->
+      <section id="panel-stream" role="tabpanel" hidden>
+        <div class="row">
+          <span id="stream-atlas-dot" class="dot"></span>
+          <span class="row-label">Rift Atlas</span>
+          <span id="stream-atlas-text" class="status-text row-sub grow" style="text-align: right"></span>
+        </div>
+        <div class="row">
+          <span id="stream-publishing-dot" class="dot"></span>
+          <span class="row-label">Publishing</span>
+          <span id="stream-publishing-text" class="status-text row-sub grow" style="text-align: right"></span>
+        </div>
+
+        <div class="section-gap"></div>
+        <div class="hint" style="margin-bottom: 0">Where viewers can use RiftSight</div>
+        <div class="row">
+          <span class="row-label">Twitch</span>
+          <span id="stream-twitch-detail" class="row-sub grow" style="text-align: right"></span>
+          <button id="stream-twitch-connect" class="secondary" hidden>Connect</button>
+        </div>
+        <div class="row">
+          <span class="row-label">YouTube</span>
+          <span id="stream-youtube-detail" class="row-sub grow" style="text-align: right"></span>
+          <button id="stream-youtube-connect" class="secondary" hidden>Connect</button>
+        </div>
+
+        <button id="stream-primary" class="primary">Start publishing</button>
+        <div id="stream-notice" class="notice" hidden></div>
+
+        <button id="calibrate-button" class="linkish"><span class="grow">Overlay setup</span><span>›</span></button>
+      </section>
     </div>
+
+    <!-- ============================= SETTINGS ============================= -->
+    <div id="view-settings" class="body" hidden>
+      <div class="settings-title">Account</div>
+      <div id="settings-account" class="row-sub" style="padding: 2px 0 6px">No RiftSight account — viewers don't need one.</div>
+      <button id="settings-disconnect" class="secondary" hidden>Sign out</button>
+
+      <div class="settings-title">Linked platforms</div>
+      <div class="row">
+        <span class="row-label">Twitch</span>
+        <span id="settings-twitch-detail" class="row-sub grow" style="text-align: right"></span>
+        <button id="settings-twitch-connect" class="secondary" hidden>Connect</button>
+      </div>
+      <div class="row">
+        <span class="row-label">YouTube</span>
+        <span id="settings-youtube-detail" class="row-sub grow" style="text-align: right"></span>
+        <button id="settings-youtube-connect" class="secondary" hidden>Connect</button>
+      </div>
+
+      <div id="settings-claim" hidden>
+        <div class="settings-title">YouTube channel (beta)</div>
+        <div class="hint">
+          Verified YouTube sign-in is coming; during the beta you can link your channel by ID. Find it in YouTube Studio → Settings →
+          Channel.
+        </div>
+        <input id="settings-claim-input" type="text" placeholder="Channel ID (UC…) or /channel/ URL" />
+        <div class="row" style="border: none; padding-top: 0">
+          <button id="settings-claim-save" class="secondary">Save channel</button>
+          <button id="settings-claim-clear" class="secondary" hidden>Clear</button>
+        </div>
+        <div id="settings-claim-status" class="hint"></div>
+      </div>
+
+      <div class="footer-links">
+        <a href="https://riftsight.gg" target="_blank" rel="noreferrer">riftsight.gg</a>
+        <a href="https://riftsight.gg/privacy.html" target="_blank" rel="noreferrer">Privacy</a>
+        <a href="https://riftsight.gg/eula.html" target="_blank" rel="noreferrer">Legal</a>
+      </div>
+      <button id="settings-back" class="linkish"><span class="grow">Back</span></button>
+    </div>
+
     <script src="dist/popup/main.js"></script>
   </body>
 </html>
