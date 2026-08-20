@@ -189,6 +189,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   const viewerCountHeartbeatMs = config.viewerCountFanout?.heartbeatMs ?? VIEWER_COUNT_HEARTBEAT_MS;
   const remoteViewerCountFreshnessMs = config.viewerCountFanout?.freshnessMs ?? REMOTE_VIEWER_COUNT_FRESHNESS_MS;
   const capacitySnapshotIntervalMs = config.capacitySnapshot?.intervalMs ?? CAPACITY_SNAPSHOT_INTERVAL_MS;
+  /** Application-payload bytes sent to viewers since the last capacity_snapshot line (message size x recipients, summed over every broadcast — the same quantity a per-GB egress bill is made of, minus ws/TLS framing). Reset on each snapshot, so each capacity_snapshot's egressBytes covers exactly one interval. */
+  let egressBytesSinceSnapshot = 0;
   const stateBus = config.stateBus ?? createLocalStateBus();
   // Per-attachRelayWebSocketServer-call identity, used three ways: to let
   // this instance's own StateBus subscription no-op on messages it just
@@ -245,7 +247,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
    * same-instance producer-to-viewer updates that exists nowhere in today's
    * design.
    */
-  function broadcastToLocalViewers(session: Session, payload: OverlayState): number {
+  function broadcastToLocalViewers(session: Session, payload: OverlayState): { delivered: number; bytes: number } {
     const encoded = JSON.stringify({ type: "overlay-state", payload });
     let delivered = 0;
     for (const viewer of session.viewers) {
@@ -258,7 +260,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       viewer.send(encoded);
       delivered += 1;
     }
-    return delivered;
+    egressBytesSinceSnapshot += encoded.length * delivered;
+    return { delivered, bytes: encoded.length };
   }
 
   /**
@@ -421,7 +424,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       viewers += session.viewers.size;
       if (isProducerConnectionOpen(session)) producers += 1;
     }
-    logEvent("capacity_snapshot", { sessions: sessions.size, viewers, producers });
+    logEvent("capacity_snapshot", { sessions: sessions.size, viewers, producers, egressBytes: egressBytesSinceSnapshot });
+    egressBytesSinceSnapshot = 0;
   }, capacitySnapshotIntervalMs);
 
   /**
@@ -458,12 +462,13 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     }
     session.latestState = message.state;
     session.lastUpdatedAt = Date.now();
-    const delivered = broadcastToLocalViewers(session, message.state);
+    const broadcast = broadcastToLocalViewers(session, message.state);
     logEvent("state_broadcast", {
       sessionId: message.sessionId,
       sequence: message.state.sequence,
       cards: message.state.cards.length,
-      viewers: delivered,
+      viewers: broadcast.delivered,
+      outBytes: broadcast.bytes,
     });
   });
 
@@ -535,6 +540,7 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     // producer's last publish, TTL-bounded, so a hit here is fresh by
     // definition. loadSnapshot never rejects (see the StateBus contract).
     const snapshot = await stateBus.loadSnapshot(sessionId);
+    logEvent("snapshot_lookup", { sessionId, reason: snapshot === null ? "miss" : "hit" });
     // Re-check after the await: a real producer update (local or bus) that
     // landed while the load was in flight is newer than any snapshot and
     // was already sent to this viewer by broadcastToLocalViewers — sending
@@ -622,13 +628,14 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
       // tick from a producer that's been connected the whole time.
       if (isNewProducerBinding) sendViewerCount(overlayState.sessionId, session);
 
-      const delivered = broadcastToLocalViewers(session, overlayState);
+      const broadcast = broadcastToLocalViewers(session, overlayState);
       logEvent("state_broadcast", {
         sessionId: overlayState.sessionId,
         sequence: overlayState.sequence,
         cards: overlayState.cards.length,
-        viewers: delivered,
+        viewers: broadcast.delivered,
         bytes,
+        outBytes: broadcast.bytes,
       });
       stateBus.publish({ kind: "state", sessionId: overlayState.sessionId, originInstanceId: instanceId, state: overlayState });
       // Same TTL as the sweep: the snapshot must never outlive what this

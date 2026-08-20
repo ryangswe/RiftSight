@@ -40,6 +40,8 @@ const ALLOWED_LOG_FIELDS = new Set([
   "sessions",
   "producers",
   "bytes",
+  "outBytes",
+  "egressBytes",
   "cards",
   "sequence",
   "viewers",
