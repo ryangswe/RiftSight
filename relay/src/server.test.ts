@@ -699,6 +699,63 @@ describe("relay server", () => {
       }
     });
 
+    it("reports egress instrumentation: outBytes on state_broadcast, per-interval egressBytes on the snapshot", async () => {
+      const events: Record<string, unknown>[] = [];
+      const spy = vi.spyOn(console, "log").mockImplementation((line?: unknown) => {
+        if (typeof line !== "string") return;
+        try {
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          if (parsed["event"] === "capacity_snapshot" || parsed["event"] === "state_broadcast") events.push(parsed);
+        } catch {
+          // non-JSON console.log — ignore
+        }
+      });
+      try {
+        server = await createRelayServer(0, { capacitySnapshot: { intervalMs: 60 } });
+        const url = `ws://localhost:${server.port}`;
+
+        const viewerA = new WebSocket(url);
+        await waitForOpen(viewerA);
+        viewerA.send(JSON.stringify({ type: "subscribe", sessionId: "egress" }));
+        const viewerB = new WebSocket(url);
+        await waitForOpen(viewerB);
+        viewerB.send(JSON.stringify({ type: "subscribe", sessionId: "egress" }));
+        await wait(50);
+
+        const producer = new WebSocket(url);
+        await waitForOpen(producer);
+        producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("egress", 1) }));
+        await wait(100); // let the broadcast land and at least one snapshot interval pass
+
+        const broadcast = events.find((e) => e["event"] === "state_broadcast");
+        expect(broadcast).toBeDefined();
+        const outBytes = broadcast!["outBytes"] as number;
+        expect(outBytes).toBeGreaterThan(0);
+        expect(broadcast).toMatchObject({ viewers: 2 });
+
+        // The snapshot's egressBytes is message size x recipients, summed since the
+        // previous snapshot — one broadcast to two viewers here.
+        const snapshotWithEgress = events.find(
+          (e) => e["event"] === "capacity_snapshot" && (e["egressBytes"] as number) > 0
+        );
+        expect(snapshotWithEgress).toBeDefined();
+        expect(snapshotWithEgress!["egressBytes"]).toBe(outBytes * 2);
+
+        // ...and it resets: once counted, a later interval with no traffic reports zero.
+        events.length = 0;
+        await wait(140);
+        const quiet = events.filter((e) => e["event"] === "capacity_snapshot");
+        expect(quiet.length).toBeGreaterThan(0);
+        expect(quiet[quiet.length - 1]).toMatchObject({ egressBytes: 0 });
+
+        viewerA.close();
+        viewerB.close();
+        producer.close();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it("counts a session with viewers but no producer as zero producers", async () => {
       const { snapshots, restore } = captureCapacitySnapshots();
       try {
