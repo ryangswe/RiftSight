@@ -134,6 +134,76 @@ two-instance browser session verifying the same four behaviors end-to-end
 (including a mid-session relay restart recovering via snapshot, and a
 killed instance's viewer count pruning out after ~15s).
 
+## Single-instance capacity — what one replica actually carries (measured 2026-08-19)
+
+Written when the first 1,000+-viewer stream was scheduled on the still-
+single-replica production relay. The question was "what is the real ceiling
+of one instance?", and the honest answer is: **not CPU, not memory, not
+connection count — egress bandwidth**, because every board change is
+re-sent as a full JSON `OverlayState` to every viewer (no deltas, no
+compression on the wire).
+
+**Per-viewer cost model** (all numbers from the real schema, not guesses):
+a public card serializes to ~500 bytes (the RiftAtlas art URL alone is
+~150 chars), a hidden card to ~200, so a typical 30–50-card board is a
+**~12–20 KB** message. The producer's detector debounces at 300 ms, so the
+update rate tops out at ~3/s during frantic play and averages well under
+1/s across a match (idle between actions is 0 — the relay only broadcasts
+on change). Per viewer that's a few KB/s average, ~60 KB/s worst case.
+
+**Measured** (redis-fanout soak harness, payload bumped to a realistic
+40-card/20 KB board, one session, this dev Mac on Node 16 — production is
+Node 20 on Railway, so if anything faster): **2,000 viewers per relay
+process at 3 updates/s** (≈6,000 sends/s, ≈120 MB/s per process) ran at
+~150–170 MB RSS (~70 KB per viewer incl. socket buffers) and single-digit-
+to-low-double-digit % of one core, zero dropped sequences, zero slow-
+consumer disconnects. The process itself is nowhere near a limit at that
+scale. (Harness caveat found while doing this: `soak.ts` samples the tsx
+*wrapper* pid for RSS/CPU, not the relay child — that's why its report
+shows a flat ~35 MB / 0 % — and it doesn't kill the relays it spawns on
+exit; there were five-day-old orphaned soak relays still listening on
+187xx ports. Both worth fixing on `redis-fanout` before the next run.)
+
+**Where the ceiling actually is.** Egress = viewers × message size × update
+rate. 1,000 connected viewers × 15 KB × 1/s ≈ 15 MB/s ≈ 120 Mbit/s, ≈ 54
+GB/hour; at a 3/s burst ≈ 360 Mbit/s. A few thousand viewers in one
+session on one process is comfortable; around 5,000+ the burst rate
+approaches ~1 Gbit/s, where a single container's network path and Railway
+egress cost (billed per GB) become the real constraints long before Node
+does. Note that **multi-replica doesn't reduce total egress at all** — it
+spreads connections and CPU, but every viewer still receives every full
+state. The only no-review levers that do shrink egress are backend-only:
+(a) `perMessageDeflate` on the ws server (browsers negotiate it
+automatically; repetitive JSON compresses ~5–10×; costs per-connection
+zlib memory — use `serverNoContextTakeover`/small windows and measure), or
+(b) delta/diff states, which need a frontend change and therefore a Twitch
+review. Do (a) first if egress ever becomes the binding constraint.
+
+**Twitch-side reality check**: a channel's concurrent viewer count
+overstates relay connections — video-overlay extensions don't render in
+Twitch's mobile apps, and viewers can collapse extensions. Expect roughly
+50–70 % of a desktop-heavy audience to hold a relay socket.
+
+**Streamers** are cheap: one producer socket and one session each, ~20/s
+max updates each. Dozens of simultaneous streamers is a non-issue; the
+scaling concern is always viewers-per-session and total viewers.
+
+**Rule of thumb**: one replica as deployed today is fine for a single
+1,000–3,000-viewer stream or several smaller ones. Plan the multi-replica
+cutover below for *several simultaneous* large streams or a single 5,000+
+one — and pair it with compression, since replicas alone don't fix egress.
+
+**Pre-flight against production** (the one thing the loopback soak can't
+prove — Railway's proxy carrying real connection counts):
+`npm run preflight-viewers -w relay` (`relay/scripts/preflight-viewers.ts`)
+mints real Twitch Extension JWTs with `TWITCH_EXTENSION_SECRET` (env only)
+and holds N viewer sockets open against the production relay for a chosen
+channel. Run it with your own channel publishing from the extension to
+prove admission + fan-out end to end (admitted == open, steady msg/s),
+stepping 300 → 1000 → 2000. It's read-only (never publishes) and safe to
+abort. It's also the right smoke test after every operator step in the
+checklist below.
+
 ## Stage 2+ operator checklist (the deferred provisioning work)
 
 Everything below is account/console/infra work, deliberately deferred
@@ -141,13 +211,28 @@ until the Twitch Extension review lands (backend changes never trigger
 re-review, but a stable prod during review is the safe posture). Do the
 steps in order; none of the production steps should be done piecemeal.
 
+0. **Don't do any of this the day before a big stream.** Every step
+   below changes production posture; a single replica handles a
+   1,000–3,000-viewer stream (see "Single-instance capacity" above). Run
+   the production pre-flight instead and execute this checklist in a calm
+   week. Rollback at every step is "unset `REDIS_URL`, one replica".
 1. **Provision Turso** (Stage 0): create the database
    (`turso db create riftsight` or the dashboard), get the `libsql://…`
-   URL + auth token. Run migrations against it once from a local machine:
-   `cd relay && RIFTSIGHT_DB_PATH='libsql://…' npm run migrate`. Copy the
-   current allowlist/broadcaster/credential rows from the Railway volume's
-   SQLite file (backup per docs/railway-deployment.md §11, then restore
-   the rows into Turso — plain SQLite-dialect SQL, wire-compatible).
+   URL + auth token. **Ordering constraint added by the youtube-live
+   milestone:** migration `0005_platform_identities` rebuilds the
+   `broadcasters` table and relies on the migration runner suspending FK
+   enforcement via a connection-level PRAGMA, which the local file driver
+   honors and remote libsql may not (`relay/src/db/migrate.ts`). So apply
+   every migration through 0005 against the **local file** first (deploy
+   youtube-live to the single replica, or run `npm run migrate -w relay`
+   against a copy of the volume's SQLite file), and only then copy the
+   fully-migrated database into Turso — never run 0005 for the first time
+   against Turso. Then run migrations against Turso once from a local
+   machine (`cd relay && RIFTSIGHT_DB_PATH='libsql://…' npm run migrate`,
+   a no-op once current) and copy the current allowlist/broadcaster/
+   identity/credential rows from the Railway volume's SQLite file (backup
+   per docs/railway-deployment.md §11, then restore the rows into Turso —
+   plain SQLite-dialect SQL, wire-compatible).
 2. **Provision Redis**: Railway project canvas → Create → Database →
    Redis; reference its connection string as `REDIS_URL` on the relay
    service (Railway variables support `${{Redis.REDIS_URL}}`-style
@@ -239,7 +324,11 @@ The youtube-subscribe viewer path (see docs/youtube-release-notes.md)
 rides the same admitViewer/state-bus machinery this plan scaled: snapshot
 fallback covers late joiners on fresh replicas, viewer counts aggregate
 fleet-wide, and anonymous YouTube viewers count toward the same per-session
-caps and capacity_snapshot numbers. Nothing in the Stage 2+ operator
-checklist changes; the only new capacity consideration is that YouTube
+caps and capacity_snapshot numbers. The one Stage 2+ checklist change
+is the Turso ordering constraint in step 1 (apply migration 0005 locally
+before any cutover). The only new capacity consideration is that YouTube
 viewers connect as browser-extension sockets (one per viewer, ~20s pings)
-rather than Twitch-iframe sockets — same order of cost per viewer.
+rather than Twitch-iframe sockets — same order of cost per viewer — and
+that the youtube-live relay adds a per-IP WebSocket connection limit
+(60/min), which a single-machine production pre-flight will trip; see the
+note in `relay/scripts/preflight-viewers.ts`.

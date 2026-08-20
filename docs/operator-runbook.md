@@ -85,6 +85,33 @@ viewer_admitted  {sessionId: "<channel id>", viewers: <n>}
 
 `viewers` is the current count for that channel — should go from 0 to 1 (or more) shortly after a viewer's browser loads the Twitch Extension iframe. `viewer_rejected` with a `reason` (`invalid-twitch-jwt`, `channel-id-mismatch`, `twitch-extension-secret-not-configured`) means the JWT verification path is failing — check `TWITCH_EXTENSION_SECRET` first.
 
+## Pre-flight before a large stream
+
+The single production replica comfortably carries a 1,000–3,000-viewer
+stream (see docs/scaling-plan.md, "Single-instance capacity"); the thing
+worth proving the day before is the real network path, not the code.
+
+1. Make sure the streamer is onboarded end to end: allowlisted (above),
+   **Connected** in their extension popup, the Twitch Extension activated
+   on their channel as a Video Overlay, calibration done if RiftAtlas
+   doesn't fill their canvas, and a `producer_connected` line in the logs
+   when they click Start publishing. Have them do a 5-minute private dry
+   run — most "it didn't work" reports are onboarding, not capacity.
+2. Run the production pre-flight from your own machine, with your own
+   channel publishing from the extension so admission is proven:
+   `TWITCH_EXTENSION_SECRET=… PREFLIGHT_CHANNEL_ID=<your numeric id> PREFLIGHT_VIEWERS=1000 npm run preflight-viewers -w relay`
+   (secret from your password manager into the environment only). PASS =
+   every socket connected, stayed open, and received state. Step up to
+   2,000 if the audience might exceed 1,000 desktop viewers.
+3. Check the Railway service's Metrics tab during the run: memory should
+   stay flat in the low hundreds of MB, CPU low; note the egress rate —
+   that, not CPU, is the resource that scales with viewers.
+4. During the stream, the `state_broadcast` log line's `viewers` field is
+   the live audience on the relay; `viewer_rejected` spikes mean an auth
+   problem, `slow-consumer` disconnects mean a viewer's network, not yours.
+5. Don't change production posture (replicas, Redis, Turso) the day before
+   — the scaling plan's operator checklist is for a calm week.
+
 ## Rotate or revoke a producer credential
 
 **Rotate** (streamer keeps access, gets a fresh credential — e.g. on suspected leak): the streamer's own extension can call this, or you can do it directly with their current credential:
