@@ -134,6 +134,79 @@ two-instance browser session verifying the same four behaviors end-to-end
 (including a mid-session relay restart recovering via snapshot, and a
 killed instance's viewer count pruning out after ~15s).
 
+## Single-instance capacity — what one replica actually carries (measured 2026-08-19)
+
+Written when the first 1,000+-viewer stream was scheduled on the still-
+single-replica production relay. The question was "what is the real ceiling
+of one instance?", and the honest answer is: **not CPU, not memory, not
+connection count — egress bandwidth**, because every board change is
+re-sent as a full JSON `OverlayState` to every viewer (no deltas, no
+compression on the wire).
+
+**Per-viewer cost model** (all numbers from the real schema, not guesses):
+a public card serializes to ~500 bytes (the RiftAtlas art URL alone is
+~150 chars), a hidden card to ~200, so a typical 30–50-card board is a
+**~12–20 KB** message. The producer's detector debounces at 300 ms, so the
+update rate tops out at ~3/s during frantic play and averages well under
+1/s across a match (idle between actions is 0 — the relay only broadcasts
+on change). Per viewer that's a few KB/s average, ~60 KB/s worst case.
+
+**Measured** (redis-fanout soak harness, payload bumped to a realistic
+40-card/20 KB board, one session, this dev Mac on Node 16 — production is
+Node 20 on Railway, so if anything faster): **2,000 viewers per relay
+process at 3 updates/s** (≈6,000 sends/s, ≈120 MB/s per process) ran at
+~150–170 MB RSS (~70 KB per viewer incl. socket buffers) and single-digit-
+to-low-double-digit % of one core, zero dropped sequences, zero slow-
+consumer disconnects. The process itself is nowhere near a limit at that
+scale. (Harness caveat found while doing this: `soak.ts` samples the tsx
+*wrapper* pid for RSS/CPU, not the relay child — that's why its report
+shows a flat ~35 MB / 0 % — and it doesn't kill the relays it spawns on
+exit; there were five-day-old orphaned soak relays still listening on
+187xx ports. Both worth fixing on `redis-fanout` before the next run.)
+
+**Where the ceiling actually is.** Egress = viewers × message size × update
+rate. 1,000 connected viewers × 15 KB × 1/s ≈ 15 MB/s ≈ 120 Mbit/s, ≈ 54
+GB/hour; at a 3/s burst ≈ 360 Mbit/s. A few thousand viewers in one
+session on one process is comfortable; around 5,000+ the burst rate
+approaches ~1 Gbit/s, where a single container's network path and Railway
+egress cost (billed per GB) become the real constraints long before Node
+does. Note that **multi-replica doesn't reduce total egress at all** — it
+spreads connections and CPU, but every viewer still receives every full
+state. The obvious no-review lever — `perMessageDeflate` on the ws server —
+was **measured and rejected 2026-08-20** (see docs/decisions.md):
+permessage-deflate compresses per socket per message, so at 4,000-socket
+fan-out it tripled relay RSS and queued delivery ~12 s deep. Remaining
+egress levers: compress-once-broadcast-raw (custom framing ws doesn't
+expose — real engineering), delta/diff states (frontend change → Twitch
+review), or Twitch PubSub (see decisions.md 2026-08-17). Until one of
+those is built, high fan-out egress is a cost line, not a stability risk
+— the slow-consumer/shedding path degrades gracefully.
+
+**Twitch-side reality check**: a channel's concurrent viewer count
+overstates relay connections — video-overlay extensions don't render in
+Twitch's mobile apps, and viewers can collapse extensions. Expect roughly
+50–70 % of a desktop-heavy audience to hold a relay socket.
+
+**Streamers** are cheap: one producer socket and one session each, ~20/s
+max updates each. Dozens of simultaneous streamers is a non-issue; the
+scaling concern is always viewers-per-session and total viewers.
+
+**Rule of thumb**: one replica as deployed today is fine for a single
+1,000–3,000-viewer stream or several smaller ones. Plan the multi-replica
+cutover below for *several simultaneous* large streams or a single 5,000+
+one — and pair it with compression, since replicas alone don't fix egress.
+
+**Pre-flight against production** (the one thing the loopback soak can't
+prove — Railway's proxy carrying real connection counts):
+`npm run preflight-viewers -w relay` (`relay/scripts/preflight-viewers.ts`)
+mints real Twitch Extension JWTs with `TWITCH_EXTENSION_SECRET` (env only)
+and holds N viewer sockets open against the production relay for a chosen
+channel. Run it with your own channel publishing from the extension to
+prove admission + fan-out end to end (admitted == open, steady msg/s),
+stepping 300 → 1000 → 2000. It's read-only (never publishes) and safe to
+abort. It's also the right smoke test after every operator step in the
+checklist below.
+
 ## Stage 2+ operator checklist (the deferred provisioning work)
 
 Everything below is account/console/infra work, deliberately deferred
