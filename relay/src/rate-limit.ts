@@ -33,6 +33,25 @@ export const CREDENTIAL_ROTATE_LIMIT = { maxEvents: 10, windowMs: 60_000 };
 /** GET /api/producer-credential/status attempts per source IP, per window. The extension only calls this after a WS connection failure it can't otherwise diagnose (see background.ts), never continuously — generous, but real, to bound a client stuck in a fast reconnect loop. */
 export const PRODUCER_STATUS_LIMIT = { maxEvents: 20, windowMs: 60_000 };
 
+/**
+ * WebSocket upgrade acceptances per client IP, per window — the first
+ * connection-level limit in this codebase (every earlier limit was
+ * per-socket or per-HTTP-route), added ahead of the first large-audience
+ * public stream, where anonymous browsers open sockets at whatever rate
+ * the audience joins. Generous: a legitimate viewer opens one socket
+ * (plus occasional backoff reconnects, capped at ~6/min by RelaySocket's
+ * 10s max backoff), and a streamer's producer adds one more — 60/min
+ * bounds a connection-storming client without ever touching real use.
+ * Keyed on the first X-Forwarded-For hop when present (Railway's proxy
+ * sets it; keying on the raw socket address there would lump every viewer
+ * behind the LB into one bucket), falling back to the socket address for
+ * direct/local connections. The default is env-overridable
+ * (RELAY_WS_CONN_PER_MIN, see env.ts) so an operator can raise it live
+ * for an unusually NAT-heavy audience or a single-machine load test
+ * without a code change.
+ */
+export const WS_CONNECTION_LIMIT = { maxEvents: 60, windowMs: 60_000 };
+
 export interface RateLimiter {
   /** Records one event for `key` and returns whether it's within the limit (true = allowed, false = over limit — caller should reject/drop/disconnect). */
   tryConsume(key: string): boolean;

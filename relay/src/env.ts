@@ -60,6 +60,8 @@ export interface RelayEnvConfig {
    * against the database instead, before or between deploys.
    */
   migrateOnBoot: boolean;
+  /** Per-client-IP WebSocket upgrade acceptances per minute (RELAY_WS_CONN_PER_MIN). Unset means WS_CONNECTION_LIMIT's default (60/min); raise temporarily for an unusually NAT-heavy audience or a single-machine load test. */
+  wsConnectionsPerMinute: number | undefined;
 }
 
 export interface EnvValidationSuccess {
@@ -152,6 +154,16 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
   // Same explicit-opt-out shape as ALLOW_LOCAL_DEBUG below: anything other
   // than the literal "false" (including unset) keeps the safe default.
   const migrateOnBoot = env["RIFTSIGHT_MIGRATE_ON_BOOT"] !== "false";
+  const rawWsConnPerMin = env["RELAY_WS_CONN_PER_MIN"];
+  let wsConnectionsPerMinute: number | undefined;
+  if (rawWsConnPerMin !== undefined && rawWsConnPerMin !== "") {
+    const parsed = Number(rawWsConnPerMin);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      errors.push(`RELAY_WS_CONN_PER_MIN must be a positive integer, got "${rawWsConnPerMin}"`);
+    } else {
+      wsConnectionsPerMinute = parsed;
+    }
+  }
 
   // Closed-beta hard-fails on any missing required secret instead of the
   // warn-only behavior every other mode keeps — booting with a feature
@@ -212,6 +224,7 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
       twitchOAuthRedirectUri,
       redisUrl,
       migrateOnBoot,
+      wsConnectionsPerMinute,
     },
     warnings,
   };

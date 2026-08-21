@@ -20,6 +20,15 @@ afterEach(async () => {
 
 function waitForOpen(ws: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Resolve immediately if the socket already opened — callers that
+    // construct a socket and only await it after some other await (e.g.
+    // waiting on a sibling socket first) would otherwise miss the "open"
+    // event entirely and hang, a race that only surfaces under parallel-
+    // suite CPU load where event timing stretches.
+    if (ws.readyState === WebSocket.OPEN) {
+      resolve();
+      return;
+    }
     ws.once("open", () => resolve());
     ws.once("error", reject);
   });
@@ -1110,4 +1119,90 @@ describe("relay server", () => {
       producer.close();
     });
   });
+});
+
+describe("connection hardening", () => {
+  /** Captures viewer_rejected log lines while active, restoring console.log after — same pattern as the capacity-snapshot tests above. */
+  function captureRejections(): { rejections: Record<string, unknown>[]; restore: () => void } {
+    const rejections: Record<string, unknown>[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line?: unknown) => {
+      if (typeof line !== "string") return;
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        if (parsed["event"] === "viewer_rejected") rejections.push(parsed);
+      } catch {
+        // non-JSON console.log — ignore
+      }
+    });
+    return { rejections, restore: () => spy.mockRestore() };
+  }
+
+  it("silently rejects subscribers over the per-session viewer cap, logging session-at-capacity", async () => {
+    const { rejections, restore } = captureRejections();
+    try {
+      server = await createRelayServer(0, { maxViewersPerSession: 1 });
+      const url = `ws://localhost:${server.port}`;
+
+      const producer = new WebSocket(url);
+      await waitForOpen(producer);
+      producer.send(JSON.stringify({ type: "overlay-state", payload: sampleState("cap", 1) }));
+      await wait(50);
+
+      const first = new WebSocket(url);
+      await waitForOpen(first);
+      const firstState = waitForMessageMatching<{ type: string }>(first, (m) => m.type === "overlay-state");
+      first.send(JSON.stringify({ type: "subscribe", sessionId: "cap" }));
+      await firstState;
+
+      const second = new WebSocket(url);
+      await waitForOpen(second);
+      const secondMessages: unknown[] = [];
+      second.on("message", (raw) => secondMessages.push(JSON.parse(raw.toString())));
+      second.send(JSON.stringify({ type: "subscribe", sessionId: "cap" }));
+      await wait(100);
+
+      // Silent by design: no state, but also no error message — the legacy/
+      // Twitch viewer vocabulary has no rejection message to send.
+      expect(secondMessages).toEqual([]);
+      expect(rejections.some((r) => r["reason"] === "session-at-capacity" && r["sessionId"] === "cap")).toBe(true);
+
+      producer.close();
+      first.close();
+      second.close();
+    } finally {
+      restore();
+    }
+  });
+
+  it(
+    "closes connections over the per-IP rate limit with code 4429",
+    async () => {
+      server = await createRelayServer(0, {
+        wsConnectionLimit: { maxEvents: 2, windowMs: 60_000 },
+      });
+      const url = `ws://localhost:${server.port}`;
+
+      const first = new WebSocket(url);
+      const second = new WebSocket(url);
+      // try/finally so a mid-test failure can't leave sockets open and
+      // cascade into the afterEach server.close() hanging too.
+      try {
+        await waitForOpen(first);
+        await waitForOpen(second);
+
+        const third = new WebSocket(url);
+        const closeCode = await new Promise<number>((resolve) => third.on("close", (code: number) => resolve(code)));
+        expect(closeCode).toBe(4429);
+      } finally {
+        first.close();
+        second.close();
+      }
+    },
+    // Three sequential real-socket round trips — comfortably fast solo,
+    // but the default 5s proved marginal under full-suite parallel load
+    // (worker CPU contention), which is a scheduling artifact, not a
+    // behavior being tested.
+    15_000
+  );
+
 });

@@ -110,6 +110,10 @@ const { close: closeWebSocketServer } = attachRelayWebSocketServer(httpServer, {
   // requirements.
   producerAuth: { db, required: config.mode === "closed-beta" },
   stateBus: redisStateBus,
+  // Only pass an override when the operator actually set one — undefined
+  // lets server.ts fall through to WS_CONNECTION_LIMIT's default.
+  wsConnectionLimit:
+    config.wsConnectionsPerMinute !== undefined ? { maxEvents: config.wsConnectionsPerMinute, windowMs: 60_000 } : undefined,
 });
 
 httpServer.on("error", (err) => {

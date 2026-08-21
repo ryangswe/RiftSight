@@ -30,6 +30,7 @@ import { createLocalStateBus, type StateBus } from "./state-bus.js";
 import {
   createRateLimiter,
   isSlowConsumer,
+  WS_CONNECTION_LIMIT,
   messageByteLength,
   MAX_CARDS_PER_SNAPSHOT,
   MAX_CONSECUTIVE_INVALID_MESSAGES,
@@ -85,6 +86,9 @@ const REMOTE_VIEWER_COUNT_FRESHNESS_MS = 15_000;
 /** How often this instance emits a `capacity_snapshot` log line — a regular sample of its own concurrency (sessions/viewers/producers) for a capacity dashboard (see docs/scaling-plan.md Stage 4). A minute is plenty of resolution for capacity-pressure trends and keeps it to ~1 line/min/instance; it's a periodic time-series sample (emitted even at zero, so a flat idle line is visible rather than an ambiguous gap), not an on-change event. */
 const CAPACITY_SNAPSHOT_INTERVAL_MS = 60_000;
 
+/** Hard per-session viewer ceiling, per instance — memory/fan-out protection, enforced silently on both subscribe paths (the legacy/Twitch viewer vocabulary has no rejection message, so silence matches every other rejection those clients already get). At the fleet level the effective cap is N-replicas × this, which is fine — it exists to bound one instance's blast radius, not to meter the product. */
+const MAX_VIEWERS_PER_SESSION = 2_000;
+
 interface ProducerBinding {
   broadcasterId: number;
   twitchUserId: string;
@@ -110,6 +114,8 @@ const CLOSE_CODE = {
   TOO_MANY_INVALID_MESSAGES: 4400,
   /** Too many subscribe/twitch-subscribe attempts on one socket. */
   TOO_MANY_SUBSCRIBE_ATTEMPTS: 4401,
+  /** This client IP opened more WebSocket connections per window than WS_CONNECTION_LIMIT allows. */
+  CONNECTION_RATE_LIMITED: 4429,
 } as const;
 
 export interface RelayServer {
@@ -172,6 +178,26 @@ export interface RelayConfig {
    * whoever constructed it does.
    */
   stateBus?: StateBus;
+  /** Overrides MAX_VIEWERS_PER_SESSION. Test-only escape hatch, same shape as stateTtl above. */
+  maxViewersPerSession?: number;
+  /** Overrides WS_CONNECTION_LIMIT (per-client-IP upgrade acceptances per window). Wired from RELAY_WS_CONN_PER_MIN by index.ts when set; also the test escape hatch. */
+  wsConnectionLimit?: { maxEvents: number; windowMs: number };
+}
+
+/**
+ * The client identity the per-IP connection limiter keys on: the first
+ * X-Forwarded-For hop when present (behind Railway's proxy every socket's
+ * remoteAddress is the LB, which would lump all real viewers into one
+ * bucket), else the socket address (direct/local connections, tests).
+ * XFF is client-forgeable when the relay is reached directly — accepted:
+ * a forger can only spread themselves across buckets, i.e. evade their own
+ * throttle, not collapse anyone else's, and the per-socket/-session limits
+ * behind this are unaffected.
+ */
+function clientIpOf(req: IncomingMessage): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
+  return first || req.socket.remoteAddress || "unknown";
 }
 
 /**
@@ -189,6 +215,8 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   const viewerCountHeartbeatMs = config.viewerCountFanout?.heartbeatMs ?? VIEWER_COUNT_HEARTBEAT_MS;
   const remoteViewerCountFreshnessMs = config.viewerCountFanout?.freshnessMs ?? REMOTE_VIEWER_COUNT_FRESHNESS_MS;
   const capacitySnapshotIntervalMs = config.capacitySnapshot?.intervalMs ?? CAPACITY_SNAPSHOT_INTERVAL_MS;
+  const maxViewersPerSession = config.maxViewersPerSession ?? MAX_VIEWERS_PER_SESSION;
+  const wsConnectionLimiter = createRateLimiter(config.wsConnectionLimit ?? WS_CONNECTION_LIMIT);
   /** Application-payload bytes sent to viewers since the last capacity_snapshot line (message size x recipients, summed over every broadcast — the same quantity a per-GB egress bill is made of, minus ws/TLS framing). Reset on each snapshot, so each capacity_snapshot's egressBytes covers exactly one interval. */
   let egressBytesSinceSnapshot = 0;
   const stateBus = config.stateBus ?? createLocalStateBus();
@@ -510,6 +538,11 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
     return session.latestState !== null && (isProducerConnectionOpen(session) || Date.now() - session.lastUpdatedAt <= stateTtlMs);
   }
 
+  /** One instance's per-session viewer ceiling — see MAX_VIEWERS_PER_SESSION. Checked by both subscribe paths before admitViewer; both reject silently, since the legacy/Twitch viewer vocabulary has no rejection message. */
+  function sessionAtCapacity(session: Session): boolean {
+    return session.viewers.size >= maxViewersPerSession;
+  }
+
   // Shared by both the plain (local-debug) and Twitch-authenticated
   // subscribe paths once each has independently decided the request is
   // trusted — this function itself does no authorization, it only admits.
@@ -656,6 +689,10 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         logEvent("viewer_rejected", { reason: "local-debug-disabled", sessionId: subscribeMessage.data.sessionId });
         return;
       }
+      if (sessionAtCapacity(getSession(subscribeMessage.data.sessionId))) {
+        logEvent("viewer_rejected", { reason: "session-at-capacity", sessionId: subscribeMessage.data.sessionId });
+        return;
+      }
       state.invalidMessageCount = 0;
       void admitViewer(ws, subscribeMessage.data.sessionId);
       return;
@@ -690,6 +727,10 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
         return;
       }
 
+      if (sessionAtCapacity(getSession(channelId))) {
+        logEvent("viewer_rejected", { reason: "session-at-capacity", sessionId: channelId, channelId });
+        return;
+      }
       state.invalidMessageCount = 0;
       void admitViewer(ws, channelId);
       return;
@@ -699,6 +740,17 @@ export function attachRelayWebSocketServer(httpServer: HttpServer, config: Relay
   }
 
   wss.on("connection", (ws, req) => {
+    // Connection-level throttle, before any per-socket bookkeeping — a
+    // client IP churning connections gets each new socket closed
+    // immediately with a distinct code, bounding both socket count and
+    // the handler work a storm can cause. See WS_CONNECTION_LIMIT and
+    // clientIpOf for the X-Forwarded-For keying rationale.
+    if (!wsConnectionLimiter.tryConsume(clientIpOf(req))) {
+      logEvent("connection_disconnected", { reason: "connection-rate-limited", remoteAddress: clientIpOf(req) });
+      ws.close(CLOSE_CODE.CONNECTION_RATE_LIMITED, "connection-rate-limited");
+      return;
+    }
+
     const state: ConnectionState = {
       producerBinding: undefined,
       invalidMessageCount: 0,
