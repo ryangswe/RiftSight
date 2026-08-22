@@ -207,47 +207,72 @@ stepping 300 → 1000 → 2000. It's read-only (never publishes) and safe to
 abort. It's also the right smoke test after every operator step in the
 checklist below.
 
-## Stage 2+ operator checklist (the deferred provisioning work)
+## Stage 2+ operator checklist — the executable cutover (tooling landed 2026-08-22)
 
-Everything below is account/console/infra work, deliberately deferred
-until the Twitch Extension review lands (backend changes never trigger
-re-review, but a stable prod during review is the safe posture). Do the
-steps in order; none of the production steps should be done piecemeal.
+Status: **code/tooling complete, provisioning in progress.** Decided
+(docs/decisions.md 2026-08-22) to run this on master BEFORE the YouTube
+milestone merges: master's migrations (0001–0003) are purely additive with
+no PRAGMA, so they apply cleanly against remote libsql; the YouTube
+branch's 0005 must be re-authored additively before it can follow. The
+tools: `TURSO_AUTH_TOKEN` (env.ts — the token never lives inside the DB
+URL), `npm run copy-db -w relay` (`relay/src/db/copy.ts` — row copy with
+ids preserved, strict schema/ordering checks, `--force` to re-copy),
+`npm run preflight-viewers -w relay` (the smoke test after every step),
+and `railway.staging.json` (2 replicas, no volume mount) for the staging
+service. Exact commands live in docs/operator-runbook.md "Remote database
+(Turso) cutover"; this is the sequence and its gates.
 
-1. **Provision Turso** (Stage 0): create the database
-   (`turso db create riftsight` or the dashboard), get the `libsql://…`
-   URL + auth token. Run migrations against it once from a local machine:
-   `cd relay && RIFTSIGHT_DB_PATH='libsql://…' npm run migrate`. Copy the
-   current allowlist/broadcaster/credential rows from the Railway volume's
-   SQLite file (backup per docs/railway-deployment.md §11, then restore
-   the rows into Turso — plain SQLite-dialect SQL, wire-compatible).
-2. **Provision Redis**: Railway project canvas → Create → Database →
-   Redis; reference its connection string as `REDIS_URL` on the relay
-   service (Railway variables support `${{Redis.REDIS_URL}}`-style
-   references).
-3. **Cut the relay service over**: set `RIFTSIGHT_DB_PATH` to the
-   `libsql://…` URL, set `RIFTSIGHT_MIGRATE_ON_BOOT=false`, remove
-   `deploy.requiredMountPath: "/data"` from `railway.json` (a code-adjacent
-   edit that takes effect on deploy — bundled here deliberately, since the
-   mount physically prevents a second replica), detach the volume, deploy,
-   and confirm `/ready` + a producer/viewer session against the remote DB
-   at **one replica** first.
-4. **Staging spike for the Stage-2 open question**: create a second
-   Railway service from the same repo (staging), same env but staging
-   Turso/Redis, bump its `numReplicas` to 2–3, and verify Railway's load
-   balancer actually distributes long-lived WebSocket connections across
-   replicas and drains them gracefully on a rolling deploy rather than
-   dropping them mid-stream. This is the one genuinely unverifiable-
-   locally behavior — if Railway handles WS poorly, that changes the
-   provider conversation independent of everything else here. The
-   `instanceId` log field is how you confirm connections actually spread.
-5. **Bump production `numReplicas`** only after the spike passes. Keep the
-   same public hostname (see "Does this need another Twitch review cycle?"
-   — changing it would trigger one).
+0. **Safety net**: enable the volume's daily Backups and take a manual
+   `.backup` now (runbook "Back up the SQLite database"); download it — it
+   is also the copy source.
+1. **Provision Turso**: `turso db create riftsight` and
+   `riftsight-staging`; `turso db tokens create <db>` for each. Tokens go
+   only into Railway variables / a local shell env, never a file in the
+   repo or a command line.
+2. **Schema on Turso**: `RIFTSIGHT_DB_PATH='libsql://…' TURSO_AUTH_TOKEN=…
+   npm run migrate -w relay`. Gate: `schema_migrations` lists 1–3.
+3. **Copy rows** in a quiet window (no new streamer linking for ~15 min):
+   `SRC=file:./backup.db DST='libsql://…' DST_AUTH_TOKEN=… npm run copy-db
+   -w relay`. Gate: every table's target count matches; `seed-allowlist
+   credential-status <streamer>` against Turso answers correctly. Re-run
+   with `--force` right before step 6 to pick up anything written since.
+4. **Provision Redis**: Railway canvas → Create → Database → Redis;
+   reference `${{Redis.REDIS_URL}}` (internal `redis://`, no TLS setup).
+5. **Staging spike** — the one thing no local test can prove: a second
+   Railway service from the same repo with its config-file path set to
+   `railway.staging.json`, env = `RIFTSIGHT_MODE=closed-beta`, the same
+   `TWITCH_EXTENSION_SECRET`/`TWITCH_API_*`/OAuth vars, staging Turso
+   URL+token (seeded from the same backup via copy-db), staging
+   `REDIS_URL`, `RIFTSIGHT_MIGRATE_ON_BOOT=false`,
+   `RELAY_WS_CONN_PER_MIN=5000`. Run `PREFLIGHT_RELAY_URL=wss://<staging>
+   PREFLIGHT_VIEWERS=2000 npm run preflight-viewers -w relay` while a
+   staging-pointed dev build of the extension
+   (`RIFTSIGHT_BACKEND_URL=https://<staging> npm run extension:package`)
+   publishes from your channel. Gates: two distinct `instanceId`s each
+   holding roughly half the sockets in `capacity_snapshot`; the producer's
+   viewer count equals the fleet total; `snapshot_lookup hit` on the
+   non-producer replica; a redeploy mid-hold drains over ~15 s with
+   controlled closes, not a 4429/5xx burst. **If Railway fails this, stop
+   at single-replica-on-Turso+Redis** (still a strict durability win) and
+   reopen the provider question.
+6. **Production cutover at one replica**: set `RIFTSIGHT_DB_PATH`
+   (libsql URL), `TURSO_AUTH_TOKEN`, `REDIS_URL`,
+   `RIFTSIGHT_MIGRATE_ON_BOOT=false`; re-run copy-db `--force`; deploy the
+   `railway.json` without `requiredMountPath`. Gates: `/ready` 200 (now a
+   network `SELECT 1`), `startup_summary.databaseRemote: true`, a real
+   streamer hover session on an EXISTING credential (proves the hashes
+   copied), preflight 500 passes. Keep the volume attached-but-unused for a
+   week: rollback = file path + mount path back, redeploy.
+7. **Restore the per-IP default** on production: delete
+   `RELAY_WS_CONN_PER_MIN` (still 5000 from the tournament) or set ~300.
+8. **Replicas**: `numReplicas: 2` in `railway.json`, deploy, repeat the
+   step-5 gates against production with preflight 1000. Rollback:
+   `numReplicas: 1`. The public hostname never changes (see "Does this need
+   another Twitch review cycle?").
 
-**Rollback path at every step**: unset `REDIS_URL` and return to one
-replica — the no-Redis default is the pre-Stage-1 behavior, kept working
-by the entire existing test suite.
+**Rollback at every step**: unset `REDIS_URL`, one replica, file-backed
+`RIFTSIGHT_DB_PATH` — the pre-Stage-1 posture the whole test suite keeps
+working.
 
 ## Stage 3 — Rate limiting: accept the tradeoff, don't rebuild it yet
 

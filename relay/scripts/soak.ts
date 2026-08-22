@@ -162,21 +162,47 @@ function sampleProcess(pid: number): { rssMb: number; cpu: number } | null {
 // ---------------------------------------------------------------------------
 
 const children: ChildProcess[] = [];
+/** The relay Node processes themselves — see resolveRelayPid. Killed explicitly in cleanup because a SIGKILL to the tsx wrapper that spawned them is never forwarded, which is how earlier runs left orphaned relays holding the 187xx ports for days. */
+const relayPids: number[] = [];
 let cleanedUp = false;
 
 function cleanup(): void {
   if (cleanedUp) return;
   cleanedUp = true;
+  for (const pid of relayPids) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
   for (const child of children) {
     if (!child.killed) child.kill("SIGKILL");
   }
 }
 
-process.on("SIGINT", () => {
-  cleanup();
-  process.exit(130);
-});
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => {
+    cleanup();
+    process.exit(130);
+  });
+}
 process.on("exit", cleanup);
+
+/**
+ * `spawn(tsxBin, …)` starts tsx's CLI wrapper, which in turn spawns the real
+ * Node process running the relay — so the ChildProcess's pid is the wrapper's,
+ * and sampling it reports a flat ~35 MB supervisor instead of the relay (a
+ * bug that made every earlier soak's RSS column meaningless and its
+ * SOAK_MAX_RSS_GROWTH_MB gate unable to fire). Resolve the wrapper's direct
+ * child instead; falls back to the wrapper pid if none is found yet.
+ */
+function resolveRelayPid(wrapperPid: number): number {
+  const out = spawnSync("pgrep", ["-P", String(wrapperPid)], { encoding: "utf8" });
+  const first = out.stdout.trim().split(/\s+/)[0];
+  const pid = Number(first);
+  return Number.isInteger(pid) && pid > 0 ? pid : wrapperPid;
+}
 
 function spawnRelay(port: number): ChildProcess {
   const child = spawn(tsxBin, ["src/index.ts"], {
@@ -348,8 +374,9 @@ async function main(): Promise<void> {
   await wait(500);
   console.log("[soak] both relays up");
 
-  const relayPidA = children[OWN_REDIS ? 1 : 0]!.pid!;
-  const relayPidB = children[OWN_REDIS ? 2 : 1]!.pid!;
+  const relayPidA = resolveRelayPid(children[OWN_REDIS ? 1 : 0]!.pid!);
+  const relayPidB = resolveRelayPid(children[OWN_REDIS ? 2 : 1]!.pid!);
+  relayPids.push(relayPidA, relayPidB);
 
   // Active session state, keyed so rotation can retire and replace entries.
   interface ActiveSession {

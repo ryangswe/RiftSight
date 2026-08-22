@@ -8,7 +8,9 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json",
     "migrate": "tsx scripts/migrate.ts",
-    "seed-allowlist": "tsx scripts/seed-allowlist.ts"
+    "seed-allowlist": "tsx scripts/seed-allowlist.ts",
+    "copy-db": "tsx scripts/copy-db.ts",
+    "preflight-viewers": "tsx scripts/preflight-viewers.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",

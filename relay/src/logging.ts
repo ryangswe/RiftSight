@@ -60,6 +60,7 @@ const ALLOWED_LOG_FIELDS = new Set([
   "mode",
   "databaseConfigured",
   "databasePersistentPath",
+  "databaseRemote",
   "localDebugEnabled",
   "producerAuthRequired",
   "twitchViewerAuthConfigured",

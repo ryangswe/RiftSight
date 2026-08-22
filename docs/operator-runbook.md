@@ -22,6 +22,8 @@ Applied automatically at every boot (idempotent — a no-op once the database is
 npm run migrate -w relay
 ```
 
+Against a remote (Turso) database, add `RIFTSIGHT_DB_PATH`/`TURSO_AUTH_TOKEN` to the command — see "Remote database (Turso) cutover" below.
+
 ## Add / list / remove a beta user
 
 Allowlist membership is stored by numeric Twitch user ID, never display name (a display name can change or be reused; an ID can't) — but `add`/`remove`/`credential-status` all accept a plain username too, resolved to its numeric ID automatically via Twitch's own API (using the same `TWITCH_API_CLIENT_ID`/`SECRET` already configured for OAuth linking). A streamer virtually never knows their own numeric ID offhand, so in practice you'll almost always just use their username:
@@ -162,6 +164,35 @@ npm run start -w relay
 ```
 
 Pending migrations (if the backup predates a schema change) apply automatically on the next boot.
+
+## Remote database (Turso) cutover
+
+The relay's database layer is libsql: `RIFTSIGHT_DB_PATH` can be a local `file:` path (today's volume-backed deployment) or a hosted `libsql://…` URL. Moving to Turso is an ops sequence, not a code change — the full gated order is docs/scaling-plan.md "Stage 2+ operator checklist"; the commands are here.
+
+**Auth token.** A remote URL needs `TURSO_AUTH_TOKEN` (from `turso db tokens create <db>`). It is its own variable — never append it to the URL — and closed-beta refuses to start with a remote URL and no token. Rotate by creating a new token, updating the Railway variable, restarting, then revoking the old one (`turso db tokens invalidate` revokes *all* tokens for a database, so create-then-swap first).
+
+**Migrations against the remote database** (multi-replica posture, `RIFTSIGHT_MIGRATE_ON_BOOT=false`): run once per deploy that adds a migration, from a local machine —
+
+```bash
+RIFTSIGHT_DB_PATH='libsql://riftsight-<org>.turso.io' TURSO_AUTH_TOKEN='…' npm run migrate -w relay
+```
+
+Only migrations that are purely additive (no table rebuilds, no PRAGMA) are safe this way. Any future table-rebuilding migration must be applied against a local copy first — see the decisions log, 2026-08-22.
+
+**Copying the data** (`relay/src/db/copy.ts`, `npm run copy-db -w relay`): copies `broadcasters`, `twitch_allowlist`, and `producer_credentials` with ids preserved, refuses a target that isn't migrated, is behind, has unknown tables, or already holds rows (unless `--force`, which truncates children-first and re-copies), and prints source/target counts.
+
+```bash
+# 1. take + download a backup (section above), then:
+SRC=file:./backup-<date>.db DST='libsql://riftsight-<org>.turso.io' DST_AUTH_TOKEN='…' npm run copy-db -w relay
+# 2. right before the cutover deploy, pick up anything written since:
+SRC=file:./backup-<date2>.db DST='libsql://…' DST_AUTH_TOKEN='…' npm run copy-db -w relay -- --force
+# 3. spot-check a real streamer against the remote copy:
+RIFTSIGHT_DB_PATH='libsql://…' TURSO_AUTH_TOKEN='…' npm run seed-allowlist -w relay -- credential-status <twitch-login>
+```
+
+**After the cutover**, `startup_summary` shows `databaseRemote: true`, `/ready` is a network round-trip (`SELECT 1` against Turso — a 503 now means Turso or its token, not a volume), and the volume stays attached-but-unused for a week as the rollback: set `RIFTSIGHT_DB_PATH` back to the file path, restore `requiredMountPath` in `railway.json`, redeploy.
+
+**Smoke test after every step**: `npm run preflight-viewers -w relay` (header of `relay/scripts/preflight-viewers.ts`) — against staging, set `PREFLIGHT_RELAY_URL` explicitly; it defaults to production.
 
 ## Diagnosing common failures
 

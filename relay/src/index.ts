@@ -27,7 +27,7 @@ for (const warning of result.warnings) {
 const { config } = result;
 console.log(`[relay] starting in "${config.mode}" mode`);
 
-const db = createDbClient(config.dbUrl);
+const db = createDbClient(config.dbUrl, config.tursoAuthToken);
 
 // Applied at every boot by default, not just via the standalone `npm run
 // migrate` command — runMigrations() only ever applies pending
@@ -73,6 +73,9 @@ if (config.mode === "closed-beta") {
     // the relative-to-cwd default, which is the shape most likely to be
     // silently ephemeral inside a container.
     databasePersistentPath: !config.dbUrl.startsWith("file:./"),
+    // True once RIFTSIGHT_DB_PATH is a hosted libsql/Turso URL rather than a
+    // local file — the post-cutover posture (docs/scaling-plan.md Stage 0).
+    databaseRemote: !config.dbUrl.startsWith("file:") && config.dbUrl !== ":memory:",
     localDebugEnabled: config.allowLocalDebug,
     producerAuthRequired: config.mode === "closed-beta",
     twitchViewerAuthConfigured: Boolean(config.twitchExtensionSecret),

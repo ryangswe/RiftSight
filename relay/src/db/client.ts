@@ -29,7 +29,12 @@ function ensureLocalFileDirectoryExists(url: string): void {
   if (dir && dir !== ".") mkdirSync(dir, { recursive: true });
 }
 
-export function createDbClient(url: string): DbClient {
+/**
+ * `authToken` is only meaningful for a remote libsql/Turso URL; it's
+ * accepted (and ignored by the driver) for local "file:"/":memory:" URLs so
+ * every caller can pass the env config through unconditionally.
+ */
+export function createDbClient(url: string, authToken?: string): DbClient {
   ensureLocalFileDirectoryExists(url);
-  return createClient({ url });
+  return authToken ? createClient({ url, authToken }) : createClient({ url });
 }

@@ -60,6 +60,14 @@ export interface RelayEnvConfig {
    * against the database instead, before or between deploys.
    */
   migrateOnBoot: boolean;
+  /**
+   * Auth token for a remote libsql/Turso database (TURSO_AUTH_TOKEN).
+   * Optional — a local "file:" database needs none and ignores it. Kept
+   * as its own variable rather than folded into the URL as "?authToken="
+   * (which libsql also accepts) so the secret never lives inside dbUrl,
+   * where any future "log the config" change would leak it.
+   */
+  tursoAuthToken: string | undefined;
   /** Per-client-IP WebSocket upgrade acceptances per minute (RELAY_WS_CONN_PER_MIN). Unset means WS_CONNECTION_LIMIT's default (60/min); raise temporarily for an unusually NAT-heavy audience or a single-machine load test. */
   wsConnectionsPerMinute: number | undefined;
 }
@@ -151,6 +159,7 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
   const twitchApiClientSecret = env["TWITCH_API_CLIENT_SECRET"] || undefined;
   const twitchOAuthRedirectUri = env["TWITCH_OAUTH_REDIRECT_URI"] || undefined;
   const redisUrl = env["REDIS_URL"] || undefined;
+  const tursoAuthToken = env["TURSO_AUTH_TOKEN"] || undefined;
   // Same explicit-opt-out shape as ALLOW_LOCAL_DEBUG below: anything other
   // than the literal "false" (including unset) keeps the safe default.
   const migrateOnBoot = env["RIFTSIGHT_MIGRATE_ON_BOOT"] !== "false";
@@ -183,6 +192,9 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
     // storage case this code can actually detect and reject outright,
     // versus "is this file path on a mounted persistent volume," which it
     // can't know from here.
+    if (!dbUrl.startsWith("file:") && dbUrl !== ":memory:" && !tursoAuthToken) {
+      errors.push("RIFTSIGHT_DB_PATH is a remote database URL but TURSO_AUTH_TOKEN is not set — a hosted database is never unauthenticated in closed-beta mode.");
+    }
     if (dbUrl === ":memory:") {
       errors.push("RIFTSIGHT_DB_PATH must not be \":memory:\" in closed-beta mode — that data is lost on every restart.");
     }
@@ -223,6 +235,7 @@ export function validateEnv(env: Record<string, string | undefined>): EnvValidat
       twitchApiClientSecret,
       twitchOAuthRedirectUri,
       redisUrl,
+      tursoAuthToken,
       migrateOnBoot,
       wsConnectionsPerMinute,
     },

@@ -15,7 +15,7 @@ if (!result.ok) {
   process.exit(1);
 }
 
-const db = createDbClient(result.config.dbUrl);
+const db = createDbClient(result.config.dbUrl, result.config.tursoAuthToken);
 const migrations = await loadMigrations();
 const { applied } = await runMigrations(db, migrations);
 

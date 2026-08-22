@@ -124,6 +124,21 @@ describe("validateEnv", () => {
     if (result.ok) expect(result.config.migrateOnBoot).toBe(true);
   });
 
+  it("leaves tursoAuthToken undefined when TURSO_AUTH_TOKEN is unset, and passes it through when set", () => {
+    const unset = validateEnv(env());
+    if (unset.ok) expect(unset.config.tursoAuthToken).toBeUndefined();
+    const set = validateEnv(env({ TURSO_AUTH_TOKEN: "tok" }));
+    if (set.ok) expect(set.config.tursoAuthToken).toBe("tok");
+  });
+
+  it("closed-beta refuses a remote database URL without TURSO_AUTH_TOKEN, and accepts it with one", () => {
+    const without = validateEnv(env({ RIFTSIGHT_MODE: "closed-beta", ...closedBetaRequiredVars(), RIFTSIGHT_DB_PATH: "libsql://riftsight-example.turso.io" }));
+    expect(without.ok).toBe(false);
+    if (!without.ok) expect(without.errors.join("\n")).toContain("TURSO_AUTH_TOKEN");
+    const withToken = validateEnv(env({ RIFTSIGHT_MODE: "closed-beta", ...closedBetaRequiredVars(), RIFTSIGHT_DB_PATH: "libsql://riftsight-example.turso.io", TURSO_AUTH_TOKEN: "tok" }));
+    expect(withToken.ok).toBe(true);
+  });
+
   it("defaults dbUrl to a local file path when unset", () => {
     const result = validateEnv(env());
     if (result.ok) expect(result.config.dbUrl).toBe("file:./data/riftsight.db");

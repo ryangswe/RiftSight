@@ -8,6 +8,43 @@ Format: newest first, dated, one decision per entry.
 
 ---
 
+## 2026-08-22 — Scaling cutover (Turso + Redis + replicas) runs on master BEFORE the YouTube milestone; 0005 must become additive
+
+The post-tournament numbers (one channel >2k viewers, ~500 MB RAM, 0.1
+vCPU, $7.59 total) say capacity isn't the driver; the remaining Stage 2+
+work is about durability (a hosted DB instead of one SQLite file on one
+volume that also forces downtime on every redeploy) and resilience
+(replicas). Decided: execute it on today's master, deferring the
+`youtube-live` merge. Reasons: master's migrations are purely additive
+(no PRAGMA), so they apply cleanly against remote libsql; the only
+scalability-relevant code on youtube-live (connection hardening) is
+already on master; and a big feature merge should not ride along with an
+infrastructure cutover.
+
+**Consequence for youtube-live:** migration 0005 rebuilds `broadcasters`
+(DROP + rename) under an FK-suspension PRAGMA that remote libsql may not
+honor, and it is the first non-rollback-safe migration. Before that
+branch merges it must be re-authored additively — create
+`platform_identities` + backfill, leave the legacy `broadcasters` columns
+in place and unused — which makes it both Turso-safe and rollback-safe.
+
+**Tooling added** (all on master): `TURSO_AUTH_TOKEN` as its own env var
+(never inside the URL, so no future config log can leak it; closed-beta
+refuses a remote URL without it), `relay/src/db/copy.ts` + `copy-db`
+(strict row copy: ids preserved, refuses unmigrated/behind/unknown-table
+/non-empty targets, `--force` re-copy, count verification), the preflight
+harness promoted to master, `railway.staging.json` for the spike, and soak
+harness fixes (it was sampling the tsx wrapper's pid and orphaning relay
+processes).
+
+**Rejected:** token-in-URL (`?authToken=` works but puts a secret in
+`dbUrl`); copying schema_migrations rows (the target must be migrated by
+the real runner, and the copy verifies it's not behind instead); a generic
+"copy every table" (a new migration's table would be silently skipped —
+the explicit list fails loudly instead).
+
+---
+
 ## 2026-08-21 — Multiple RiftAtlas tabs: publish only the active tab, elected in the background worker
 
 A streamer rapidly switching between several spectated games keeps multiple
