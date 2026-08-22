@@ -812,7 +812,16 @@ async function sendHeartbeat(): Promise<void> {
   const boardDetected = isGameBoardDetected();
   const publicCardCount = detectCards().cards.filter((card) => card.visibility === "public").length;
 
-  safeSendMessage({ type: "heartbeat", boardDetected, publicCardCount }).catch(() => {
+  // Tab visibility/focus lets the background worker elect which RiftAtlas tab
+  // actually feeds the relay when several are open (see background's
+  // getActivePublisherTabId) — without it, a backgrounded tab's board could
+  // leak onto the stream. `visible` is this tab being its window's active tab;
+  // `focused` is that window also holding OS focus (the tie-break when two
+  // tabs in different windows are both visible).
+  const visible = document.visibilityState === "visible";
+  const focused = document.hasFocus();
+
+  safeSendMessage({ type: "heartbeat", boardDetected, publicCardCount, visible, focused }).catch(() => {
     // Background worker may be waking from suspension; the next tick will retry.
   });
 
@@ -836,6 +845,16 @@ async function sendHeartbeat(): Promise<void> {
 }
 
 setInterval(() => void sendHeartbeat(), HEARTBEAT_INTERVAL_MS);
+
+// Fire an immediate heartbeat the moment this tab's visibility or window
+// focus changes, rather than waiting up to HEARTBEAT_INTERVAL_MS for the next
+// scheduled beat — a streamer rapidly switching between spectated games needs
+// the background worker to re-elect the active publisher tab promptly, or the
+// stream would briefly keep showing the tab they just switched away from. The
+// heartbeat already carries `visible`/`focused`, so this reuses it wholesale.
+document.addEventListener("visibilitychange", () => void sendHeartbeat());
+window.addEventListener("focus", () => void sendHeartbeat());
+window.addEventListener("blur", () => void sendHeartbeat());
 
 function updatePanel(result: ScanResult, counts: Record<Signal, number>): void {
   const panel = ensurePanel();
