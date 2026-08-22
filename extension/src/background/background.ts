@@ -270,11 +270,29 @@ let latestUnsent: OverlayState | null = null;
 // count from a prior connection is no longer something we can vouch for.
 let latestViewerCount: number | undefined;
 
+// Monotonic-capturedAt guard for the single producer socket. The extension
+// multiplexes several tabs' independent OverlayStatePublishers onto this one
+// socket, but every viewer treats the socket as a single ordered timeline:
+// it buffers states by capturedAt and *rejects any push that moves backward
+// in time* (protocol/history.ts's TimeWindowBuffer.push). Each tab stamps its
+// own capturedAt, so when the streamer switches to a tab whose last board was
+// captured earlier than the tab they left — most importantly the election
+// snap below, which forwards a not-currently-changing tab's *cached* state —
+// forwarding that older capturedAt as-is is silently dropped by every viewer,
+// leaving them frozen on the previous tab's board. Clamping capturedAt to
+// never regress keeps the socket a valid monotonic timeline regardless of
+// which tab produced each frame. Genuine, already-increasing timestamps (the
+// normal single-active-tab path) pass through untouched.
+let lastForwardedCapturedAt = 0;
+
 function send(state: OverlayState): void {
+  const capturedAt = Math.max(state.capturedAt, lastForwardedCapturedAt);
+  lastForwardedCapturedAt = capturedAt;
+  const outbound = capturedAt === state.capturedAt ? state : { ...state, capturedAt };
   if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: "overlay-state", payload: state }));
+    socket.send(JSON.stringify({ type: "overlay-state", payload: outbound }));
   } else {
-    latestUnsent = state;
+    latestUnsent = outbound;
   }
 }
 
@@ -329,9 +347,15 @@ function evaluateElection(now: number): void {
   if (active === undefined) return;
   const cached = latestStateByTab.get(active);
   if (!cached) return;
-  lastKnownState = cached;
+  // Re-stamp capturedAt to now: this cached board is the *current* state of
+  // the tab being switched to (its own publisher may have captured it a while
+  // ago and won't re-emit while the board is static), so on the stream's
+  // timeline it is happening now. Without this the viewer's time-ordered
+  // buffer would reject it as out-of-order — see send()'s monotonic guard.
+  const snapped: OverlayState = { ...cached, capturedAt: now };
+  lastKnownState = snapped;
   autoStoppedForCurrentGap = false;
-  send(cached);
+  send(snapped);
 }
 
 /**
