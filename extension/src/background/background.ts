@@ -48,7 +48,7 @@ import {
   startLink,
 } from "./auth.js";
 import { credentialNeedsReconnect, shouldCheckCredentialStatus } from "./connection-diagnostics.js";
-import { getCurrentPresenceStatus, isCurrentlyGoneForAutoStop, recordHeartbeat } from "./presence-tracker.js";
+import { forgetTab, getActivePublisherTabId, getCurrentPresenceStatus, isCurrentlyGoneForAutoStop, recordHeartbeat } from "./presence-tracker.js";
 import { getPublishingIntent, loadPersistedPublishingIntent, setPublishingIntent } from "./publishing-intent.js";
 import { resolveProducerWsUrl } from "./producer-url.js";
 
@@ -270,11 +270,29 @@ let latestUnsent: OverlayState | null = null;
 // count from a prior connection is no longer something we can vouch for.
 let latestViewerCount: number | undefined;
 
+// Monotonic-capturedAt guard for the single producer socket. The extension
+// multiplexes several tabs' independent OverlayStatePublishers onto this one
+// socket, but every viewer treats the socket as a single ordered timeline:
+// it buffers states by capturedAt and *rejects any push that moves backward
+// in time* (protocol/history.ts's TimeWindowBuffer.push). Each tab stamps its
+// own capturedAt, so when the streamer switches to a tab whose last board was
+// captured earlier than the tab they left — most importantly the election
+// snap below, which forwards a not-currently-changing tab's *cached* state —
+// forwarding that older capturedAt as-is is silently dropped by every viewer,
+// leaving them frozen on the previous tab's board. Clamping capturedAt to
+// never regress keeps the socket a valid monotonic timeline regardless of
+// which tab produced each frame. Genuine, already-increasing timestamps (the
+// normal single-active-tab path) pass through untouched.
+let lastForwardedCapturedAt = 0;
+
 function send(state: OverlayState): void {
+  const capturedAt = Math.max(state.capturedAt, lastForwardedCapturedAt);
+  lastForwardedCapturedAt = capturedAt;
+  const outbound = capturedAt === state.capturedAt ? state : { ...state, capturedAt };
   if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: "overlay-state", payload: state }));
+    socket.send(JSON.stringify({ type: "overlay-state", payload: outbound }));
   } else {
-    latestUnsent = state;
+    latestUnsent = outbound;
   }
 }
 
@@ -290,6 +308,55 @@ function send(state: OverlayState): void {
  */
 let lastKnownState: OverlayState | undefined;
 let autoStoppedForCurrentGap = false;
+
+/**
+ * The last OverlayState received from each RiftAtlas tab, kept whether or not
+ * that tab is the currently-elected publisher. Two purposes:
+ *  - a non-elected tab's state is cached here but NOT forwarded to the relay,
+ *    which is the actual fix for the multi-tab bug (a background tab's board
+ *    used to leak onto the stream because every tab's state was forwarded
+ *    blindly over the single shared producer socket);
+ *  - when election flips to a different tab (the streamer switches games),
+ *    its cached board can be sent immediately so viewers snap to the right
+ *    game without waiting for that tab's next board mutation.
+ * Entries are dropped on tab close (see the onRemoved handler). Memory-only —
+ * lost on service-worker suspension, same as election state, which is fine:
+ * after a wake the content scripts' own republish-on-reconnect repopulates it.
+ */
+const latestStateByTab = new Map<number, OverlayState>();
+
+/**
+ * The tab getActivePublisherTabId last resolved to, so a heartbeat (or a tab
+ * closing) that changes the election can be detected and reacted to exactly
+ * once — see evaluateElection.
+ */
+let lastElectedTabId: number | undefined;
+
+/**
+ * Re-checks which tab should be publishing and, if it changed, immediately
+ * forwards that tab's most recent cached board so the stream snaps to it.
+ * Called after every heartbeat (election inputs just changed) and after a tab
+ * closes (a live tab may need to take over). Sending nothing is correct when
+ * the newly-elected tab has no cached state yet — its own next publish will
+ * flow through now that it's the elected tab.
+ */
+function evaluateElection(now: number): void {
+  const active = getActivePublisherTabId(now);
+  if (active === lastElectedTabId) return;
+  lastElectedTabId = active;
+  if (active === undefined) return;
+  const cached = latestStateByTab.get(active);
+  if (!cached) return;
+  // Re-stamp capturedAt to now: this cached board is the *current* state of
+  // the tab being switched to (its own publisher may have captured it a while
+  // ago and won't re-emit while the board is static), so on the stream's
+  // timeline it is happening now. Without this the viewer's time-ordered
+  // buffer would reject it as out-of-order — see send()'s monotonic guard.
+  const snapped: OverlayState = { ...cached, capturedAt: now };
+  lastKnownState = snapped;
+  autoStoppedForCurrentGap = false;
+  send(snapped);
+}
 
 /**
  * Proactively clears whatever a viewer is currently seeing once presence
@@ -415,15 +482,28 @@ function openSocket(url: string): void {
     // nothing is currently being published, and redundantly republishing
     // an already-fresh first snapshot costs nothing beyond one extra,
     // deduped-away-if-unchanged message).
-    void getLastKnownTabId().then((tabId) => {
-      if (tabId === undefined) return;
-      return chrome.tabs.sendMessage(tabId, { type: "relay-connected" }).catch(() => {
-        // Best-effort — the tab may have navigated away, or no content
-        // script is there to receive it yet. Nothing useful to do about a
-        // failed push; there's no queue/retry for this, just the next
-        // successful connect (or the existing poll-based fallback while
-        // the tab stays focused) to catch up eventually.
-      });
+    void getLastKnownTabId().then((lastKnownTabId) => {
+      // Notify the *elected* tab so it republishes its board on reconnect —
+      // that's the tab whose state viewers should see. Also notify the
+      // storage-backed lastKnownTabId: it's the only target that survives a
+      // service-worker suspend/wake (in-memory election is empty until fresh
+      // heartbeats land), so it keeps the reconnect-republish path working on
+      // exactly the backgrounded-tab wake this push exists to cover. A
+      // non-elected tab that republishes is harmless — its state is gated out
+      // downstream. Deduped so a single tab isn't messaged twice.
+      const targets = new Set<number>();
+      const elected = getActivePublisherTabId(Date.now());
+      if (elected !== undefined) targets.add(elected);
+      if (lastKnownTabId !== undefined) targets.add(lastKnownTabId);
+      for (const tabId of targets) {
+        void chrome.tabs.sendMessage(tabId, { type: "relay-connected" }).catch(() => {
+          // Best-effort — the tab may have navigated away, or no content
+          // script is there to receive it yet. Nothing useful to do about a
+          // failed push; there's no queue/retry for this, just the next
+          // successful connect (or the existing poll-based fallback while
+          // the tab stays focused) to catch up eventually.
+        });
+      }
     });
 
     if (latestUnsent) {
@@ -469,9 +549,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "overlay-state") {
     const parsed = ProducerMessageSchema.safeParse(message);
     if (parsed.success) {
-      lastKnownState = parsed.data.payload;
-      autoStoppedForCurrentGap = false;
-      send(parsed.data.payload);
+      const tabId = sender.tab?.id;
+      // Always cache the source tab's latest board so an election flip can
+      // snap the stream to it (see evaluateElection). Only the elected tab's
+      // state is actually forwarded to the relay — this is the multi-tab fix:
+      // a background tab keeps publishing to the worker but no longer reaches
+      // viewers. When the election is unknown (no heartbeat yet) or the
+      // sender tab is somehow unidentified, stay permissive and forward, so
+      // this is never worse than the old always-forward behavior.
+      if (tabId !== undefined) latestStateByTab.set(tabId, parsed.data.payload);
+      const active = getActivePublisherTabId(Date.now());
+      if (active === undefined || tabId === undefined || tabId === active) {
+        lastKnownState = parsed.data.payload;
+        autoStoppedForCurrentGap = false;
+        send(parsed.data.payload);
+      }
     }
     return false;
   }
@@ -484,8 +576,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "heartbeat") {
     const tabId = sender.tab?.id;
     if (tabId !== undefined) {
-      recordHeartbeat(tabId, Boolean(message.boardDetected), Number(message.publicCardCount) || 0, Date.now());
+      const now = Date.now();
+      recordHeartbeat(
+        tabId,
+        Boolean(message.boardDetected),
+        Number(message.publicCardCount) || 0,
+        Boolean(message.visible),
+        Boolean(message.focused),
+        now
+      );
       void rememberTabId(tabId);
+      // Visibility/focus just changed the election inputs; if the streamer
+      // switched tabs, snap the stream to the newly-active tab now rather
+      // than waiting for its next board mutation.
+      evaluateElection(now);
     }
     return false;
   }
@@ -558,9 +662,29 @@ setInterval(() => {
 // most recently heard from, so closing an old, already-inactive RiftAtlas
 // tab doesn't spuriously clear a still-healthy publish from a different one.
 chrome.tabs.onRemoved.addListener((tabId) => {
-  void getLastKnownTabId().then((lastKnownTabId) => {
-    if (tabId === lastKnownTabId) maybeAutoStopOnGoneReceived();
-  });
+  // Own the single onRemoved handler for presence cleanup (presence-tracker
+  // no longer registers its own), so election is re-evaluated only after the
+  // closed tab has actually been forgotten — no ordering race between two
+  // listeners.
+  forgetTab(tabId);
+  latestStateByTab.delete(tabId);
+
+  const now = Date.now();
+  const active = getActivePublisherTabId(now);
+  if (active === undefined) {
+    // No live RiftAtlas tab remains — genuinely gone. Only synthesize the
+    // clear if the tab that just closed was the one actually feeding the
+    // stream, so closing a stale/leftover tab that wasn't publishing doesn't
+    // spuriously clear a still-healthy stream (matches the prior
+    // lastKnownTabId guard's intent).
+    void getLastKnownTabId().then((lastKnownTabId) => {
+      if (tabId === lastKnownTabId) maybeAutoStopOnGoneReceived();
+    });
+  } else {
+    // A different tab is still live and now takes over — snap the stream to
+    // it rather than clearing (the closed tab may have been the one on screen).
+    evaluateElection(now);
+  }
 });
 
 // Registered on every module load (fresh install, and every wake from

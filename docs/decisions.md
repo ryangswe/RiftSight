@@ -8,6 +8,54 @@ Format: newest first, dated, one decision per entry.
 
 ---
 
+## 2026-08-21 — Multiple RiftAtlas tabs: publish only the active tab, elected in the background worker
+
+A streamer rapidly switching between several spectated games keeps multiple
+RiftAtlas tabs open. Each tab's content script runs its own detector and
+`OverlayStatePublisher`, but the MV3 background worker owns a single relay
+producer socket — so every tab's OverlayState was forwarded over that one
+socket with no arbitration, and viewers saw whichever tab published last (a
+background tab's board leaking onto the stream). It surfaced during the
+tournament as the wrong board on-stream after a rapid tab switch.
+
+Decided: the background worker elects one "active" tab and forwards only its
+state. Election is fully automatic — content scripts report visibility/focus
+on the existing heartbeat (and fire an *immediate* heartbeat on
+visibilitychange/focus/blur so a switch registers in well under the 5s beat),
+and `electActiveTab` (pure, `extension/src/background/presence.ts`) picks the
+visible, most-recently-switched-to tab. A lone tab always wins regardless of
+visibility, so single-tab — and OBS-capturing-a-backgrounded-tab — behavior is
+unchanged. On an election flip the worker immediately re-sends the newly
+active tab's last board so viewers snap to the right game without waiting for
+its next board mutation.
+
+The subtler half: viewers buffer states by `capturedAt` and reject any push
+that moves backward in time (`protocol/src/history.ts`'s
+`TimeWindowBuffer.push`). Each tab stamps its own `capturedAt`, so snapping to
+a tab whose last board was captured *earlier* than the tab just left was
+silently dropped, freezing viewers on the old board (the config-panel preview
+looked correct because it reads the relay's stored latest state directly,
+bypassing that buffer). Fix: the single producer socket now clamps
+`capturedAt` so it never regresses (`background.ts` `send()`), and the snap
+re-stamps it to now — the socket is one monotonic timeline no matter which tab
+produced each frame.
+
+Expected behavior: after a switch, viewers follow the active tab within a
+heartbeat; with a configured stream delay the overlay switches after that
+delay (correct delayed-live), so at most a second or two of mismatch when no
+delay is set.
+
+**Rejected:** a manual "publish from this tab" pin in the popup (automatic
+matches "detect the active tab" and needs no new UI; a pin stays a fallback
+only if OBS-captures-an-unfocused-tab turns out common in practice); rewriting
+the per-publisher `sequence` too (viewers gate on `capturedAt`, not
+`sequence`, so it wasn't the cause — left alone to avoid scope creep);
+relay-side arbitration (the stomp happens inside the extension, before the
+relay's one-producer-per-session logic could ever apply — it's still one
+socket from the relay's view).
+
+---
+
 ## 2026-08-20 — perMessageDeflate rejected at high fan-out; connection hardening ported to master for the 6k-viewer tournament
 
 A 4,000-socket soak (realistic 40-card/20 KB payload, 3 Hz, soak harness

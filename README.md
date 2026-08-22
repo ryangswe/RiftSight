@@ -81,6 +81,8 @@ flowchart LR
 
 The relay is deliberately a single Railway replica — its per-channel session state lives in memory, not a shared store, so a second replica would silently see a different, inconsistent world. SQLite (on a persistent volume) only holds what needs to survive a restart: linked broadcaster identities, the beta allowlist, and hashed producer credentials — never the live game state itself, which is republished fresh on every reconnect rather than persisted.
 
+**Multiple RiftAtlas tabs:** a streamer switching between several spectated games can have more than one RiftAtlas tab open, but the extension holds only one relay producer socket. The background worker elects the **active tab** — the visible, most-recently-focused one — and publishes only its board; other tabs keep detecting locally but never reach viewers, so a background game can't leak onto the stream. Switching tabs re-elects within a heartbeat and snaps the overlay to the new game (after the broadcaster's configured stream delay, if any — at most a second or two of mismatch when no delay is set). A single open tab always publishes regardless of focus, so the common one-tab case (including OBS capturing a backgrounded tab) is unchanged. See [docs/decisions.md](docs/decisions.md) for the design and the `capturedAt`-ordering subtlety behind it.
+
 **Account linking** ("Connect Twitch" in the toolbar popup) is a separate, one-time OAuth flow, independent of the real-time pipeline above:
 
 ```mermaid

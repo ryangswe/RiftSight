@@ -60,6 +60,74 @@ export interface PresenceRecord {
   boardDetected: boolean;
   publicCardCount: number;
   lastHeartbeatAt: number;
+  /** Whether this tab was visible (its window's active tab) as of the last heartbeat — see content/inventory.ts's sendHeartbeat. Drives active-tab election when more than one RiftAtlas tab is open. */
+  visible: boolean;
+  /** Whether this tab's window had OS focus as of the last heartbeat. Only used to bump `lastActiveAt` (a tab gaining focus counts as "just switched to"); election itself keys off `visible` + `lastActiveAt`. */
+  focused: boolean;
+  /** When this tab most recently *became* active (visible-or-focused) — the "just switched to" moment, not merely the last heartbeat time. This is the tie-break for "most recently active" in electActiveTab: a tab focused long ago keeps an old value, so a tab the streamer just switched to wins. See computeLastActiveAt. */
+  lastActiveAt: number;
+}
+
+/**
+ * Next value for a record's `lastActiveAt`, given the previous record (if
+ * any) and the tab's freshly-reported visible/focused state. Pure so the
+ * transition rules are unit-testable.
+ *
+ * "Active" means visible-or-focused. The value is the moment the tab last
+ * *transitioned into* active (so "most recently switched to" is meaningful
+ * as a tie-break), not the moment of every heartbeat while it stays active:
+ * - became active this heartbeat (wasn't before) → `now`
+ * - still active, already was → keep the prior transition time
+ * - not active now → keep whatever it last was (so the fallback "no visible
+ *   tab" branch of election can still pick the most-recently-active hidden
+ *   tab); 0 if it has never been active.
+ */
+export function computeLastActiveAt(prev: PresenceRecord | undefined, visible: boolean, focused: boolean, now: number): number {
+  const active = visible || focused;
+  const wasActive = prev ? prev.visible || prev.focused : false;
+  if (active) return wasActive ? (prev?.lastActiveAt ?? now) : now;
+  return prev?.lastActiveAt ?? 0;
+}
+
+/**
+ * Picks the single RiftAtlas tab whose board state should actually reach the
+ * relay when several tabs are open — the fix for streamers seeing a
+ * background tab's board leak onto their stream (multiple tabs all published
+ * over the one shared producer socket, last-writer-wins). Pure so it's
+ * unit-testable with an injected `now`.
+ *
+ * Rules, in order:
+ * - Ignore stale records (same STALE_TIMEOUT_MS threshold presenceStatus
+ *   uses) — a closed/navigated-away tab must not keep winning.
+ * - Exactly one live tab → it wins regardless of visibility. This preserves
+ *   today's single-tab behavior, including the legitimate "OBS is capturing
+ *   a backgrounded RiftAtlas tab while the streamer works elsewhere" case:
+ *   with only one tab there's nothing to disambiguate.
+ * - Otherwise prefer visible tabs; among the candidate pool, the greatest
+ *   `lastActiveAt` (most recently switched to) wins, tie-broken by lowest
+ *   tabId purely for determinism.
+ */
+export function electActiveTab(recordsByTab: ReadonlyMap<number, PresenceRecord>, now: number): number | undefined {
+  const live: Array<[number, PresenceRecord]> = [];
+  for (const entry of recordsByTab) {
+    if (now - entry[1].lastHeartbeatAt <= STALE_TIMEOUT_MS) live.push(entry);
+  }
+
+  // A lone live tab falls into `pool = live` below and wins regardless of its
+  // visibility, so the single-tab case (including OBS capturing a backgrounded
+  // sole tab) needs no special-casing here.
+  const visible = live.filter(([, record]) => record.visible);
+  const pool = visible.length > 0 ? visible : live;
+
+  let bestId: number | undefined;
+  let bestActiveAt = -Infinity;
+  for (const [tabId, record] of pool) {
+    if (bestId === undefined || record.lastActiveAt > bestActiveAt || (record.lastActiveAt === bestActiveAt && tabId < bestId)) {
+      bestId = tabId;
+      bestActiveAt = record.lastActiveAt;
+    }
+  }
+  return bestId;
 }
 
 /** Derives the current four-way status from the last known record and the current time — pure, so a test can pass any `now` without needing real timers. `record` is `undefined` exactly when no heartbeat has ever been recorded (or the tracked tab was explicitly removed — see presence-tracker.ts). */
